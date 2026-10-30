@@ -52,3 +52,9 @@ def test_with_account_simple_and_other_models():
     ds = DraftSummary(**base, from_="x", draft_id="d")
     assert with_account(ds, "a").model_dump(mode="json")["from"] == "x"
     assert LabelState(id="m", labels=["A"]).labels == ["A"]
+
+
+def test_message_defaults_and_hidden_removed_not_serialized():
+    m = Message(**{**base, "id": "m1"}, from_="a@x", cc="", body="b", attachments=[], hidden_removed=5)
+    assert (m.suspicious, m.suspicious_reasons, m.reply_to) == (False, [], "")
+    assert m.hidden_removed == 5 and "hidden_removed" not in m.model_dump()

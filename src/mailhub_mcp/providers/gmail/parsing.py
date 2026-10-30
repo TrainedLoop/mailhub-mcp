@@ -1,10 +1,11 @@
 """Gmail message parsing: pure functions over API message dicts."""
 
 import base64
-from html.parser import HTMLParser
+
+from mailhub_mcp.core.content import clean_text, html_to_safe_text
 
 MAX_BODY_CHARS = 20_000
-METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe"]
+METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe", "Reply-To"]
 CATEGORIES = {
     "CATEGORY_PERSONAL": "primary",
     "CATEGORY_PROMOTIONS": "promotions",
@@ -12,34 +13,6 @@ CATEGORIES = {
     "CATEGORY_UPDATES": "updates",
     "CATEGORY_FORUMS": "forums",
 }
-
-
-class _TextExtractor(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.parts: list[str] = []
-        self._skip = 0
-
-    def handle_starttag(self, tag, attrs):
-        if tag in ("script", "style"):
-            self._skip += 1
-        elif tag in ("br", "p", "div", "tr", "li"):
-            self.parts.append("\n")
-
-    def handle_endtag(self, tag):
-        if tag in ("script", "style") and self._skip:
-            self._skip -= 1
-
-    def handle_data(self, data):
-        if not self._skip:
-            self.parts.append(data)
-
-
-def _html_to_text(html: str) -> str:
-    parser = _TextExtractor()
-    parser.feed(html)
-    lines = (line.strip() for line in "".join(parser.parts).splitlines())
-    return "\n".join(line for line in lines if line)
 
 
 def _decode(data: str) -> str:
@@ -52,24 +25,28 @@ def _walk_parts(payload: dict):
         yield from _walk_parts(part)
 
 
-def _extract_body(payload: dict) -> tuple[str, list[dict]]:
+def _extract_body(payload: dict) -> tuple[str, list[dict], int]:
     plain, html, attachments = [], [], []
     for part in _walk_parts(payload):
         mime = part.get("mimeType", "")
         body = part.get("body", {})
         if part.get("filename"):
             attachments.append(
-                {"filename": part["filename"], "mime_type": mime, "size": body.get("size", 0)}
+                {"filename": clean_text(part["filename"]), "mime_type": mime, "size": body.get("size", 0)}
             )
         elif mime == "text/plain" and body.get("data"):
             plain.append(_decode(body["data"]))
         elif mime == "text/html" and body.get("data"):
             html.append(_decode(body["data"]))
 
-    text = "\n".join(plain) if plain else _html_to_text("\n".join(html))
+    hidden_removed = 0
+    if plain:
+        text = clean_text("\n".join(plain))
+    else:
+        text, hidden_removed = html_to_safe_text("\n".join(html))
     if len(text) > MAX_BODY_CHARS:
         text = text[:MAX_BODY_CHARS] + "\n[... truncated ...]"
-    return text, attachments
+    return text, attachments, hidden_removed
 
 
 def _headers(payload: dict) -> dict[str, str]:
@@ -82,11 +59,12 @@ def summarize(msg: dict) -> dict:
     return {
         "id": msg["id"],
         "thread_id": msg["threadId"],
-        "from": h.get("from", ""),
-        "to": h.get("to", ""),
-        "subject": h.get("subject", ""),
+        "from": clean_text(h.get("from", "")),
+        "to": clean_text(h.get("to", "")),
+        "reply_to": clean_text(h.get("reply-to", "")),
+        "subject": clean_text(h.get("subject", "")),
         "date": h.get("date", ""),
-        "snippet": msg.get("snippet", ""),
+        "snippet": clean_text(msg.get("snippet", "")),
         "labels": labels,
         "internal_date": int(msg.get("internalDate", 0)),
         "unread": "UNREAD" in labels,
@@ -100,10 +78,11 @@ def summarize(msg: dict) -> dict:
 def full(msg: dict) -> dict:
     payload = msg.get("payload", {})
     h = _headers(payload)
-    body, attachments = _extract_body(payload)
+    body, attachments, hidden_removed = _extract_body(payload)
     return {
         **summarize(msg),
-        "cc": h.get("cc", ""),
+        "cc": clean_text(h.get("cc", "")),
         "body": body,
+        "hidden_removed": hidden_removed,
         "attachments": attachments,
     }

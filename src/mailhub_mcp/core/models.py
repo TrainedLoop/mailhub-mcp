@@ -30,6 +30,9 @@ class MessageSummary(_Accounted):
     is_important: bool | None
     category: str | None
     is_newsletter: bool
+    reply_to: str = ""
+    suspicious: bool = False
+    suspicious_reasons: list[str] = []
 
 
 class Attachment(_Base):
@@ -42,6 +45,9 @@ class Message(MessageSummary):
     cc: str
     body: str
     attachments: list[Attachment]
+    # Characters of hidden HTML text removed while parsing; internal input to
+    # the server's suspicion assessment, never serialized.
+    hidden_removed: int = Field(default=0, exclude=True)
 
 
 class Thread(_Accounted):
