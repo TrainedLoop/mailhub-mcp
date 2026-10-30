@@ -1232,6 +1232,9 @@ def test_tool_descriptions_state_quota_costs():
         assert "20 Gmail quota units per message" in tools[name].description, name
     desc = tools["list_accounts"].description
     assert f"{server.settings.gmail_units_per_minute} units per minute" in desc and "per mailbox" in desc
+    assert "120 Gmail quota units per thread" in tools["read_thread"].description
+    assert "140 Gmail quota units" in tools["create_draft"].description
+    assert "20 units each" in tools["modify_by_query"].description
 
 
 def _rate_limit_error():

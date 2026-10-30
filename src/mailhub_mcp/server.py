@@ -338,7 +338,7 @@ async def read_emails(account: str, message_ids: list[str]) -> dict:
     return await one(account, work)
 
 
-@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first. Costs about 120 Gmail quota units per thread." + UNTRUSTED_NOTE)
 async def read_thread(account: str, thread_id: str) -> dict:
     return await one(account, lambda p: with_account(p.get_thread(thread_id), account))
 
@@ -417,7 +417,8 @@ async def modify_emails(
         "at most 500 emails per call ('remaining' says whether more match). "
         "The query should exclude emails already changed (e.g. add in:inbox when archiving, -label:X when adding X); "
         "messages already in the target state are skipped, and a hint is returned if nothing is left to change. "
-        "Cheap on quota: it lists by label (a few units per page of 500) plus 50 per apply; the preview reads a 10-message sample."
+        "Cheap on quota: it lists by label (a few units per page of 500) plus 50 per apply; when a label has many matching messages, "
+        "the ones a listing could not settle are read (20 units each). The preview reads a 10-message sample."
         + UNTRUSTED_NOTE
     ),
 )
@@ -642,7 +643,8 @@ async def set_preferences(
         "anything else is refused and the error lists the allowed addresses. "
         "When 'to' is omitted it defaults to the Reply-To of the replied message, else its From. "
         "Subject defaults to 'Re: ...' and must be a single line. "
-        "Drafting is disabled for a thread containing any message flagged suspicious (possible prompt injection): the user must reply manually in Gmail."
+        "Drafting is disabled for a thread containing any message flagged suspicious (possible prompt injection): the user must reply manually in Gmail. "
+        "Costs about 140 Gmail quota units (message lookup and thread read) plus the draft."
     ),
 )
 async def create_draft(
