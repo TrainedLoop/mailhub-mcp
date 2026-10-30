@@ -55,6 +55,8 @@ class _Batch:
         self._fake.calls.append(("batch.execute", {"size": len(self._requests)}))
         if self._fake.fail:
             raise self._fake.fail
+        if self._fake.batch_errors:  # the whole batch request fails, before any callback
+            raise self._fake.batch_errors.pop(0)
         for request_id, request in self._requests:
             try:
                 response = request._fn()
@@ -79,6 +81,8 @@ class FakeGmail:
         self.get_error_seq: dict[str, list[Exception]] = {}
         self.draft_errors: dict[str, Exception] = {}
         self.batch_limit = 100
+        self.batch_errors: list[Exception] = []
+        self.label_create_errors: list[Exception] = []
         self.query_results: dict[str, list[str]] = {}
         self.page_size = 500
         self._ids = itertools.count(1)
@@ -247,6 +251,8 @@ class _Labels:
 
     def create(self, userId="me", body=None):
         def run():
+            if self.f.label_create_errors:
+                raise self.f.label_create_errors.pop(0)
             label = {"id": f"Label_{next(self.f._ids)}", "name": body["name"], "type": "user"}
             self.f.labels.append(label)
             return dict(label)

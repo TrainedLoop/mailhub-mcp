@@ -701,3 +701,84 @@ def test_search_report_flags_rate_limited_reads(fake):
     assert [m["id"] for m in found] == ["m2"] and unreadable == 1 and rate_limited is True
     fake.get_error_seq.clear()
     assert api.search_report(fake, "", 10)[2] is False
+
+
+# -- whole-batch failures, label creation, capped usage --------------------------
+
+
+@pytest.mark.parametrize(
+    "exc,sleeps",
+    [(http_error(503, "x"), [1]), (_rate_limited(429), [2]), (ConnectionResetError("reset"), [1])],
+)
+def test_whole_batch_failure_goes_through_the_retry_layer(fake, _sleeps, exc, sleeps):
+    spy = _SpyLimiter()
+    fake.add_message("m1")
+    fake.add_message("m2")
+    fake.batch_errors = [exc]
+    msgs, errors = batch_get(fake, ["m1", "m2"], "minimal", limiter=spy)
+    assert [m["id"] for m in msgs] == ["m1", "m2"] and errors == {}
+    assert _sleeps == sleeps and spy.units == [40, 40]  # every attempt charged
+
+
+def test_whole_batch_failure_gives_up_after_the_schedule(fake, _sleeps):
+    from googleapiclient.errors import HttpError
+
+    fake.add_message("m1")
+    fake.batch_errors = [_rate_limited() for _ in range(9)]
+    with pytest.raises(HttpError):
+        batch_get(fake, ["m1"], "minimal")
+    assert _sleeps == [2, 4, 8, 16, 32]
+
+
+def test_whole_batch_permanent_failure_is_not_retried(fake, _sleeps):
+    from googleapiclient.errors import HttpError
+
+    fake.add_message("m1")
+    fake.batch_errors = [http_error(400, "bad")]
+    with pytest.raises(HttpError):
+        batch_get(fake, ["m1"], "minimal")
+    assert _sleeps == []
+
+
+def test_label_create_is_retried_on_rate_limits_only(fake, _sleeps):
+    from googleapiclient.errors import HttpError
+
+    from mailhub_mcp.providers.gmail import api
+
+    fake.label_create_errors = [_rate_limited()]
+    assert api.ensure_label(fake, "New")["name"] == "New" and _sleeps == [2]
+    fake.label_create_errors = [http_error(503, "x")]
+    with pytest.raises(HttpError):
+        api.ensure_label(fake, "Other")
+    assert _sleeps == [2]
+
+
+def test_label_create_conflict_returns_the_existing_label(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    orig = type(fake)._request
+    created = {"id": "Label_77", "name": "Race", "type": "user"}
+
+    def racing(self, name, kwargs, fn):
+        if name == "labels.create":  # someone else created it after our listing
+            def run():
+                self.labels.append(created)
+                raise http_error(409, "Label name exists or conflicts")
+            return orig(self, name, kwargs, run)
+        return orig(self, name, kwargs, fn)
+
+    type(fake)._request = racing
+    try:
+        label = api.ensure_label(fake, "race")
+    finally:
+        type(fake)._request = orig
+    assert label == created
+    assert len([c for c in fake.calls if c[0] == "labels.list"]) == 2
+
+
+def test_used_last_minute_is_capped_at_the_budget():
+    from mailhub_mcp.providers.gmail import api
+
+    limiter = api.RateLimiter(10, now=lambda: 0.0, sleep=lambda s: None)  # 600 per minute
+    limiter.acquire(1000)  # one big call books slots far ahead
+    assert limiter.used_last_minute() == 600

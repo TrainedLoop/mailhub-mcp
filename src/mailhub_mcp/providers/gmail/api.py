@@ -38,6 +38,8 @@ DRAFT_CREATE_UNITS = 10
 
 def message_get_units(fmt: str) -> int:
     return MESSAGE_GET_FULL_UNITS if fmt in ("full", "raw") else MESSAGE_GET_UNITS
+
+
 # The only retry layer (googleapiclient's own retries are off: num_retries=0). Waits before each
 # retry, plus up to 1 s of random jitter. A rate limit needs the moving window to drain, so it
 # backs off longer; Google recommends starting at 1 s or more, doubling, capped at 32-64 s.
@@ -138,10 +140,11 @@ class RateLimiter:
             (self._sleep or _pace_sleep)(start - now)
 
     def used_last_minute(self) -> int:
-        """Units booked in the last 60 s (including slots booked for calls still waiting)."""
+        """Units booked in the last 60 s, capped at the per-minute budget (slots booked ahead for
+        calls still waiting count too, so the raw sum can exceed it)."""
         with self._lock:
             self._prune(self._clock())
-            return round(self._recent_units)
+            return min(round(self._recent_units), round(self.units_per_second * self.WINDOW))
 
     def seconds_until_free(self) -> float:
         """Seconds until the budget has no booked calls ahead."""
@@ -163,26 +166,34 @@ def _backoff(wait: float) -> None:
     _sleep(wait + _random())
 
 
-def _execute(request, limiter: RateLimiter | None, units: int, retry: bool = True):
-    """Run one single request, charging `units` to the limiter on every attempt.
+def _with_retries(attempt, limiter: RateLimiter, units: int, retry: str = "all"):
+    """Charge `units`, then run `attempt()`; retry it on the schedules above.
 
-    5xx and network errors are retried after 1, 2, 4 s; rate limits after 2, 4, 8, 16, 32 s; each
-    wait plus jitter. `retry=False` (draft creation) sends exactly once: a retried create could
-    duplicate the draft.
+    `retry` is "all" (5xx, network errors and rate limits), "rate_limit" (only rate limits: the
+    request was certainly not applied) or "none" (sent exactly once).
     """
-    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     retries = {"server": 0, "rate": 0}
     while True:
         limiter.acquire(units)
         try:
-            return request.execute(num_retries=0)
+            return attempt()
         except (HttpError, *_NETWORK_ERRORS) as exc:
-            step = _retry_wait(exc, retries["server"], retries["rate"]) if retry else None
-            if step is None:
+            step = _retry_wait(exc, retries["server"], retries["rate"]) if retry != "none" else None
+            if step is None or (retry == "rate_limit" and step[0] != "rate"):
                 raise
         kind, wait = step
         retries[kind] += 1
         _backoff(wait)
+
+
+def _execute(request, limiter: RateLimiter | None, units: int, retry: str = "all"):
+    """Run one single request, charging `units` to the limiter on every attempt.
+
+    5xx and network errors are retried after 1, 2, 4 s; rate limits after 2, 4, 8, 16, 32 s; each
+    wait plus jitter. Draft creation passes retry="none": a retried create could duplicate the draft.
+    """
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
+    return _with_retries(lambda: request.execute(num_retries=0), limiter, units, retry)
 
 
 def _run_batches(
@@ -201,19 +212,25 @@ def _run_batches(
     def collect(request_id, response, exception):
         if exception is not None:
             errors[request_id] = exception
+            found.pop(request_id, None)
         else:
             found[request_id] = response
+            errors.pop(request_id, None)
+
+    def send(chunk):
+        batch = svc.new_batch_http_request(callback=collect)
+        for item_id in chunk:
+            batch.add(make_request(item_id), request_id=item_id)
+        batch.execute()
 
     retries = {i: {"server": 0, "rate": 0} for i in ids}
     pending = ids
     while pending:
         for start in range(0, len(pending), BATCH_SIZE):
             chunk = pending[start : start + BATCH_SIZE]
-            limiter.acquire(len(chunk) * units_per_id)
-            batch = svc.new_batch_http_request(callback=collect)
-            for item_id in chunk:
-                batch.add(make_request(item_id), request_id=item_id)
-            batch.execute()
+            # A failure of the whole batch request is retried like a single request; every attempt
+            # is charged for all its calls.
+            _with_retries(lambda: send(chunk), limiter, len(chunk) * units_per_id)
         # Each failed id follows its own schedule (rate limit or server error); a round waits for
         # the longest wait among the ids it retries.
         waits = {}
@@ -381,7 +398,7 @@ def create_draft(
     if thread_id:
         message["threadId"] = thread_id
     request = svc.users().drafts().create(userId="me", body={"message": message})
-    draft = _execute(request, limiter, DRAFT_CREATE_UNITS, retry=False)
+    draft = _execute(request, limiter, DRAFT_CREATE_UNITS, retry="none")
     return {"draft_id": draft["id"], "message_id": draft["message"]["id"], "thread_id": thread_id}
 
 
@@ -391,7 +408,17 @@ def ensure_label(svc, name: str, limiter: RateLimiter | None = None) -> dict:
         if label["name"].lower() == name.lower():
             return label
     request = svc.users().labels().create(userId="me", body={"name": name})
-    created = _execute(request, limiter, LABELS_CREATE_UNITS)
+    try:
+        # Only rate limits are retried: after a 5xx the label may exist, and a retry would conflict.
+        created = _execute(request, limiter, LABELS_CREATE_UNITS, retry="rate_limit")
+    except HttpError as exc:
+        if status_of(exc) != 409:
+            raise
+        # Already exists (created meanwhile): return the existing one.
+        for label in list_labels(svc, limiter):
+            if label["name"].lower() == name.lower():
+                return label
+        raise
     return {"id": created["id"], "name": created["name"], "type": created.get("type", "user")}
 
 
