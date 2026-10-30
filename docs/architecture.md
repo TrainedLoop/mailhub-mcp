@@ -75,6 +75,8 @@ All 13 are defined in `server.py`.
 | `modify_emails` | Labels, archive, read, star on specific IDs (max 1000) |
 | `modify_by_query` | Same, by query; preview unless `confirm=true`; max 500 per call |
 | `undo_change` | Revert a journaled change |
+| `list_changes` | Journal entries, newest first, with label names; filter by accounts and `since`; max 100 per call |
+| `undo_since` | Undo every change since a time, newest first; preview unless `confirm=true`; max 50 per call |
 | `create_draft` | Create an unsent draft, optionally a reply |
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
@@ -84,6 +86,8 @@ Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 `organize.modify` validates everything before the first write: protected labels are refused, label names resolve to IDs, `claude/organized` cannot be removed by a change (only an undo drops it), and a label cannot be both added and removed. It reads each message's current labels, then adds `claude/organized`, applies the change and appends a journal entry.
 
 Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`, `added`, `removed`, `prior` (per message, only the touched labels it had), `query` and `undo_of`. `prior` makes undo exact: it removes only labels the change added to messages that did not have them, and re-adds only labels it removed from messages that had them. Undoing is itself journaled (`undo_of`), so a change cannot be undone twice. If a message has since been deleted it is skipped and listed in `skipped`. If the journal write fails after labels changed, the full entry is logged as an error for manual recovery.
+
+`Journal.entries(since)` returns valid entries newest first (`since` is inclusive; naive times are UTC) and skips malformed lines. `organize.undo_since` takes the entries since a time, drops undo entries and changes already undone, optionally filters by account and keeps the newest 50 (`MAX_UNDO_SINCE`). It undoes them newest first, so two changes to the same message restore its exact original labels. Each change goes through `undo`, so every protection still applies and the journal lock is taken per change, not across the loop. A failure on one change is reported in `failed` and does not stop the others; `remaining` says whether more candidates were left beyond the cap, so call again. Without `confirm` it only returns the summaries and writes nothing.
 
 `modify_by_query` skips messages already in the target state and returns a hint when nothing is left.
 

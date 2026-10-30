@@ -114,9 +114,10 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 
 If something went wrong and you need to revert in bulk:
 
-- Call `undo_change` with the `change_id` returned by `modify_emails` or `modify_by_query`.
+- Ask Claude to call `list_changes` to see recent changes (newest first, with their `change_id`s, also from earlier sessions), then `undo_change` with the `change_id` of the one to revert.
+- To revert everything since a time, call `undo_since` with `since` (ISO 8601, e.g. `2026-11-01T08:00`; no timezone means UTC). It previews by default: review the list, then call it again with `confirm=true`. It undoes newest first, at most 50 changes per call; repeat while `remaining` is true. Changes that could not be undone are listed in `failed`; retry them later.
 - In Gmail, search `label:claude/organized`: every message changed through the server has it. (`undo_change` removes the label together with the rest of that change, so undone messages no longer show up there.)
-- To undo many changes, call `undo_change` for each entry in `data/changes.jsonl`, newest first. List the IDs in that order with:
+- Fallback when `list_changes` is unavailable (for example the connector is not responding): read the IDs straight from `data/changes.jsonl` on the host, newest first, and call `undo_change` for each once the server is back. List them in that order with:
 
 ```bash
 jq -r '.change_id' data/changes.jsonl | tac
