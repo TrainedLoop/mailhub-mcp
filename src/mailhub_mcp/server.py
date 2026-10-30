@@ -132,6 +132,8 @@ def tool(**kwargs):
 def _assess_fields(m: MessageSummary) -> list[str]:
     """Every sender-controlled text field of a message that feeds the suspicion heuristics."""
     fields = [m.subject, m.from_, m.to, m.reply_to, m.snippet]
+    if m.unsubscribe is not None:
+        fields += [v for v in (m.unsubscribe.url, m.unsubscribe.mailto) if v]
     if isinstance(m, Message):
         fields += [m.cc, m.body, *(a.filename for a in m.attachments)]
     return fields
@@ -633,12 +635,17 @@ def allowed_hosts() -> list[str]:
     return [urlparse(settings.public_base_url).hostname, "localhost", "127.0.0.1"]
 
 
+def run_options() -> dict:
+    """HTTP options of the running server. FastMCP's Host/Origin protection is not enabled (see docs)."""
+    return {"allowed_hosts": allowed_hosts()}
+
+
 def main() -> None:
     mcp.run(
         transport="http",
         host="0.0.0.0",
         port=settings.port,
-        allowed_hosts=allowed_hosts(),
+        **run_options(),
     )
 
 

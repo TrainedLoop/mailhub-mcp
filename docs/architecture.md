@@ -32,7 +32,7 @@ src/mailhub_mcp/
 
 ## Models
 
-`core/models.py` defines pydantic models: `MessageSummary` (id, thread_id, from, to, subject, date, snippet, labels, internal_date, unread, starred, is_important, category, is_newsletter), `Message` (adds cc, body, attachments), `Thread`, `Label`, `Draft`, `DraftSummary`, `Attachment`, `LabelState`. Models that report their origin carry an `account` alias, stamped by `with_account` or by the fan-out.
+`core/models.py` defines pydantic models: `MessageSummary` (id, thread_id, from, to, subject, date, snippet, labels, internal_date, unread, starred, is_important, category, is_newsletter, reply_to, unsubscribe), `Message` (adds cc, body, attachments), `Thread`, `Label`, `Draft`, `DraftSummary`, `Attachment`, `LabelState`. Models that report their origin carry an `account` alias, stamped by `with_account` or by the fan-out.
 
 ## Errors
 
@@ -137,7 +137,7 @@ Every email is text written by a third party, so what reaches Claude is sanitize
 
 ## Health
 
-`GET /health` is a FastMCP custom route returning `{"status":"ok"}`. It needs no authentication and reveals nothing else; it is reachable for `127.0.0.1` and `localhost` through the same allowed-hosts list as the MCP endpoint. The Dockerfile `HEALTHCHECK` calls it with the Python standard library every 30 seconds (timeout 5 seconds, 3 retries) on `$PORT` (default 8742). It only proves the process answers HTTP; it does not touch the mailboxes. `mailhub-admin accounts` does: it loads the account registry from `ACCOUNTS_DIR` (default `/secrets/accounts`, no OAuth settings needed), asks each account for its address and prints `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>`. It exits 0 when all accounts are ok, 1 when any failed and 2 when the accounts cannot be loaded.
+`GET /health` is a FastMCP custom route returning `{"status":"ok"}`. It needs no authentication and reveals nothing else; it is the only endpoint without login (every other endpoint requires the Google OAuth login). `main()` passes an allowed-hosts list (the public host name, `localhost`, `127.0.0.1`) to FastMCP, but FastMCP's Host/Origin protection is not enabled by default, so no Host check runs in production; `/health` answers for any Host. If you enable the protection, `/health` still passes for `127.0.0.1` and `localhost`, which the Docker HEALTHCHECK uses. The Dockerfile `HEALTHCHECK` calls it with the Python standard library every 30 seconds (timeout 5 seconds, 3 retries) on `$PORT` (default 8742). It only proves the process answers HTTP; it does not touch the mailboxes. `mailhub-admin accounts` does: it loads the account registry from `ACCOUNTS_DIR` (default `/secrets/accounts`, no OAuth settings needed), asks each account for its address and prints `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>`. It exits 0 when all accounts are ok, 1 when any failed and 2 when the accounts cannot be loaded.
 
 ## Capability limits
 

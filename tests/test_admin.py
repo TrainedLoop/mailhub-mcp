@@ -201,6 +201,17 @@ def test_accounts_config_errors_exit_2(tmp_path, monkeypatch, capsys):
     assert code == 2 and "alice" in err
 
 
+def test_accounts_unreadable_dir_exit_2(tmp_path, monkeypatch, capsys):
+    _accounts_env(tmp_path, monkeypatch, ["alice"])
+
+    def deny(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("pathlib.Path.is_dir", deny)
+    code, _, err = _run_accounts(capsys, {"gmail": lambda a, p: _Prov("x")})
+    assert code == 2 and "cannot read the accounts directory" in err and "Traceback" not in err
+
+
 def test_accounts_needs_no_oauth_env(tmp_path, monkeypatch, capsys):
     for k in ("PUBLIC_BASE_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ALLOWED_EMAILS", "JWT_SIGNING_KEY"):
         monkeypatch.delenv(k, raising=False)

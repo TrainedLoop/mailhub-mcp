@@ -109,6 +109,8 @@ From a network outside your own (a phone on mobile data, say), this should retur
 
 Then in a claude.ai chat with the connector enabled, ask Claude to call `list_accounts`. Each account should show `status: ok`.
 
+Optionally evaluate FastMCP host/origin protection for your reverse proxy. It is not enabled by default; every endpoint except `/health` requires the Google OAuth login either way.
+
 ## 10. Operate
 
 - **Audit**: `docker compose logs mailhub-mcp | grep tool=` shows every tool call with its arguments. Rejected logins appear as `rejected token for email=...`.
@@ -219,7 +221,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
 | Log warning `ALLOWED_EMAILS has N addresses` | More than one login can use this instance, and each sees every linked mailbox. Keep only the owner's login and give other people their own instance (step 14) |
 | Second instance fails with a container name or port already in use | It shares `CONTAINER_NAME`, `HOST_PORT` or `COMPOSE_PROJECT_NAME` with the first one (step 14) |
-| `docker compose ps` shows `unhealthy` | `GET /health` is not answering: check `docker compose logs`, and that `PORT` in `.env` matches the published port |
+| `docker compose ps` shows `unhealthy` | The container is not serving: check `docker compose logs` for startup errors (missing environment variables in `.env`, permissions on `data/` or `secrets/accounts/`) |
 | `mailhub-admin accounts` prints `ERROR` for an alias | The credential no longer works; run `mailhub-authorize` again for that alias (see `invalid_grant` above) |
 | `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
 | `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |

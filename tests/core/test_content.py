@@ -553,6 +553,18 @@ def test_unsubscribe_rejects_unsafe(h):
     assert parse_unsubscribe(h) is None
 
 
+@pytest.mark.parametrize("h", [
+    "<https://shop.com@evil.com/u>", "<https://user:pw@shop.com/u>", "<https://@shop.com/u>",
+    "<https://shop.com:notaport/u>", "<https://[bad/u>",
+])
+def test_unsubscribe_rejects_userinfo_and_malformed_authority(h):
+    assert parse_unsubscribe(h) is None
+
+
+def test_unsubscribe_allows_at_sign_in_path_and_port():
+    assert parse_unsubscribe("<https://shop.com:8443/u?e=a@b.com>")["url"] == "https://shop.com:8443/u?e=a@b.com"
+
+
 def test_unsubscribe_http_rejected_but_mailto_kept_and_cleaned():
     got = parse_unsubscribe("<http://x.com/u>, <mailto:u@x​.com>")
     assert got == {"url": None, "mailto": "mailto:u@x.com", "one_click": False}

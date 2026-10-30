@@ -8,6 +8,7 @@ import re
 import secrets
 from collections import defaultdict
 from html.parser import HTMLParser
+from urllib.parse import urlsplit
 
 HIDDEN_TEXT_THRESHOLD = 200
 
@@ -343,8 +344,15 @@ def _unsubscribe_entry(raw: str) -> str | None:
     if not value or len(value) > MAX_UNSUBSCRIBE_CHARS or _UNSAFE_CHAR.search(value):
         return None
     lowered = value.lower()
-    if lowered.startswith("https://") and len(value) > len("https://"):
-        return value
+    if lowered.startswith("https://"):
+        try:
+            parts = urlsplit(value)
+            parts.port  # noqa: B018 - raises ValueError on a malformed port
+        except ValueError:
+            return None
+        if parts.hostname and "@" not in parts.netloc:  # no host, or userinfo that disguises the real host
+            return value
+        return None
     if lowered.startswith("mailto:") and len(value) > len("mailto:"):
         return value
     return None

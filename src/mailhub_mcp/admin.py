@@ -69,15 +69,18 @@ def _check_accounts(providers=None) -> int:
     """Print `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>` per account.
     Exit 0 when all are ok, 1 when any failed, 2 when the accounts cannot be loaded."""
     accounts_dir = Path(os.environ.get("ACCOUNTS_DIR", DEFAULT_ACCOUNTS_DIR))
-    if not accounts_dir.is_dir():
-        print(f"error: accounts directory not found: {_safe(accounts_dir)}", file=sys.stderr)
-        return 2
     if providers is None:
         from mailhub_mcp.providers import PROVIDERS as providers  # noqa: N811
     try:
+        if not accounts_dir.is_dir():
+            print(f"error: accounts directory not found: {_safe(accounts_dir)}", file=sys.stderr)
+            return 2
         registry = AccountRegistry(accounts_dir, providers)
     except MailhubError as exc:
         print(f"error: {_safe(exc)}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"error: cannot read the accounts directory {_safe(accounts_dir)}: {_safe(exc)}", file=sys.stderr)
         return 2
     accounts = registry.all()
     if not accounts:
