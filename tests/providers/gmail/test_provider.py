@@ -227,3 +227,23 @@ def test_provider_shares_one_rate_limiter_across_calls(gmail, monkeypatch):
     gmail.get_messages(["m1"], "labels")
     gmail.search("in:inbox", 5)
     assert len(seen) >= 2 and seen[0] is not None and all(x is seen[0] for x in seen)
+
+
+def test_provider_charges_every_call_to_its_shared_limiter(tmp_path):
+    fake = seeded_fake(default_seed())
+    fake.add_message("mx", thread_id="tx", labels=["INBOX"])
+    provider = GmailProvider("a", tmp_path / "a.json", build_service=lambda creds: fake)
+    provider._creds = object()
+    units = []
+    provider._limiter = SimpleNamespace(acquire=units.append)
+
+    provider.address()
+    assert units == [1]
+    units.clear()
+    provider.list_ids("", 5)
+    provider.get_thread("tx")
+    provider.list_labels()
+    provider.ensure_label("brand-new")
+    provider.modify_labels(["mx"], ["INBOX"], [])
+    provider.create_draft("x@y.com", "s", "b", None, None)
+    assert units == [5, 10, 1, 1, 5, 50, 10]

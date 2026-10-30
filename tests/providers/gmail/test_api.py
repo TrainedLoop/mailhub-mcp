@@ -130,7 +130,7 @@ def test_batch_get_retries_429_then_succeeds(fake, _sleeps):
     fake.get_error_seq["m1"] = [http_error(429, "Rate")]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert [m["id"] for m in msgs] == ["m1"] and errors == {}
-    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [1]
+    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [5]
 
 
 def test_batch_get_gives_up_after_three_attempts_on_5xx(fake, _sleeps):
@@ -241,7 +241,7 @@ def test_batch_get_retries_403_rate_limit_then_succeeds(fake, _sleeps):
     fake.get_error_seq["m1"] = [_rate_limited()]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert [m["id"] for m in msgs] == ["m1"] and errors == {}
-    assert len(_get_calls(fake, "m1")) == 2 and _sleeps
+    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [5]
 
 
 def test_batch_get_paces_batches(fake, monkeypatch):
@@ -261,17 +261,18 @@ def test_batch_get_paces_batches(fake, monkeypatch):
     batch_get(fake, [f"p{i}" for i in range(120)], "minimal")
     # batches of 50, 50, 20: the 2nd and 3rd wait for the previous batch's budget
     assert len(paced) == 2
-    assert all(abs(s - api.BATCH_SIZE / api.MAX_IDS_PER_SECOND) < 1e-9 for s in paced)
+    cost = api.BATCH_SIZE * api.MESSAGE_GET_UNITS / api.MAX_UNITS_PER_SECOND
+    assert all(abs(s - cost) < 1e-9 for s in paced)
 
 
 def test_rate_limiter_schedules_cumulatively():
     from mailhub_mcp.providers.gmail import api
 
     paced = []
-    limiter = api.RateLimiter(40, now=lambda: 0.0, sleep=paced.append)
+    limiter = api.RateLimiter(100, now=lambda: 0.0, sleep=paced.append)
     for _ in range(4):
-        limiter.acquire(50)
-    assert paced == [1.25, 2.5, 3.75]
+        limiter.acquire(250)
+    assert paced == [2.5, 5.0, 7.5]
 
 
 def test_rate_limiter_is_shared_safely_across_threads():
@@ -293,12 +294,12 @@ def test_shared_limiter_paces_across_calls(fake):
     from mailhub_mcp.providers.gmail import api
 
     paced = []
-    limiter = api.RateLimiter(40, now=lambda: 0.0, sleep=paced.append)
+    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=paced.append)
     for i in range(50):
         fake.add_message(f"q{i}")
     batch_get(fake, [f"q{i}" for i in range(50)], "minimal", limiter=limiter)
     batch_get(fake, [f"q{i}" for i in range(50)], "minimal", limiter=limiter)
-    assert paced == [1.25]  # the second call waits for the first call's budget
+    assert paced == [2.0]  # the second call waits for the first call's budget
 
 
 def test_single_batch_is_not_paced(fake, monkeypatch):
@@ -323,3 +324,168 @@ def test_single_requests_use_client_retries_except_draft_create(fake):
     fake.execute_retries.clear()
     create_draft(fake, "x@y.com", "s", "b", None, None)
     assert fake.execute_retries[-1] == 0  # a retried create could duplicate the draft
+
+
+# -- quota units, rate-limit backoff, exact detection -------------------------
+
+
+def _gmail_error(status, reason=None, message="msg"):
+    import json
+
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    err = {"code": status, "message": message}
+    if reason:
+        err["errors"] = [{"reason": reason, "message": message, "domain": "usageLimits"}]
+    return HttpError(httplib2.Response({"status": status}), json.dumps({"error": err}).encode())
+
+
+@pytest.mark.parametrize(
+    "exc,expected",
+    [
+        (_gmail_error(403, "rateLimitExceeded"), True),
+        (_gmail_error(403, "userRateLimitExceeded"), True),
+        (_gmail_error(429, "rateLimitExceeded"), True),
+        (_gmail_error(429), True),
+        (_gmail_error(403, "dailyLimitExceeded"), False),
+        (_gmail_error(403, "forbidden"), False),
+        (_gmail_error(403, "forbidden", message="see rateLimitExceeded docs"), False),
+        (_gmail_error(500, "rateLimitExceeded"), False),
+        (http_error(403, "rateLimitExceeded"), False),  # unparsable body
+    ],
+)
+def test_is_rate_limited_is_exact(exc, expected):
+    from mailhub_mcp.providers.gmail.api import is_rate_limited
+
+    assert is_rate_limited(exc) is expected
+
+
+def test_is_rate_limited_reads_error_details_when_populated():
+    from mailhub_mcp.providers.gmail.api import is_rate_limited
+
+    exc = _gmail_error(403, "forbidden")
+    exc.error_details = [{"reason": "userRateLimitExceeded"}]
+    assert is_rate_limited(exc)
+
+
+def test_limiter_budgets_units():
+    from mailhub_mcp.providers.gmail import api
+
+    assert api.MAX_UNITS_PER_SECOND == 125
+    paced = []
+    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=paced.append)
+    limiter.acquire(250)
+    limiter.acquire(5)
+    assert paced == [2.0]
+
+
+def test_batch_get_charges_five_units_per_message(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=lambda s: None)
+    fake.add_message("m1")
+    fake.add_message("m2")
+    batch_get(fake, ["m1", "m2"], "minimal", limiter=limiter)
+    assert limiter.next_free == pytest.approx(10 / 125)
+
+
+def test_batch_get_rate_limit_backoff_is_5_15_30(fake, _sleeps):
+    fake.add_message("m1")
+    fake.get_error_seq["m1"] = [_rate_limited() for _ in range(9)]
+    msgs, errors = batch_get(fake, ["m1"], "minimal")
+    assert msgs == [] and list(errors) == ["m1"]
+    assert len(_get_calls(fake, "m1")) == 4 and _sleeps == [5, 15, 30]
+
+
+def test_batch_get_5xx_keeps_short_backoff(fake, _sleeps):
+    fake.add_message("m1")
+    fake.get_error_seq["m1"] = [http_error(503, "x") for _ in range(9)]
+    batch_get(fake, ["m1"], "minimal")
+    assert _sleeps == [1, 2]
+
+
+class _SpyLimiter:
+    def __init__(self):
+        self.units = []
+
+    def acquire(self, n):
+        self.units.append(n)
+
+
+def test_every_single_call_charges_its_units(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1", thread_id="t1")
+    spy = _SpyLimiter()
+    api.list_ids(fake, "", 5, limiter=spy)
+    api.get_message(fake, "m1", limiter=spy)
+    api.get_thread(fake, "t1", limiter=spy)
+    api.list_labels(fake, limiter=spy)
+    assert spy.units == [5, 5, 10, 1]
+    spy.units.clear()
+    api.ensure_label(fake, "new", limiter=spy)
+    assert spy.units == [1, 5]  # labels.list + labels.create
+    spy.units.clear()
+    api.batch_modify(fake, ["m1"], ["INBOX"], [], limiter=spy)
+    assert spy.units == [50]
+    spy.units.clear()
+    api.create_draft(fake, "x@y.com", "s", "b", None, "m1", limiter=spy)
+    assert spy.units == [5, 10]
+    spy.units.clear()
+    api.list_drafts(fake, 5, limiter=spy)
+    assert spy.units[0] == 5
+    spy.units.clear()
+    api.get_profile(fake, limiter=spy)
+    assert spy.units == [1]
+
+
+def test_single_request_rate_limit_retries_with_long_backoff(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+
+    errors = [_rate_limited(), _rate_limited()]
+    orig = type(fake)._request
+
+    def flaky(self, name, kwargs, fn):
+        def run():
+            if name == "labels.list" and errors:
+                raise errors.pop(0)
+            return fn()
+        return orig(self, name, kwargs, run)
+
+    type(fake)._request = flaky
+    try:
+        labels = api.list_labels(fake)
+    finally:
+        type(fake)._request = orig
+    assert labels and _sleeps == [5, 15]
+
+
+def test_single_request_gives_up_after_backoff_schedule(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+    from googleapiclient.errors import HttpError
+
+    fake.fail = _rate_limited()
+    with pytest.raises(HttpError):
+        api.list_labels(fake)
+    assert _sleeps == [5, 15, 30]
+
+
+def test_single_request_non_rate_limit_error_is_not_retried_by_us(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+    from googleapiclient.errors import HttpError
+
+    fake.fail = http_error(403, "forbidden")
+    with pytest.raises(HttpError):
+        api.list_labels(fake)
+    assert _sleeps == []
+
+
+def test_draft_create_is_never_retried_even_when_rate_limited(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+    from googleapiclient.errors import HttpError
+
+    fake.fail = _rate_limited()
+    with pytest.raises(HttpError):
+        create_draft(fake, "x@y.com", "s", "b", None, None)
+    assert _sleeps == [] and fake.execute_retries == [0]

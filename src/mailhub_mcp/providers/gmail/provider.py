@@ -54,7 +54,7 @@ class GmailProvider:
         self._address: str | None = None
         self._lock = threading.Lock()
         # Gmail's quota is per mailbox: every call on this account shares one pace.
-        self._limiter = api.RateLimiter(api.MAX_IDS_PER_SECOND)
+        self._limiter = api.RateLimiter(api.MAX_UNITS_PER_SECOND)
 
     def _service(self) -> Any:
         # httplib2 is not thread-safe: build a fresh client per call, share only credentials.
@@ -90,7 +90,7 @@ class GmailProvider:
     def address(self) -> str:
         if self._address is None:
             with self._translate():
-                profile = self._service().users().getProfile(userId="me").execute()
+                profile = api.get_profile(self._service(), self._limiter)
             self._address = profile["emailAddress"]
         return self._address
 
@@ -104,7 +104,7 @@ class GmailProvider:
 
     def list_ids(self, query: str, limit: int) -> list[str]:
         with self._translate():
-            return api.list_ids(self._service(), query, limit)
+            return api.list_ids(self._service(), query, limit, self._limiter)
 
     def get_messages(self, ids: list[str], detail: Literal["summary", "full", "labels"]) -> GetResult:
         with self._translate():
@@ -127,19 +127,19 @@ class GmailProvider:
 
     def get_thread(self, thread_id: str) -> Thread:
         with self._translate(not_found=[thread_id]):
-            return Thread(**api.get_thread(self._service(), thread_id))
+            return Thread(**api.get_thread(self._service(), thread_id, self._limiter))
 
     def list_labels(self) -> list[Label]:
         with self._translate():
-            return [Label(**l) for l in api.list_labels(self._service())]
+            return [Label(**l) for l in api.list_labels(self._service(), self._limiter)]
 
     def ensure_label(self, name: str) -> Label:
         with self._translate():
-            return Label(**api.ensure_label(self._service(), name))
+            return Label(**api.ensure_label(self._service(), name, self._limiter))
 
     def modify_labels(self, ids: list[str], add: list[str], remove: list[str]) -> None:
         with self._translate():
-            api.batch_modify(self._service(), ids, add, remove)
+            api.batch_modify(self._service(), ids, add, remove, self._limiter)
 
     def list_drafts(self, limit: int) -> list[DraftSummary]:
         with self._translate():
@@ -150,4 +150,6 @@ class GmailProvider:
     ) -> Draft:
         not_found = [reply_to_message_id] if reply_to_message_id else None
         with self._translate(not_found=not_found):
-            return Draft(**api.create_draft(self._service(), to, subject, body, cc, reply_to_message_id))
+            return Draft(**api.create_draft(
+                    self._service(), to, subject, body, cc, reply_to_message_id, self._limiter
+                ))
