@@ -1,8 +1,10 @@
 """Mailhub MCP server: multi-account triage, reversible organization and drafts, behind Google OAuth."""
 
 import logging
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+from anyio import to_thread
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
@@ -13,6 +15,7 @@ from mailhub_mcp.config import Settings
 from mailhub_mcp.core import organize
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
+from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound
 from mailhub_mcp.core.models import with_account
 from mailhub_mcp.core.journal import Journal
@@ -232,6 +235,74 @@ async def undo_change(change_id: str) -> dict:
     except KeyError:
         raise ToolError(f"Unknown change_id: {change_id}") from None
     return await one(account, lambda p: organize.undo(p, journal, account, change_id))
+
+
+def _parse_since(since: str) -> datetime:
+    try:
+        moment = datetime.fromisoformat(since)
+    except ValueError:
+        raise ToolError("invalid since: expected ISO 8601 date/time, e.g. 2026-11-01T08:00") from None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+def _label_names(account) -> dict[str, str]:
+    return {l.id: l.name for l in account.provider.list_labels()}
+
+
+@mcp.tool(
+    annotations=READ_ONLY,
+    description=(
+        "List earlier changes recorded by this server (newest first) with their change_ids, so a change from a previous session can be found and undone with undo_change. "
+        "Optional filters: accounts (aliases) and since (ISO 8601 date/time, naive means UTC). Max 100 per call (default 20); 'total' counts all matches. "
+        "Each item has change_id, timestamp, account, tool, query, messages (count), added / removed (label names), undone and undo_of (set on undo entries)."
+    ),
+)
+async def list_changes(accounts: list[str] | None = None, since: str | None = None, limit: int = 20) -> dict:
+    selected = _accounts(accounts)  # unknown alias -> usual error
+    floor = _parse_since(since) if since is not None else None
+    wanted = {a.alias for a in selected} if accounts else None
+    entries = journal.entries(floor)
+    undone = undone_ids(entries)
+    matching = [e for e in entries if wanted is None or e.get("account") in wanted]
+    page = matching[: max(1, min(limit, 100))]
+
+    names: dict[str, dict[str, str]] = {}
+
+    def lookup(account) -> list:
+        names[account.alias] = _label_names(account)
+        return []
+
+    shown = {e.get("account") for e in page}
+    await fan_out([a for a in registry.all() if a.alias in shown], lookup)  # a failing account falls back to ids
+    return {
+        "changes": [summarize_entry(e, e["change_id"] in undone, names.get(e.get("account"), {})) for e in page],
+        "total": len(matching),
+    }
+
+
+@mcp.tool(
+    annotations=WRITE,
+    description=(
+        "Panic button: undo every change recorded since a time (ISO 8601 date/time, naive means UTC), newest first, optionally limited to some accounts. "
+        "By default (confirm=false) only previews the changes that would be undone. Pass confirm=true to undo them; "
+        "at most 50 changes per call, so call again while 'remaining' is true. "
+        "Changes already undone are skipped; one that cannot be undone is listed in 'failed' and the rest still proceed."
+    ),
+)
+async def undo_since(since: str, accounts: list[str] | None = None, confirm: bool = False) -> dict:
+    floor = _parse_since(since)
+    selected = _accounts(accounts)
+    aliases = [a.alias for a in selected] if accounts else None
+
+    def provider_for(alias: str):
+        return registry.get(alias).provider
+
+    def label_names_for(alias: str) -> dict[str, str]:
+        return _label_names(registry.get(alias))
+
+    return _dump(await to_thread.run_sync(
+        lambda: organize.undo_since(provider_for, journal, floor, aliases, confirm, label_names_for)
+    ))
 
 
 @mcp.tool(

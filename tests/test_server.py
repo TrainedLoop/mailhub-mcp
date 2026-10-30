@@ -55,7 +55,7 @@ def test_tool_names():
     assert asyncio.run(go()) == {
         "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
         "list_drafts", "list_labels", "create_label", "modify_emails", "modify_by_query", "undo_change",
-        "create_draft",
+        "create_draft", "list_changes", "undo_since",
     }
 
 
@@ -290,3 +290,81 @@ def test_settings_port_default_and_override(monkeypatch):
     assert Settings.from_env().port == 8742
     monkeypatch.setenv("PORT", "9001")
     assert Settings.from_env().port == 9001
+
+
+def _change(fakes, alias="alice-personal", ids=("m1",), **kw):
+    return call("modify_emails", {"account": alias, "message_ids": list(ids), **kw})["change_id"]
+
+
+def test_list_changes_order_limit_total_and_label_names(fakes):
+    c1 = _change(fakes, archive=True)
+    c2 = _change(fakes, "bob-work", ids=("w1",), archive=True)
+    c3 = _change(fakes, ids=("m2",), archive=True)
+    out = call("list_changes")
+    assert [c["change_id"] for c in out["changes"]] == [c3, c2, c1] and out["total"] == 3
+    top = out["changes"][0]
+    assert top["account"] == "alice-personal" and top["messages"] == 1 and top["undone"] is False
+    assert "claude/organized" in top["added"] and top["removed"] == ["INBOX"]
+    out = call("list_changes", {"limit": 1})
+    assert [c["change_id"] for c in out["changes"]] == [c3] and out["total"] == 3
+    out = call("list_changes", {"limit": 0})
+    assert len(out["changes"]) == 1
+    out = call("list_changes", {"accounts": ["bob-work"]})
+    assert [c["change_id"] for c in out["changes"]] == [c2] and out["total"] == 1
+
+
+def test_list_changes_since_undone_flag_and_label_failure_fallback(fakes):
+    c1 = _change(fakes, archive=True)
+    call("undo_change", {"change_id": c1})
+    out = call("list_changes")
+    by = {c["change_id"]: c for c in out["changes"]}
+    assert by[c1]["undone"] is True
+    assert [c["undo_of"] for c in out["changes"]][0] == c1
+    assert call("list_changes", {"since": "2999-01-01T00:00"})["changes"] == []
+    assert call("list_changes", {"since": "2000-01-01"})["total"] == 2
+    fakes.a.fail = RefreshError("bad")
+    out = call("list_changes")  # label lookup fails: ids are shown, call still succeeds
+    assert out["total"] == 2 and any(c["removed"] == ["INBOX"] for c in out["changes"])
+
+
+def test_list_changes_errors(fakes):
+    with pytest.raises(ToolError, match="invalid since: expected ISO 8601 date/time, e.g. 2026-11-01T08:00"):
+        call("list_changes", {"since": "yesterday"})
+    with pytest.raises(ToolError, match="nope"):
+        call("list_changes", {"accounts": ["nope"]})
+
+
+def test_undo_since_preview_then_confirm(fakes):
+    _change(fakes, archive=True)
+    _change(fakes, "bob-work", ids=("w1",), archive=True)
+    fakes.a.calls.clear(); fakes.b.calls.clear()
+    out = call("undo_since", {"since": "2000-01-01"})
+    assert out["total"] == 2 and not has_write(fakes.a) and not has_write(fakes.b)
+    assert "claude/organized" in out["changes"][0]["added"]
+    out = call("undo_since", {"since": "2000-01-01T00:00:00+00:00", "accounts": ["alice-personal"], "confirm": True})
+    assert len(out["undone"]) == 1 and out["failed"] == {} and out["remaining"] is False
+    assert "INBOX" in fakes.a.messages["m1"]["labelIds"] and "INBOX" not in fakes.b.messages["w1"]["labelIds"]
+
+
+def test_undo_since_errors_and_annotations(fakes):
+    with pytest.raises(ToolError, match="invalid since"):
+        call("undo_since", {"since": "soon"})
+    with pytest.raises(ToolError, match="nope"):
+        call("undo_since", {"since": "2000-01-01", "accounts": ["nope"]})
+
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    tools = asyncio.run(go())
+    assert tools["list_changes"].annotations.read_only_hint is True
+    assert tools["undo_since"].annotations.read_only_hint is False
+    assert tools["undo_since"].annotations.destructive_hint is False
+    assert "change_id" in tools["list_changes"].description
+    assert "remaining" in tools["undo_since"].description
+
+
+def test_undo_since_failure_reported_with_account_prefix(fakes):
+    c1 = _change(fakes, archive=True)
+    fakes.a.fail = RefreshError("bad")
+    out = call("undo_since", {"since": "2000-01-01", "confirm": True})
+    assert out["undone"] == [] and out["failed"][c1].startswith("alice-personal: ")

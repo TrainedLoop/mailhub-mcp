@@ -244,7 +244,8 @@ def undo_since(
         try:
             res = undo(provider_for(entry["account"]), journal, entry["account"], change_id)
         except Exception as exc:
-            failed[change_id] = str(exc) if isinstance(exc, MailhubError) else f"{type(exc).__name__}: {exc}"
+            detail = str(exc) if isinstance(exc, MailhubError) else f"{type(exc).__name__}: {exc}"
+            failed[change_id] = f"{entry['account']}: {detail}"
             log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
             continue
         done.append({
