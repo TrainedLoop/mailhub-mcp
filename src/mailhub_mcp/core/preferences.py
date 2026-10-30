@@ -44,6 +44,7 @@ OPPOSITE = {
 }
 MAX_SENDER_LEN = 254
 MAX_KEYWORD_LEN = 40
+KEYWORD_PUNCTUATION = frozenset(" '.-\u2019")
 MAX_ITEMS = 200
 MAX_PROPOSALS = 50
 MAX_USER_REQUEST = 500
@@ -82,13 +83,26 @@ def normalize_sender(value: Any) -> str:
     return v
 
 
+def _keyword_char_ok(c: str) -> bool:
+    # Letters of any script (with their combining marks), decimal digits, space, apostrophe, dot, hyphen.
+    return c in KEYWORD_PUNCTUATION or unicodedata.category(c)[0] in ("L", "M") or unicodedata.category(c) == "Nd"
+
+
 def normalize_keyword(value: Any) -> str:
+    """NFC-normalized, stripped keyword. The character set is restricted because keywords are model-written
+    text shown back to the model: no colons, slashes, brackets or @ leaves no room for instruction-like
+    syntax or sender patterns hidden in a keyword."""
     if not isinstance(value, str):
         raise PreferenceError(f"Invalid keyword {value!r}: must be a string")
-    v = value.strip()
+    v = unicodedata.normalize("NFC", value).strip()
     if not v or len(v) > MAX_KEYWORD_LEN or _has_bad_chars(v):
         raise PreferenceError(
             f"Invalid keyword {value!r}: 1-{MAX_KEYWORD_LEN} characters, no control characters or newlines"
+        )
+    if not all(_keyword_char_ok(c) for c in v):
+        raise PreferenceError(
+            f"Invalid keyword {value!r}: only letters, digits, spaces, apostrophes, dots and hyphens are "
+            "allowed (use important_senders / ignored_senders for addresses)"
         )
     return v
 
