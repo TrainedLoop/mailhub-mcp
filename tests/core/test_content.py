@@ -447,3 +447,31 @@ def test_round4_timing():
     chunk = '<p><b hidden><font style="display:none"><a hidden>x<div>y</p></i></span></b></div>'
     _fast(lambda: html_to_safe_text(chunk * 20_000))
     _fast(lambda: html_to_safe_text('<p><b hidden><em hidden>x<div>y</p></i>' * 20_000))
+
+
+# ---- fix round 5: formatting end tags out of scope are ignored ----
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<b hidden><table><tr><td>a</b>SECRET</td></tr></table>",
+        '<font style="display:none"><table><tr><td>a</font>SECRET</td></tr></table>',
+        "<b hidden><table><tr><td>a</td></tr></b>SECRET</table>",
+        "<b hidden><table></b>SECRET</table>",
+        "<b hidden><marquee>a</b>SECRET</marquee>",
+        "<b hidden><object>a</b>SECRET</object>",
+    ],
+)
+def test_formatting_end_tag_out_of_scope_ignored(html):
+    text, removed = html_to_safe_text(html)
+    assert "SECRET" not in text and removed > 0
+
+
+def test_formatting_end_tag_in_scope_still_closes():
+    text, _ = html_to_safe_text("<table><tr><td><b hidden>a</b>shown</td></tr></table>")
+    assert text == "shown"
+
+
+def test_round5_timing():
+    _fast(lambda: html_to_safe_text("<b hidden><table><tr><td></b>" * 80_000))

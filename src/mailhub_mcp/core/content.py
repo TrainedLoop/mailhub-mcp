@@ -200,11 +200,11 @@ class _Extractor(HTMLParser):
         self.barriers: list[int] = []
         self.stoppers: list[int] = []  # stack indices of button-scope boundaries
         self.dropped = 0  # open elements currently hiding content
-        # Per formatting tag, hides-flags of entries not yet closed by their own
-        # end tag. A hiding entry keeps hiding until its end tag or EOF, even
+        # Per formatting tag, (hides, stack index at push) of entries not yet
+        # closed by their own end tag. A hiding entry keeps hiding until its end tag or EOF, even
         # after being popped structurally (fail-closed approximation of
         # active-formatting re-creation).
-        self.formatting: defaultdict[str, list[bool]] = defaultdict(list)
+        self.formatting: defaultdict[str, list[tuple[bool, int]]] = defaultdict(list)
         self.in_style = 0  # style content is dropped but not counted
 
     def _count(self, data: str) -> None:
@@ -262,7 +262,7 @@ class _Extractor(HTMLParser):
         if tag in _FORMATTING:
             # Hiding is tracked by the formatting list, not the stack entry;
             # still a barrier so inline end tags stop at it.
-            self.formatting[tag].append(hides)
+            self.formatting[tag].append((hides, len(self.stack)))
             if hides:
                 self.dropped += 1
             self._push(tag, False, barrier=hides)
@@ -278,8 +278,15 @@ class _Extractor(HTMLParser):
 
     def handle_endtag(self, tag):
         if tag in _FORMATTING and self.formatting[tag]:
-            # Closes the most recent entry for this tag, as browsers do.
-            if self.formatting[tag].pop():
+            # Closes the most recent entry for this tag, as browsers do, unless
+            # a scope boundary (table, td, marquee, ...) opened above it: then
+            # browsers ignore the end tag entirely. The recorded index is kept
+            # after structural pops, so this errs toward hiding.
+            hides, idx = self.formatting[tag][-1]
+            if self.stoppers and self.stoppers[-1] > idx:
+                return
+            self.formatting[tag].pop()
+            if hides:
                 self.dropped -= 1
         if tag in _VOID or not self.positions[tag]:
             return
