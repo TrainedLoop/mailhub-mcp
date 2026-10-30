@@ -649,6 +649,134 @@ def test_apply_query_unproven_id_missing_or_unreadable_refuses_without_writes(fa
     assert no_writes(fake) and journal.entries() == []
 
 
+def _history_calls(fake):
+    return [c[0] for c in fake.calls if c[0] in ("users.getProfile", "history.list")]
+
+
+def test_apply_query_message_leaving_and_rejoining_query_keeps_its_label_on_undo(fake, provider, journal):
+    """Reviewer's race: m1 carries Shopping and leaves `is:unread` (another client marks it read)
+    while the Shopping listing runs, then returns before the final re-list. The complete listing
+    does not contain m1, but m1 had the label: history marks m1 changed, so it is read."""
+    fake.messages["m1"]["labelIds"] = ["INBOX", "UNREAD", "Label_9"]
+    fake.query_results["is:unread"] = ["m1", "m2"]
+    real = provider.list_ids
+
+    def racing(query, limit, label_ids=None):
+        if label_ids == ["Label_9"]:
+            fake.set_labels("m1", ["INBOX", "Label_9"])  # marked read elsewhere
+            fake.query_results["is:unread"] = ["m2"]
+            out = real(query, limit, label_ids=label_ids)
+            fake.set_labels("m1", ["INBOX", "UNREAD", "Label_9"])  # and unread again
+            fake.query_results["is:unread"] = ["m1", "m2"]
+            return out
+        return real(query, limit, label_ids=label_ids)
+
+    provider.list_ids = racing
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "is:unread", add_labels=["Shopping"], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert [c[1]["id"] for c in _gets(fake)] == ["m1"]  # only the changed message is read
+    assert sorted(journal.get(r["change_id"])["prior"]["m1"]) == ["INBOX", "Label_9"]
+    undo(provider, journal, "a", r["change_id"])
+    assert sorted(fake.messages["m1"]["labelIds"]) == ["INBOX", "Label_9", "UNREAD"]
+    assert sorted(fake.messages["m2"]["labelIds"]) == ["INBOX", "UNREAD"]
+
+
+def test_apply_query_without_changes_needs_no_reads_and_one_history_check(fake, provider, journal):
+    fake.query_results["q"] = ["m1", "m2"]
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=["Shopping"], remove_labels=[],
+                    archive=False, mark_read=None, star=None)
+    assert r["modified"] == 2 and _gets(fake) == []
+    assert _history_calls(fake) == ["users.getProfile", "history.list"]
+    # the marker is taken before the first listing, the history check after the last one
+    names = [c[0] for c in fake.calls]
+    assert names.index("users.getProfile") < names.index("messages.list")
+    last_list = len(names) - 1 - names[::-1].index("messages.list")
+    assert last_list < names.index("history.list") < names.index("messages.batchModify")
+
+
+@pytest.mark.parametrize("expire", ["floor", "error"])
+def test_apply_query_history_unavailable_reads_the_whole_batch(fake, provider, journal, expire):
+    fake.add_message("m3", labels=[])
+    fake.query_results["q"] = ["m1", "m2", "m3"]
+    if expire == "floor":
+        fake.history_floor = fake.history_id + 10**6
+    else:
+        fake.history_errors = [http_error(400, "Bad Request")]
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert sorted(c[1]["id"] for c in _gets(fake)) == ["m1", "m2", "m3"]
+    assert r["modified"] == 2 and journal.get(r["change_id"])["prior"] == {"m1": ["INBOX"], "m2": ["INBOX"]}
+
+
+def test_apply_query_without_change_detection_reads_the_whole_batch(fake, provider, journal):
+    class NoHistory:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            if name in ("change_marker", "changed_since"):
+                raise AttributeError(name)
+            return getattr(self._inner, name)
+
+    fake.query_results["q"] = ["m1", "m2"]
+    fake.calls.clear()
+    r = apply_query(NoHistory(provider), journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert sorted(c[1]["id"] for c in _gets(fake)) == ["m1", "m2"] and r["modified"] == 2
+
+
+def test_apply_query_changed_ids_are_read_and_override_listed_state(fake, provider, journal):
+    """m1 is listed with STARRED, then loses it elsewhere; m2 gains Shopping after its listing.
+    The read state of the changed ids wins for every touched label; m3, unchanged, is not read."""
+    fake.add_message("m3", labels=["INBOX"])
+    fake.query_results["q"] = ["m1", "m2", "m3"]
+    real = provider.list_ids
+    listed = []
+
+    def racing(query, limit, label_ids=None):
+        out = real(query, limit, label_ids=label_ids)
+        if label_ids:
+            listed.append(label_ids[0])
+            if label_ids == ["STARRED"]:
+                fake.set_labels("m1", ["INBOX", "UNREAD"])
+            if label_ids == ["Label_9"]:
+                fake.set_labels("m2", ["INBOX", "UNREAD", "Label_9"])
+        return out
+
+    provider.list_ids = racing
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=["Shopping"], remove_labels=[],
+                    archive=True, mark_read=None, star=False)
+    assert sorted(listed) == ["INBOX", "Label_9", "STARRED"]
+    assert sorted(c[1]["id"] for c in _gets(fake)) == ["m1", "m2"]
+    prior = {i: sorted(v) for i, v in journal.get(r["change_id"])["prior"].items()}
+    assert prior == {"m1": ["INBOX"], "m2": ["INBOX", "Label_9"], "m3": ["INBOX"]}
+    undo(provider, journal, "a", r["change_id"])
+    assert sorted(fake.messages["m1"]["labelIds"]) == ["INBOX", "UNREAD"]
+    assert sorted(fake.messages["m2"]["labelIds"]) == ["INBOX", "Label_9", "UNREAD"]
+
+
+def test_apply_query_changed_id_missing_refuses_without_writes(fake, provider, journal):
+    fake.query_results["q"] = ["m1", "m2"]
+    real = provider.list_ids
+
+    def racing(query, limit, label_ids=None):
+        out = real(query, limit, label_ids=label_ids)
+        if label_ids:
+            fake.set_labels("m2", ["INBOX"])
+            fake.get_errors["m2"] = http_error(404, "gone")
+        return out
+
+    provider.list_ids = racing
+    with pytest.raises(OrganizeError, match="not found"):
+        apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert no_writes(fake) and journal.entries() == []
+
+
 def test_apply_query_validation_errors_write_nothing(fake, provider, journal):
     fake.query_results["q"] = ["m1"]
     with pytest.raises(OrganizeError, match="Unknown label"):

@@ -197,8 +197,17 @@ def preview_query(provider: Any, query: str) -> dict:
     }
 
 
+def _change_marker(provider: Any) -> str | None:
+    """The provider's change marker, or None without (or with failed) change detection."""
+    change_marker = getattr(provider, "change_marker", None)
+    if change_marker is None or getattr(provider, "changed_since", None) is None:
+        return None
+    return change_marker()
+
+
 def _listed_label_state(
-    provider: Any, query: str, ids: list[str], batch: list[str], labels: list[str]
+    provider: Any, query: str, ids: list[str], batch: list[str], labels: list[str],
+    marker: str | None,
 ) -> dict[str, list[str]] | None:
     """Which of `labels` each id of `batch` carries, mostly from label-filtered listings.
 
@@ -207,10 +216,18 @@ def _listed_label_state(
     is the complete set, so an id absent from it does not carry the label. When a listing hit its
     limit, the batch ids it did not prove are read per message (`_read_labels`, which refuses
     missing, failed or unaccounted ids before any write) and their state for that label comes from
-    the read. Finally the query is listed again: a complete listing only covers ids that still
-    matched the query, so if the matches changed meanwhile (new mail, or a message leaving the
-    query) the result is None and the caller reads the whole batch.
+    the read. Then the query is listed again: if the matches changed meanwhile (new mail, or a
+    message leaving the query) the result is None and the caller reads the whole batch.
+
+    A complete listing only covers ids that matched the query when it ran, so a message that left
+    the query during a listing and came back before the re-list would look unlabeled. The
+    provider's change detection closes that gap: `marker` (`_change_marker`) is taken before the
+    query is first listed and, after the re-list, the batch ids changed since it are read and their
+    state for every label comes from the read. Without change detection (no marker, or
+    `changed_since` returning None) the result is None and the caller reads the whole batch.
     """
+    if marker is None:
+        return None
     limit = max(LABEL_LISTING_LIMIT, len(ids) + 1)
     positives: dict[str, set[str]] = {}
     truncated: list[str] = []
@@ -221,14 +238,22 @@ def _listed_label_state(
             truncated.append(label)
     if _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1)) != ids:
         return None
-    unproven = [i for i in batch if any(i not in positives[l] for l in truncated)]
+    changed = provider.changed_since(marker, set(batch))
+    if changed is None:
+        return None
+    unproven = [
+        i for i in batch if i in changed or any(i not in positives[l] for l in truncated)
+    ]
     read = _read_labels(provider, unproven) if unproven else {}
     state = {}
     for i in batch:
-        state[i] = [
-            l for l in labels
-            if i in positives[l] or (l in truncated and l in read.get(i, ()))
-        ]
+        if i in changed:
+            state[i] = [l for l in labels if l in read[i]]
+        else:
+            state[i] = [
+                l for l in labels
+                if i in positives[l] or (l in truncated and l in read.get(i, ()))
+            ]
     return state
 
 
@@ -239,14 +264,16 @@ def apply_query(
 ) -> dict:
     """Apply the change to up to MAX_QUERY_APPLY messages matching `query`.
 
-    Label state comes from label-filtered listings (see `_listed_label_state`), not per-message
-    reads: the ids were just listed, so they exist in this account. Everything from the listing to
-    the journal record runs under journal.lock, like `modify`; on a throttled mailbox the lock waits
-    out the backoff and other organize calls wait with it.
+    Label state comes from label-filtered listings checked against the provider's change detection
+    (see `_listed_label_state`), not per-message reads: the ids were just listed, so they exist in
+    this account. Everything from the listing to the journal record runs under journal.lock, like
+    `modify`; on a throttled mailbox the lock waits out the backoff and other organize calls wait
+    with it.
     """
     _validate_change(add_labels, remove_labels, archive, mark_read, star)
     with journal.lock:
         labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
+        marker = _change_marker(provider)
         ids = _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1))
         if not ids:
             return {"change_id": None, "modified": 0, "remaining": False}
@@ -254,7 +281,7 @@ def apply_query(
         batch = ids[:MAX_QUERY_APPLY]
         org = next((l for l in labels if l.name.lower() == ORG_LABEL.lower()), None)
         touched = _dedupe(add + remove + ([org.id] if org else []))
-        state = _listed_label_state(provider, query, ids, batch, touched)
+        state = _listed_label_state(provider, query, ids, batch, touched, marker)
         found = state if state is not None else _read_labels(provider, batch)
         result = _write(
             provider, journal, account, batch, found, add, remove, "modify_by_query", query,

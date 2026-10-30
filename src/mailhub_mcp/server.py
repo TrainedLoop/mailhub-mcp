@@ -417,8 +417,9 @@ async def modify_emails(
         "at most 500 emails per call ('remaining' says whether more match). "
         "The query should exclude emails already changed (e.g. add in:inbox when archiving, -label:X when adding X); "
         "messages already in the target state are skipped, and a hint is returned if nothing is left to change. "
-        "Cheap on quota: it lists by label (a few units per page of 500) plus 50 per apply; when a label has many matching messages, "
-        "the ones a listing could not settle are read (20 units each). The preview reads a 10-message sample."
+        "Cheap on quota: it lists by label (a few units per page of 500) plus about 3 for a change check and 50 per apply; "
+        "messages a listing could not settle (a label with many matches, or changed by another client meanwhile) are read (20 units each). "
+        "The preview reads a 10-message sample."
         + UNTRUSTED_NOTE
     ),
 )
