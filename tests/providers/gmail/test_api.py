@@ -247,15 +247,58 @@ def test_batch_get_retries_403_rate_limit_then_succeeds(fake, _sleeps):
 def test_batch_get_paces_batches(fake, monkeypatch):
     from mailhub_mcp.providers.gmail import api
 
+    clock = {"t": 0.0}
     paced = []
-    monkeypatch.setattr(api, "_pace_sleep", paced.append)
-    monkeypatch.setattr(api, "_now", lambda: 0.0)  # batches look instantaneous
+
+    def sleep(s):
+        paced.append(s)
+        clock["t"] += s
+
+    monkeypatch.setattr(api, "_pace_sleep", sleep)
+    monkeypatch.setattr(api, "_now", lambda: clock["t"])
     for i in range(120):
         fake.add_message(f"p{i}")
     batch_get(fake, [f"p{i}" for i in range(120)], "minimal")
-    # 3 batches of <=50: a pause before the 2nd and 3rd keeps ~MAX_IDS_PER_SECOND
+    # batches of 50, 50, 20: the 2nd and 3rd wait for the previous batch's budget
     assert len(paced) == 2
     assert all(abs(s - api.BATCH_SIZE / api.MAX_IDS_PER_SECOND) < 1e-9 for s in paced)
+
+
+def test_rate_limiter_schedules_cumulatively():
+    from mailhub_mcp.providers.gmail import api
+
+    paced = []
+    limiter = api.RateLimiter(40, now=lambda: 0.0, sleep=paced.append)
+    for _ in range(4):
+        limiter.acquire(50)
+    assert paced == [1.25, 2.5, 3.75]
+
+
+def test_rate_limiter_is_shared_safely_across_threads():
+    import threading
+
+    from mailhub_mcp.providers.gmail import api
+
+    limiter = api.RateLimiter(40, now=lambda: 0.0, sleep=lambda s: None)
+    threads = [threading.Thread(target=lambda: [limiter.acquire(10) for _ in range(10)]) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    # every one of the 800 ids was budgeted exactly once
+    assert abs(limiter.next_free - 800 / 40) < 1e-9
+
+
+def test_shared_limiter_paces_across_calls(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    paced = []
+    limiter = api.RateLimiter(40, now=lambda: 0.0, sleep=paced.append)
+    for i in range(50):
+        fake.add_message(f"q{i}")
+    batch_get(fake, [f"q{i}" for i in range(50)], "minimal", limiter=limiter)
+    batch_get(fake, [f"q{i}" for i in range(50)], "minimal", limiter=limiter)
+    assert paced == [1.25]  # the second call waits for the first call's budget
 
 
 def test_single_batch_is_not_paced(fake, monkeypatch):

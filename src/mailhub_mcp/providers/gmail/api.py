@@ -1,6 +1,7 @@
 """Stateless Gmail API operations: every function takes a client `svc`. No send."""
 
 import base64
+import threading
 import time
 from email.message import EmailMessage
 
@@ -43,11 +44,38 @@ def is_retryable(exc: Exception) -> bool:
     return status is not None and (status == 429 or status >= 500 or is_rate_limited(exc))
 
 
-def _run_batches(svc, ids: list[str], make_request) -> tuple[dict[str, dict], dict[str, Exception]]:
+class RateLimiter:
+    """Thread-safe pacing for one mailbox, shared by every call that reads it.
+
+    Each acquire books its slot after the previous ones, so concurrent tool calls
+    on the same account add up to at most `per_second` ids per second.
+    """
+
+    def __init__(self, per_second: float, now=None, sleep=None):
+        self._interval = 1 / per_second
+        self._now = now
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self.next_free = 0.0
+
+    def acquire(self, n: int) -> None:
+        now_fn = self._now or _now
+        with self._lock:
+            now = now_fn()
+            start = max(now, self.next_free)
+            self.next_free = start + n * self._interval
+        if start > now:
+            (self._sleep or _pace_sleep)(start - now)
+
+
+def _run_batches(
+    svc, ids: list[str], make_request, limiter: RateLimiter | None = None
+) -> tuple[dict[str, dict], dict[str, Exception]]:
     """Fetch `ids` through batch HTTP requests, retrying transient failures per id."""
     ids = list(dict.fromkeys(ids))
     found: dict[str, dict] = {}
     errors: dict[str, Exception] = {}
+    limiter = limiter or RateLimiter(MAX_IDS_PER_SECOND)
 
     def collect(request_id, response, exception):
         if exception is not None:
@@ -55,20 +83,15 @@ def _run_batches(svc, ids: list[str], make_request) -> tuple[dict[str, dict], di
         else:
             found[request_id] = response
 
-    interval = BATCH_SIZE / MAX_IDS_PER_SECOND
-    last_start = None
     pending = ids
     for attempt in range(MAX_ATTEMPTS):
         if attempt:
             _sleep(2 ** (attempt - 1))
         for start in range(0, len(pending), BATCH_SIZE):
-            if last_start is not None:
-                wait = interval - (_now() - last_start)
-                if wait > 0:
-                    _pace_sleep(wait)
-            last_start = _now()
+            chunk = pending[start : start + BATCH_SIZE]
+            limiter.acquire(len(chunk))
             batch = svc.new_batch_http_request(callback=collect)
-            for item_id in pending[start : start + BATCH_SIZE]:
+            for item_id in chunk:
                 batch.add(make_request(item_id), request_id=item_id)
             batch.execute()
         pending = [i for i in pending if i in errors and is_retryable(errors[i])]
@@ -79,14 +102,16 @@ def _run_batches(svc, ids: list[str], make_request) -> tuple[dict[str, dict], di
     return found, errors
 
 
-def batch_get(svc, ids: list[str], fmt: str) -> tuple[list[dict], dict[str, Exception]]:
+def batch_get(
+    svc, ids: list[str], fmt: str, limiter: RateLimiter | None = None
+) -> tuple[list[dict], dict[str, Exception]]:
     def make_request(message_id):
         kwargs = {"userId": "me", "id": message_id, "format": fmt}
         if fmt == "metadata":
             kwargs["metadataHeaders"] = METADATA_HEADERS
         return svc.users().messages().get(**kwargs)
 
-    found, errors = _run_batches(svc, ids, make_request)
+    found, errors = _run_batches(svc, ids, make_request, limiter)
     return [found[i] for i in dict.fromkeys(ids) if i in found], errors
 
 
@@ -112,17 +137,19 @@ def list_ids(svc, query: str, limit: int) -> list[str]:
     return ids[:limit]
 
 
-def search_report(svc, query: str, max_results: int) -> tuple[list[dict], int]:
+def search_report(
+    svc, query: str, max_results: int, limiter: RateLimiter | None = None
+) -> tuple[list[dict], int]:
     """Summaries of the readable matches, and how many matches could not be read."""
     ids = list_ids(svc, query, max_results)
-    msgs, errors = batch_get(svc, ids, "metadata")
+    msgs, errors = batch_get(svc, ids, "metadata", limiter=limiter)
     # A 404 means the message vanished between list and fetch: not a read failure.
     unreadable = sum(1 for exc in errors.values() if status_of(exc) != 404)
     return [summarize(m) for m in msgs], unreadable
 
 
-def search(svc, query: str, max_results: int) -> list[dict]:
-    return search_report(svc, query, max_results)[0]
+def search(svc, query: str, max_results: int, limiter: RateLimiter | None = None) -> list[dict]:
+    return search_report(svc, query, max_results, limiter)[0]
 
 
 def get_message(svc, message_id: str) -> dict:
@@ -151,7 +178,7 @@ def list_labels(svc) -> list[dict]:
     return [{"id": l["id"], "name": l["name"], "type": l.get("type", "")} for l in resp.get("labels", [])]
 
 
-def list_drafts(svc, max_results: int) -> list[dict]:
+def list_drafts(svc, max_results: int, limiter: RateLimiter | None = None) -> list[dict]:
     ids: list[str] = []
     page_token = None
     while len(ids) < max_results:
@@ -171,7 +198,10 @@ def list_drafts(svc, max_results: int) -> list[dict]:
             break
     ids = ids[:max_results]
     found, errors = _run_batches(
-        svc, ids, lambda i: svc.users().drafts().get(userId="me", id=i, format="metadata")
+        svc,
+        ids,
+        lambda i: svc.users().drafts().get(userId="me", id=i, format="metadata"),
+        limiter,
     )
     for exc in errors.values():
         if status_of(exc) != 404:  # a draft deleted since listing is simply skipped

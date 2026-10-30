@@ -53,6 +53,8 @@ class GmailProvider:
         self._creds: Credentials | None = None
         self._address: str | None = None
         self._lock = threading.Lock()
+        # Gmail's quota is per mailbox: every call on this account shares one pace.
+        self._limiter = api.RateLimiter(api.MAX_IDS_PER_SECOND)
 
     def _service(self) -> Any:
         # httplib2 is not thread-safe: build a fresh client per call, share only credentials.
@@ -94,7 +96,7 @@ class GmailProvider:
 
     def search_report(self, query: str, limit: int) -> SearchResult:
         with self._translate():
-            found, unreadable = api.search_report(self._service(), query, limit)
+            found, unreadable = api.search_report(self._service(), query, limit, self._limiter)
         return SearchResult(found=[MessageSummary(**m) for m in found], unreadable=unreadable)
 
     def search(self, query: str, limit: int) -> list[MessageSummary]:
@@ -106,7 +108,7 @@ class GmailProvider:
 
     def get_messages(self, ids: list[str], detail: Literal["summary", "full", "labels"]) -> GetResult:
         with self._translate():
-            msgs, errors = api.batch_get(self._service(), ids, _FORMATS[detail])
+            msgs, errors = api.batch_get(self._service(), ids, _FORMATS[detail], limiter=self._limiter)
         if detail == "labels":
             found = [LabelState(id=m["id"], labels=m.get("labelIds", [])) for m in msgs]
         elif detail == "summary":
@@ -141,7 +143,7 @@ class GmailProvider:
 
     def list_drafts(self, limit: int) -> list[DraftSummary]:
         with self._translate():
-            return [DraftSummary(**d) for d in api.list_drafts(self._service(), limit)]
+            return [DraftSummary(**d) for d in api.list_drafts(self._service(), limit, self._limiter)]
 
     def create_draft(
         self, to: str, subject: str, body: str, cc: str | None, reply_to_message_id: str | None

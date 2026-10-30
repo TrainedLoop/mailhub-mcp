@@ -211,3 +211,19 @@ def test_get_messages_classifies_failures(gmail, fake):
         "m3": "temporary failure, retry",
     }
     assert r.missing == ["nope"]
+
+
+def test_provider_shares_one_rate_limiter_across_calls(gmail, monkeypatch):
+    from mailhub_mcp.providers.gmail import api
+
+    seen = []
+    real = api.batch_get
+
+    def spy(svc, ids, fmt, limiter=None):
+        seen.append(limiter)
+        return real(svc, ids, fmt, limiter=limiter)
+
+    monkeypatch.setattr(api, "batch_get", spy)
+    gmail.get_messages(["m1"], "labels")
+    gmail.search("in:inbox", 5)
+    assert len(seen) >= 2 and seen[0] is not None and all(x is seen[0] for x in seen)
