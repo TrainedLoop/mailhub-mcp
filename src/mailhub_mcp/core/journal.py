@@ -67,6 +67,21 @@ class Journal:
             entries.append(entry)
         return entries
 
+    def entries(self, since: datetime | None = None) -> list[dict]:
+        """Valid entries, newest first (ties keep reverse file order); `since` is inclusive, naive means UTC."""
+        floor = _aware(since) if since is not None else None
+        dated = []
+        for entry in reversed(self._entries()):
+            try:
+                ts = _aware(datetime.fromisoformat(entry["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                log.warning("skipping journal entry %s with unreadable timestamp", entry["change_id"])
+                continue
+            if floor is None or ts >= floor:
+                dated.append((ts, entry))
+        dated.sort(key=lambda pair: pair[0], reverse=True)  # stable: ties stay in reverse file order
+        return [entry for _, entry in dated]
+
     def get(self, change_id: str) -> dict:
         for entry in self._entries():
             if entry["change_id"] == change_id:
@@ -75,6 +90,10 @@ class Journal:
 
     def is_undone(self, change_id: str) -> bool:
         return any(e.get("undo_of") == change_id for e in self._entries())
+
+
+def _aware(moment: datetime) -> datetime:
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def inverse_ops(entry: dict) -> list[dict]:

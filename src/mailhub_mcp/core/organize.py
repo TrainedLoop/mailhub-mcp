@@ -2,16 +2,20 @@
 
 import json
 import logging
+from collections.abc import Callable
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from mailhub_mcp.core.errors import OrganizeError
+from mailhub_mcp.core.errors import MailhubError, OrganizeError
+from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
 
 ORG_LABEL = "claude/organized"
 MAX_IDS = 1000
 MAX_QUERY_APPLY = 500
 PREVIEW_SAMPLE = 10
+MAX_UNDO_SINCE = 50
 QUERY_HINT_ALREADY_CHANGED = "query still matches messages already changed; refine the query"
 
 log = logging.getLogger("mailhub-mcp.organize")
@@ -195,3 +199,56 @@ def _undo(provider: Any, journal: Journal, account: str, change_id: str) -> dict
         prior, changed=bool(applied), undo_of=change_id,
     )
     return {"change_id": undo_id, "undone": change_id, "modified": len(done), "skipped": skipped}
+
+
+def undo_since(
+    provider_for: Callable[[str], Any],
+    journal: Journal,
+    since: datetime,
+    accounts: list[str] | None,
+    confirm: bool,
+    label_names_for: Callable[[str], dict[str, str]] | None = None,
+) -> dict:
+    """Undo every not-yet-undone change since `since`, newest first, at most MAX_UNDO_SINCE per call.
+
+    Newest first makes overlapping changes on one message restore its exact original labels. The journal
+    lock is taken per change inside `undo`, never across the loop. `label_names_for(account)` optionally
+    maps label ids to names for the preview.
+    """
+    entries = journal.entries(since)
+    undone = undone_ids(entries)
+    wanted = set(accounts) if accounts else None
+    candidates = [
+        e for e in entries
+        if not e.get("undo_of") and e["change_id"] not in undone
+        and (wanted is None or e.get("account") in wanted)
+    ]
+    batch = candidates[:MAX_UNDO_SINCE]
+    remaining = len(candidates) > MAX_UNDO_SINCE
+    if not confirm:
+        names: dict[str, dict[str, str]] = {}
+        changes = []
+        for e in batch:
+            if label_names_for and e["account"] not in names:
+                try:
+                    names[e["account"]] = label_names_for(e["account"])
+                except Exception:
+                    names[e["account"]] = {}
+            changes.append(summarize_entry(e, False, names.get(e["account"], {})))
+        return {"changes": changes, "total": len(candidates), "remaining": remaining}
+
+    done: list[dict] = []
+    failed: dict[str, str] = {}
+    for entry in batch:
+        change_id = entry["change_id"]
+        try:
+            res = undo(provider_for(entry["account"]), journal, entry["account"], change_id)
+        except Exception as exc:
+            failed[change_id] = str(exc) if isinstance(exc, MailhubError) else f"{type(exc).__name__}: {exc}"
+            log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
+            continue
+        done.append({
+            "change_id": change_id, "undo_change_id": res["change_id"],
+            "modified": res["modified"], "skipped": res["skipped"],
+        })
+    return {"undone": done, "failed": failed, "remaining": remaining}

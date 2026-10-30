@@ -78,3 +78,49 @@ def test_record_logs_summary_at_info(tmp_path, caplog):
     for part in (cid, "acc", "modify_emails", "['A']", "['B']", "2"):
         assert part in text
     assert "prior" not in text
+
+
+def _write_entries(path, rows):
+    import json
+    path.write_text("".join((r if isinstance(r, str) else json.dumps(r)) + "\n" for r in rows))
+
+
+def _row(cid, ts, **kw):
+    return {"change_id": cid, "timestamp": ts, "account": "a", "tool": "t", "added": [], "removed": [],
+            "prior": {}, "query": None, "undo_of": None, **kw}
+
+
+def test_entries_newest_first_with_ties_in_reverse_file_order(tmp_path):
+    p = tmp_path / "c.jsonl"
+    _write_entries(p, [
+        _row("old", "2026-01-01T00:00:00+00:00"),
+        _row("tie1", "2026-01-02T00:00:00+00:00"),
+        _row("tie2", "2026-01-02T00:00:00+00:00"),
+        _row("new", "2026-01-03T00:00:00+00:00"),
+    ])
+    assert [e["change_id"] for e in Journal(p).entries()] == ["new", "tie2", "tie1", "old"]
+
+
+def test_entries_since_is_inclusive_and_handles_naive_and_aware(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    p = tmp_path / "c.jsonl"
+    _write_entries(p, [
+        _row("a", "2026-01-01T00:00:00+00:00"),
+        _row("b", "2026-01-02T00:00:00+00:00"),
+        _row("c", "2026-01-03T00:00:00+00:00"),
+    ])
+    j = Journal(p)
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2))] == ["c", "b"]  # naive = UTC
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2, tzinfo=timezone.utc))] == ["c", "b"]
+    east = timezone(timedelta(hours=2))
+    # 03T01:00+02:00 is 02T23:00Z (after b, before c); 03T02:00+02:00 is exactly c
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 3, 1, tzinfo=east))] == ["c"]
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 3, 2, tzinfo=east))] == ["c"]
+
+
+def test_entries_skips_malformed_lines(tmp_path):
+    p = tmp_path / "c.jsonl"
+    _write_entries(p, [_row("a", "2026-01-01T00:00:00+00:00"), "not json", "[1]", '{"x": 1}', "",
+                       _row("b", "2026-01-02T00:00:00+00:00")])
+    assert [e["change_id"] for e in Journal(p).entries()] == ["b", "a"]
+    assert Journal(tmp_path / "missing.jsonl").entries() == []
