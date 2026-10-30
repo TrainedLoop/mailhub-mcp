@@ -86,6 +86,12 @@ class FakeGmail:
         self.query_results: dict[str, list[str]] = {}
         self.page_size = 500
         self._ids = itertools.count(1)
+        # History log: label changes and message adds, each with an increasing history id.
+        self.history: list[dict] = []
+        self.history_id = 1000
+        self.history_floor = 0  # startHistoryId below this is expired (404)
+        self.history_errors: list[Exception] = []  # raised, in order, by history.list
+        self.history_page_size = 500
 
     # -- test helpers ------------------------------------------------------
 
@@ -111,7 +117,29 @@ class FakeGmail:
             "internalDate": str(internal_date),
             "payload": payload,
         }
+        self.record_history("messagesAdded", id)
         return self.messages[id]
+
+    def record_history(self, kind: str, id: str, label_ids=None) -> None:
+        """Append a history record: kind is messagesAdded, messagesDeleted, labelsAdded or labelsRemoved."""
+        self.history_id += 1
+        msg = self.messages.get(id, {"id": id, "threadId": id})
+        ref = {"id": id, "threadId": msg["threadId"]}
+        entry = {"message": {**ref, "labelIds": list(msg.get("labelIds", []))}}
+        if label_ids is not None:
+            entry["labelIds"] = list(label_ids)
+        self.history.append({"id": str(self.history_id), "messages": [ref], kind: [entry]})
+
+    def set_labels(self, id: str, labels) -> None:
+        """Change a message's labels as another client would, recording the history."""
+        msg = self.messages[id]
+        added = [l for l in labels if l not in msg["labelIds"]]
+        removed = [l for l in msg["labelIds"] if l not in labels]
+        msg["labelIds"] = list(labels)
+        if added:
+            self.record_history("labelsAdded", id, added)
+        if removed:
+            self.record_history("labelsRemoved", id, removed)
 
     # -- plumbing ----------------------------------------------------------
 
@@ -158,6 +186,7 @@ class FakeGmail:
                 "emailAddress": self.email_address,
                 "messagesTotal": len(self.messages),
                 "threadsTotal": len({m["threadId"] for m in self.messages.values()}),
+                "historyId": str(self.history_id),
             }
         return self._request("users.getProfile", {"userId": userId}, run)
 
@@ -182,6 +211,9 @@ class _Users:
 
     def drafts(self):
         return _Drafts(self._fake)
+
+    def history(self):
+        return _History(self._fake)
 
     def getProfile(self, userId="me"):
         return self._fake.getProfile(userId)
@@ -234,10 +266,49 @@ class _Messages:
                 if msg is None:
                     continue
                 current = [l for l in msg["labelIds"] if l not in remove]
-                msg["labelIds"] = current + [l for l in add if l not in current]
+                self.f.set_labels(i, current + [l for l in add if l not in current])
             return ""
 
         return self.f._request("messages.batchModify", {"userId": userId, "body": body}, run)
+
+
+_HISTORY_KINDS = {
+    "messageAdded": "messagesAdded", "messageDeleted": "messagesDeleted",
+    "labelAdded": "labelsAdded", "labelRemoved": "labelsRemoved",
+}
+
+
+class _History:
+    def __init__(self, fake):
+        self.f = fake
+
+    def list(self, userId="me", startHistoryId=None, historyTypes=None, maxResults=None, pageToken=None):
+        kwargs = {
+            "userId": userId, "startHistoryId": startHistoryId, "historyTypes": historyTypes,
+            "maxResults": maxResults, "pageToken": pageToken,
+        }
+
+        def run():
+            if self.f.history_errors:
+                raise self.f.history_errors.pop(0)
+            start = int(startHistoryId)
+            if start < self.f.history_floor:
+                raise http_error(404, "Requested entity was not found.")
+            kinds = {_HISTORY_KINDS[t] for t in historyTypes} if historyTypes else set(_HISTORY_KINDS.values())
+            records = [
+                r for r in self.f.history if int(r["id"]) > start and kinds & set(r)
+            ]
+            size = min(maxResults or self.f.history_page_size, self.f.history_page_size)
+            begin = int(pageToken or 0)
+            page = records[begin:begin + size]
+            resp = {"historyId": str(self.f.history_id)}
+            if page:
+                resp["history"] = copy.deepcopy(page)
+            if begin + size < len(records):
+                resp["nextPageToken"] = str(begin + size)
+            return resp
+
+        return self.f._request("history.list", kwargs, run)
 
 
 class _Labels:

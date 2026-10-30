@@ -140,3 +140,20 @@ class ProviderContract:
         assert all(type(v) is int and v >= 0 for v in before.values())
         provider.get_messages(["m1"], "labels")
         assert status()["used_last_minute"] > before["used_last_minute"]
+
+    def test_change_detection_when_provided(self, provider, seed):
+        if getattr(provider, "change_marker", None) is None:  # optional capability
+            return
+        first, second = seed["messages"][0]["id"], seed["messages"][1]["id"]
+        marker = provider.change_marker()
+        if marker is None:  # unknown right now: callers fall back to exact reads
+            return
+        assert provider.changed_since(marker, {first, second}) == set()
+        label = provider.ensure_label("Shopping")
+        provider.modify_labels([first], [label.id], [])
+        assert provider.changed_since(marker, {first, second}) == {first}
+        assert provider.changed_since(marker, {second}) == set()  # only ids asked about
+        later = provider.change_marker()
+        provider.modify_labels([first], [], [label.id])
+        provider.modify_labels([first], [label.id], [])  # back to the same labels: still a change
+        assert provider.changed_since(later, {first, second}) == {first}

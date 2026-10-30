@@ -112,6 +112,28 @@ class GmailProvider:
             self._address = profile["emailAddress"]
         return self._address
 
+    def change_marker(self) -> str | None:
+        """Gmail history id now, or None if it could not be fetched (auth errors still raise)."""
+        try:
+            with self._translate():
+                return api.history_marker(self._service(), self._limiter)
+        except AuthExpired:
+            raise
+        except MailhubError:
+            return None
+
+    def changed_since(self, marker: str, ids: set[str]) -> set[str] | None:
+        """Which of `ids` changed since `marker` (Gmail history), or None if unknown: history
+        expired or too long, or any failure after retries (auth errors still raise)."""
+        try:
+            with self._translate():
+                changed = api.changed_message_ids(self._service(), marker, self._limiter)
+        except AuthExpired:
+            raise
+        except MailhubError:
+            return None
+        return None if changed is None else changed & set(ids)
+
     def search_report(self, query: str, limit: int) -> SearchResult:
         with self._translate():
             found, unreadable, rate_limited = api.search_report(self._service(), query, limit, self._limiter)

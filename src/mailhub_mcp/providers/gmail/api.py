@@ -30,6 +30,7 @@ LABELS_LIST_UNITS = 1
 BATCH_MODIFY_UNITS = 50
 DRAFT_LIST_UNITS = 5
 PROFILE_UNITS = 1
+HISTORY_LIST_UNITS = 2
 # Not documented in the 2026 table; assumed from the costs of comparable calls.
 LABELS_CREATE_UNITS = 5
 DRAFT_GET_UNITS = 20  # format=metadata, like messages.get
@@ -434,3 +435,43 @@ def batch_modify(
 
 def get_profile(svc, limiter: RateLimiter | None = None) -> dict:
     return _execute(svc.users().getProfile(userId="me"), limiter, PROFILE_UNITS)
+
+
+HISTORY_TYPES = ["labelAdded", "labelRemoved", "messageAdded", "messageDeleted"]
+HISTORY_PAGE_SIZE = 500
+# More pages than this means a busy mailbox: the caller falls back to reading messages instead.
+HISTORY_MAX_PAGES = 10
+_HISTORY_RECORD_KEYS = ("messagesAdded", "messagesDeleted", "labelsAdded", "labelsRemoved")
+
+
+def history_marker(svc, limiter: RateLimiter | None = None) -> str:
+    """The mailbox's current history id (users.getProfile, 1 unit)."""
+    return str(get_profile(svc, limiter)["historyId"])
+
+
+def changed_message_ids(svc, start_history_id: str, limiter: RateLimiter | None = None) -> set[str] | None:
+    """Ids of messages with a label change, addition or deletion after `start_history_id`
+    (users.history.list, 2 units per page), or None when the history is expired (404) or longer
+    than HISTORY_MAX_PAGES pages. Other errors propagate after the usual retries."""
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
+    ids: set[str] = set()
+    page_token = None
+    for _ in range(HISTORY_MAX_PAGES):
+        request = svc.users().history().list(
+            userId="me", startHistoryId=start_history_id, historyTypes=HISTORY_TYPES,
+            maxResults=HISTORY_PAGE_SIZE, pageToken=page_token,
+        )
+        try:
+            resp = _execute(request, limiter, HISTORY_LIST_UNITS)
+        except HttpError as exc:
+            if status_of(exc) == 404:
+                return None
+            raise
+        for record in resp.get("history", []):
+            ids.update(m["id"] for m in record.get("messages", []))
+            for key in _HISTORY_RECORD_KEYS:
+                ids.update(e["message"]["id"] for e in record.get(key, []))
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            return ids
+    return None

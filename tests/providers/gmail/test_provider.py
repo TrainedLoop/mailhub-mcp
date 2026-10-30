@@ -324,3 +324,34 @@ def test_quota_status_is_numbers_and_grows_after_reads(fake, token_file):
     after = gmail.quota_status()
     assert after["used_last_minute"] == 40 and after["budget_per_minute"] == 1200
     assert all(type(v) is int for v in after.values())
+
+
+def test_change_marker_and_changed_since_use_gmail_history(gmail, fake):
+    marker = gmail.change_marker()
+    assert marker == str(fake.history_id)
+    fake.set_labels("m2", ["INBOX", "UNREAD"])
+    assert gmail.changed_since(marker, {"m1", "m2"}) == {"m2"}
+    assert [c[0] for c in fake.calls] == ["users.getProfile", "history.list"]
+
+
+def test_changed_since_none_when_history_expired(gmail, fake):
+    marker = gmail.change_marker()
+    fake.history_floor = int(marker) + 1
+    assert gmail.changed_since(marker, {"m1"}) is None
+
+
+def test_change_detection_none_after_retries_give_up(gmail, fake):
+    fake.history_errors = [http_error(503, "Unavailable")] * 4
+    assert gmail.changed_since(gmail.change_marker(), {"m1"}) is None
+    fake.history_errors = [http_error(400, "Bad Request")]
+    assert gmail.changed_since(gmail.change_marker(), {"m1"}) is None
+    fake.fail = http_error(500, "Backend Error")
+    assert gmail.change_marker() is None
+
+
+def test_change_marker_charges_the_limiter(gmail, fake):
+    before = gmail.quota_status()["used_last_minute"]
+    marker = gmail.change_marker()
+    assert gmail.quota_status()["used_last_minute"] == before + 1
+    gmail.changed_since(marker, {"m1"})
+    assert gmail.quota_status()["used_last_minute"] == before + 3

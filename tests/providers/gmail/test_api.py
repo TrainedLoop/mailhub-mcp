@@ -782,3 +782,74 @@ def test_used_last_minute_is_capped_at_the_budget():
     limiter = api.RateLimiter(10, now=lambda: 0.0, sleep=lambda s: None)  # 600 per minute
     limiter.acquire(1000)  # one big call books slots far ahead
     assert limiter.used_last_minute() == 600
+
+
+# -- history: change detection for modify_by_query --------------------------
+
+
+def test_history_marker_is_profile_history_id_and_costs_one_unit(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    spy = _SpyLimiter()
+    fake.add_message("m1")
+    assert api.history_marker(fake, limiter=spy) == str(fake.history_id)
+    assert spy.units == [1]
+
+
+def test_changed_message_ids_collects_every_record_kind_across_pages(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1", labels=["INBOX"])
+    fake.add_message("m2", labels=["INBOX"])
+    marker = api.history_marker(fake)
+    fake.add_message("m3")  # messageAdded
+    fake.set_labels("m1", ["INBOX", "UNREAD"])  # labelAdded
+    fake.set_labels("m2", [])  # labelRemoved
+    fake.record_history("messagesDeleted", "m4")
+    fake.history_page_size = 2
+    spy = _SpyLimiter()
+    assert api.changed_message_ids(fake, marker, limiter=spy) == {"m1", "m2", "m3", "m4"}
+    assert spy.units == [2, 2]  # two pages of history.list, 2 units each
+    calls = [c[1] for c in fake.calls if c[0] == "history.list"]
+    assert calls[0]["startHistoryId"] == marker
+    assert sorted(calls[0]["historyTypes"]) == sorted(
+        ["labelAdded", "labelRemoved", "messageAdded", "messageDeleted"]
+    )
+
+
+def test_changed_message_ids_empty_without_changes(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1")
+    assert api.changed_message_ids(fake, api.history_marker(fake)) == set()
+
+
+def test_changed_message_ids_none_when_history_expired(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1")
+    marker = api.history_marker(fake)
+    fake.history_floor = int(marker) + 1
+    assert api.changed_message_ids(fake, marker) is None
+
+
+def test_changed_message_ids_none_beyond_page_cap(fake, monkeypatch):
+    from mailhub_mcp.providers.gmail import api
+
+    monkeypatch.setattr(api, "HISTORY_MAX_PAGES", 2)
+    marker = api.history_marker(fake)
+    for i in range(5):
+        fake.add_message(f"m{i}")
+    fake.history_page_size = 2
+    assert api.changed_message_ids(fake, marker) is None
+    assert len([c for c in fake.calls if c[0] == "history.list"]) == 2
+
+
+def test_changed_message_ids_retries_transient_errors(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+
+    marker = api.history_marker(fake)
+    fake.add_message("m1")
+    fake.history_errors = [http_error(503, "Unavailable")]
+    assert api.changed_message_ids(fake, marker) == {"m1"}
+    assert _sleeps == [1]
