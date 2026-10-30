@@ -557,23 +557,96 @@ def test_apply_query_falls_back_to_reads_when_matches_change_meanwhile(fake, pro
     assert journal.get(r["change_id"])["prior"] == {"m1": ["INBOX"], "m2": ["INBOX"]}
 
 
-def test_apply_query_falls_back_when_label_listing_order_is_inconsistent(fake, provider, journal):
-    ids = ["m1", "m2"]
-    fake.add_message("old", labels=["INBOX", "UNREAD"])
-    fake.query_results["q"] = ids
+def _misordered_listing(fake, provider, monkeypatch, query, label_order):
+    """Gmail may order a label-filtered listing differently from the query listing."""
     real = provider.list_ids
 
-    def odd(query, limit, label_ids=None):
-        if label_ids == ["UNREAD"]:  # a full listing with a foreign id ahead of ours
-            return ["old", "m1"][:limit]
-        return real(query, limit, label_ids=label_ids)
+    def listing(q, limit, label_ids=None):
+        if q == query and label_ids and label_ids[0] in label_order:
+            ids = [i for i in label_order[label_ids[0]] if set(label_ids) <= set(fake.messages[i]["labelIds"])]
+            return ids[:limit]
+        return real(q, limit, label_ids=label_ids)
 
-    provider.list_ids = odd
+    provider.list_ids = listing
+
+
+def test_apply_query_misordered_truncated_listing_keeps_exact_prior(fake, provider, journal, monkeypatch):
+    """A truncated ORG listing, ordered unlike the query (o3 after foreign ids, beyond the limit of
+    max(4, 4 + 1) = 5), proves nothing about o3: it must not be recorded without ORG."""
+    from mailhub_mcp.core import organize
+
+    monkeypatch.setattr(organize, "MAX_QUERY_APPLY", 3)
+    monkeypatch.setattr(organize, "LABEL_LISTING_LIMIT", 4)
+    org = provider.ensure_label("claude/organized")
+    order = ["o1", "o2", "o3", "o4", "f5", "f6"]
+    for i in order:
+        fake.add_message(i, labels=["INBOX", org.id])
+    fake.query_results["q"] = order
+    _misordered_listing(fake, provider, monkeypatch, "q", {org.id: ["o1", "o2", "o4", "f5", "f6", "o3"]})
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=["Shopping"], remove_labels=[],
+                    archive=False, mark_read=None, star=None)
+    assert r["modified"] == 3 and r["remaining"] is True
+    # the ORG listing was truncated and did not prove o3: only o3 is read
+    assert [c[1]["id"] for c in _gets(fake)] == ["o3"]
+    assert journal.get(r["change_id"])["prior"]["o3"] == [org.id]
+    undo(provider, journal, "a", r["change_id"])
+    assert org.id in fake.messages["o3"]["labelIds"] and "Label_9" not in fake.messages["o3"]["labelIds"]
+
+
+def test_apply_query_complete_listings_need_no_reads(fake, provider, journal, monkeypatch):
+    from mailhub_mcp.core import organize
+
+    monkeypatch.setattr(organize, "MAX_QUERY_APPLY", 4)
+    monkeypatch.setattr(organize, "LABEL_LISTING_LIMIT", 2)
+    ids = ["x1", "x2", "x3", "x4", "x5"]
+    for i in ids:
+        fake.add_message(i, labels=["INBOX"] if i != "x3" else [])
+    fake.query_results["q"] = ids
     fake.calls.clear()
     r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
-                    archive=False, mark_read=True, star=None)
-    assert {c[1]["id"] for c in _gets(fake)} == {"m1", "m2"}
-    assert journal.get(r["change_id"])["prior"] == {"m1": ["UNREAD"], "m2": ["UNREAD"]}
+                    archive=True, mark_read=None, star=None)
+    # INBOX listing (limit max(2, 5+1) = 6) is not truncated: no reads at all
+    assert _gets(fake) == [] and r["modified"] == 3
+
+
+def test_apply_query_truncated_listing_reads_unproven_batch_ids_only(fake, provider, journal, monkeypatch):
+    from mailhub_mcp.core import organize
+
+    monkeypatch.setattr(organize, "MAX_QUERY_APPLY", 2)
+    monkeypatch.setattr(organize, "LABEL_LISTING_LIMIT", 3)
+    ids = ["y1", "y2", "y3", "y4", "y5"]
+    for i in ids:
+        fake.add_message(i, labels=["INBOX"])
+    fake.messages["y2"]["labelIds"] = []
+    fake.query_results["q"] = ids
+    # the INBOX listing [y1, y3, y4, y5] hits its limit max(3, 3 + 1) = 4: y1 is proven, y2 unproven
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert [c[1]["id"] for c in _gets(fake)] == ["y2"]
+    assert r["modified"] == 1 and journal.get(r["change_id"])["prior"] == {"y1": ["INBOX"]}
+
+
+def test_apply_query_unproven_id_missing_or_unreadable_refuses_without_writes(fake, provider, journal, monkeypatch):
+    from mailhub_mcp.core import organize
+
+    monkeypatch.setattr(organize, "MAX_QUERY_APPLY", 2)
+    monkeypatch.setattr(organize, "LABEL_LISTING_LIMIT", 3)
+    ids = ["z1", "z2", "z3", "z4", "z5"]
+    for i in ids:
+        fake.add_message(i, labels=["INBOX"])
+    fake.messages["z2"]["labelIds"] = []
+    fake.query_results["q"] = ids
+    fake.get_errors["z2"] = http_error(503, "x")
+    with pytest.raises(OrganizeError, match="Could not read"):
+        apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    fake.get_errors["z2"] = http_error(404, "gone")
+    with pytest.raises(OrganizeError, match="not found"):
+        apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert no_writes(fake) and journal.entries() == []
 
 
 def test_apply_query_validation_errors_write_nothing(fake, provider, journal):

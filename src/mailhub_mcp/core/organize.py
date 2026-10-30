@@ -16,6 +16,9 @@ from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, UndoRejectedEr
 ORG_LABEL = "claude/organized"
 MAX_IDS = 1000
 MAX_QUERY_APPLY = 500
+# Smallest limit of a label-filtered listing in modify_by_query (4 pages, 20 Gmail quota units):
+# the larger it is, the less often a listing is truncated and messages must be read one by one.
+LABEL_LISTING_LIMIT = 2000
 PREVIEW_SAMPLE = 10
 MAX_UNDO_SINCE = 50
 MAX_UNDO_SINCE_ATTEMPTS = 200
@@ -194,36 +197,39 @@ def preview_query(provider: Any, query: str) -> dict:
     }
 
 
-def _members_first(listed: list[str], ids: set[str]) -> bool:
-    """True when no foreign id comes before one of `ids` (the listing order matches the query's)."""
-    seen_foreign = False
-    for i in listed:
-        if i not in ids:
-            seen_foreign = True
-        elif seen_foreign:
-            return False
-    return True
+def _listed_label_state(
+    provider: Any, query: str, ids: list[str], batch: list[str], labels: list[str]
+) -> dict[str, list[str]] | None:
+    """Which of `labels` each id of `batch` carries, mostly from label-filtered listings.
 
-
-def _listed_label_state(provider: Any, query: str, ids: list[str], labels: list[str]) -> dict | None:
-    """Which of `labels` each of `ids` carries, from one label-filtered listing per label.
-
-    `ids` is the newest prefix of the query's matches, so the matches carrying label L that are in
-    `ids` come first in the listing of `query` filtered by L, within len(ids) results. A listing that
-    filled its limit with a foreign id ahead of one of ours, or a query whose matches changed while
-    listing (new mail, or a message leaving the query), returns None: the caller then reads labels
-    per message. Costs one list call (5 units per 500 ids) per label instead of 20 units per message.
+    No ordering is assumed. For each label, the query is listed filtered by that label: an id that
+    appears carries the label (a proven positive). A listing that returned fewer ids than its limit
+    is the complete set, so an id absent from it does not carry the label. When a listing hit its
+    limit, the batch ids it did not prove are read per message (`_read_labels`, which refuses
+    missing, failed or unaccounted ids before any write) and their state for that label comes from
+    the read. Finally the query is listed again: a complete listing only covers ids that still
+    matched the query, so if the matches changed meanwhile (new mail, or a message leaving the
+    query) the result is None and the caller reads the whole batch.
     """
-    id_set = set(ids)
-    members: dict[str, set[str]] = {}
+    limit = max(LABEL_LISTING_LIMIT, len(ids) + 1)
+    positives: dict[str, set[str]] = {}
+    truncated: list[str] = []
     for label in labels:
-        listed = provider.list_ids(query, len(ids), label_ids=[label])
-        if len(listed) >= len(ids) and not _members_first(listed, id_set):
-            return None
-        members[label] = set(listed) & id_set
+        listed = provider.list_ids(query, limit, label_ids=[label])
+        positives[label] = set(listed)
+        if len(listed) >= limit:
+            truncated.append(label)
     if _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1)) != ids:
         return None
-    return {i: [l for l in labels if i in members[l]] for i in ids}
+    unproven = [i for i in batch if any(i not in positives[l] for l in truncated)]
+    read = _read_labels(provider, unproven) if unproven else {}
+    state = {}
+    for i in batch:
+        state[i] = [
+            l for l in labels
+            if i in positives[l] or (l in truncated and l in read.get(i, ()))
+        ]
+    return state
 
 
 def apply_query(
@@ -248,7 +254,7 @@ def apply_query(
         batch = ids[:MAX_QUERY_APPLY]
         org = next((l for l in labels if l.name.lower() == ORG_LABEL.lower()), None)
         touched = _dedupe(add + remove + ([org.id] if org else []))
-        state = _listed_label_state(provider, query, ids, touched)
+        state = _listed_label_state(provider, query, ids, batch, touched)
         found = state if state is not None else _read_labels(provider, batch)
         result = _write(
             provider, journal, account, batch, found, add, remove, "modify_by_query", query,
