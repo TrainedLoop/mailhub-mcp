@@ -52,7 +52,7 @@ Run a separate instance per person: its own directory, `.env`, linked accounts, 
 
 - Anything Claude reads through this server (message text, headers, search results) becomes part of your conversation and is sent to Anthropic. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy).
 - The server stores locally, in `data/` and `secrets/`: OAuth tokens, the change journal (including the `query` and `user_request` of each change) and your preferences.
-- Logs include tool names and their arguments (search queries, message ids). Set log retention on the host accordingly.
+- Logs record each tool call with its arguments: tool names, accounts, message ids, search queries, label names, draft recipients and subject, and preference values. Draft bodies are replaced by their length and `user_request` is cut to 80 characters; every other value is capped at 200 characters. Set log retention on the host accordingly.
 - Apart from the Google APIs, the server sends nothing anywhere else.
 
 ## Development

@@ -121,7 +121,14 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 ### Backup and restore
 
 - Back up `data/` (journal, preferences, OAuth state), `secrets/accounts/` and `.env`. Stop the container first (`docker compose stop`) or copy the files atomically, so a write is not caught half done. The secrets are credentials: keep the backup private and encrypted.
-- To restore, put the files back, then make them owned by uid 10001: `sudo chown -R 10001:10001 data secrets/accounts`, directories `700` and files `600`. Run `docker compose up -d`.
+- To restore, put the files back (with the same `.env`: without the same `JWT_SIGNING_KEY` the OAuth state cannot be decrypted and you must reconnect the connector), then fix ownership and permissions:
+
+```bash
+sudo chown -R 10001:10001 data secrets/accounts
+sudo find secrets/accounts data -type d -exec chmod 700 {} +
+sudo find secrets/accounts data -type f -exec chmod 600 {} +
+docker compose up -d
+```
 
 ### Updating
 

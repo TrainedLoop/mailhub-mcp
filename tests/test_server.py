@@ -911,3 +911,32 @@ def test_startup_warns_about_several_owners(tmp_path):
                          text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert "ALLOWED_EMAILS has 2 addresses" in out.stderr
+
+
+def test_audit_log_redacts_draft_body_and_truncates(fakes, caplog):
+    secret = "SECRET-BODY-TEXT " * 5
+    with caplog.at_level("INFO", logger="mailhub-mcp"):
+        try:
+            call("create_draft", {"account": "alice-personal", "body": secret, "reply_to_message_id": "m1"})
+        except Exception:
+            pass
+        _set(user_request="u" * 300, add={"important_keywords": ["k"]})
+    text = caplog.text
+    assert "SECRET-BODY-TEXT" not in text and f"<{len(secret)} chars>" in text
+    assert "u" * 81 not in text and "u" * 80 in text
+
+
+def test_audit_args_cleans_lines_and_caps_long_values():
+    out = server.audit_args("search", {"query": "a\nINFO fake line\x00\u200bb", "ids": ["x" * 500], "n": 3})
+    assert "\n" not in out["query"] and "\x00" not in out["query"] and "\u200b" not in out["query"]
+    assert len(out["ids"][0]) <= server.MAX_LOGGED_ARG + 3 and out["n"] == 3
+    assert server.audit_args("create_draft", {"body": "hello", "subject": "s"}) == {"body": "<5 chars>", "subject": "s"}
+    assert server.audit_args("other", {"body": "hello"}) == {"body": "hello"}
+
+
+def test_audit_log_is_single_line(fakes, caplog):
+    with caplog.at_level("INFO", logger="mailhub-mcp"):
+        _set(user_request="line1\nINFO forged entry", add={"important_keywords": ["k"]})
+    lines = [l for l in caplog.text.splitlines() if "tool=set_preferences args=" in l]
+    assert len(lines) == 1 and "forged entry" in lines[0]
+    assert not any(l.startswith("INFO forged") for l in caplog.text.splitlines())

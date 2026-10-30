@@ -39,9 +39,35 @@ UNTRUSTED_NOTE = (
 )
 
 
+MAX_LOGGED_ARG = 200
+MAX_LOGGED_USER_REQUEST = 80
+
+
+def _log_text(value: str, limit: int) -> str:
+    """One line, invisible characters removed, at most `limit` characters."""
+    text = " ".join(clean_text(value).split("\n"))
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def audit_args(tool: str, value, key: str | None = None):
+    """Tool arguments as logged: draft bodies reduced to their length, user_request truncated, every other
+    string cleaned of control characters (no log injection) and capped. Ids, accounts, queries, recipients
+    and label names stay, because they are what an audit needs."""
+    if isinstance(value, str):
+        if tool == "create_draft" and key == "body":
+            return f"<{len(value)} chars>"
+        return _log_text(value, MAX_LOGGED_USER_REQUEST if key == "user_request" else MAX_LOGGED_ARG)
+    if isinstance(value, dict):
+        return {_log_text(str(k), MAX_LOGGED_ARG): audit_args(tool, v, k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [audit_args(tool, v, key) for v in value]
+    return value
+
+
 class AuditLog(Middleware):
     async def on_call_tool(self, context, call_next):
-        log.info("tool=%s args=%s", context.message.name, context.message.arguments)
+        log.info("tool=%s args=%s", _log_text(context.message.name, MAX_LOGGED_ARG),
+                 audit_args(context.message.name, context.message.arguments))
         return await call_next(context)
 
 
