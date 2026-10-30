@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
+from mailhub_mcp import prompts
 from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
@@ -594,6 +595,14 @@ async def create_draft(
         return p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
 
     return await one(account, work)
+
+
+if settings.tools_mode == "all":
+    mcp.prompt(name="daily_triage", description="Daily email triage across accounts: needs attention, can wait, suspicious, preferences.")(prompts.daily_triage)
+    mcp.prompt(name="clean_newsletters", description="Find top newsletter senders and archive them after a previewed, explicitly confirmed change.")(prompts.clean_newsletters)
+    mcp.prompt(name="organize_inbox", description="Organize an inbox with labels after a previewed, explicitly confirmed change.")(prompts.organize_inbox)
+else:
+    mcp.prompt(name="daily_triage", description="Read-only daily email triage across accounts: needs attention, can wait, suspicious, preferences.")(prompts.daily_triage_read_only)
 
 
 def main() -> None:
