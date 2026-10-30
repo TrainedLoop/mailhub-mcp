@@ -19,7 +19,7 @@ It is built for inbox triage: Claude can search, read and summarize mail across 
 - `modify_by_query` previews by default (`confirm=false`: match count plus a sample). Applying (`confirm=true`) touches at most 500 messages per call.
 - Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had.
 - `list_changes` shows the journal (newest first, with label names). `undo_since` reverts every change since a time, newest first so overlapping changes restore exactly; it previews by default (`confirm=false`) and handles at most 50 changes per call.
-- Every message the server changes gets the `claude/organized` label (created automatically in each account), so you can always find what Claude touched. `modify_emails` and `modify_by_query` refuse to remove it; only `undo_change` takes it off, together with the rest of the reverted change.
+- Every message the server changes gets the `claude/organized` label (created automatically in each account), so you can always find what Claude touched. `modify_emails` and `modify_by_query` refuse to remove it; only `undo_change` and `undo_since` take it off, together with the rest of the reverted change.
 - Email content is treated as untrusted third-party text; tool descriptions tell the model not to follow instructions found inside messages.
 - Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only Claude's own OAuth redirect URIs can register as clients.
 

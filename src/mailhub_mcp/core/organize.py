@@ -7,7 +7,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
-from mailhub_mcp.core.errors import MailhubError, OrganizeError
+from mailhub_mcp.core.aggregate import describe_error
+from mailhub_mcp.core.errors import OrganizeError
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
 
@@ -16,6 +17,7 @@ MAX_IDS = 1000
 MAX_QUERY_APPLY = 500
 PREVIEW_SAMPLE = 10
 MAX_UNDO_SINCE = 50
+MAX_UNDO_SINCE_ATTEMPTS = 200
 QUERY_HINT_ALREADY_CHANGED = "query still matches messages already changed; refine the query"
 
 log = logging.getLogger("mailhub-mcp.organize")
@@ -209,9 +211,13 @@ def undo_since(
     confirm: bool,
     label_names_for: Callable[[str], dict[str, str]] | None = None,
 ) -> dict:
-    """Undo every not-yet-undone change since `since`, newest first, at most MAX_UNDO_SINCE per call.
+    """Undo every not-yet-undone change since `since`, newest first.
 
-    Newest first makes overlapping changes on one message restore its exact original labels. The journal
+    Newest first makes overlapping changes on one message restore its exact original labels. If a change
+    fails, older candidates touching the same messages are blocked (not undone) so a later retry of the
+    failed one still restores exactly. Preview shows up to MAX_UNDO_SINCE candidates. Confirm attempts
+    candidates until MAX_UNDO_SINCE are undone or MAX_UNDO_SINCE_ATTEMPTS were tried (failures and
+    blocked changes count as attempts); `remaining` means candidates were left unattempted. The journal
     lock is taken per change inside `undo`, never across the loop. `label_names_for(account)` optionally
     maps label ids to names for the preview.
     """
@@ -223,33 +229,44 @@ def undo_since(
         if not e.get("undo_of") and e["change_id"] not in undone
         and (wanted is None or e.get("account") in wanted)
     ]
-    batch = candidates[:MAX_UNDO_SINCE]
-    remaining = len(candidates) > MAX_UNDO_SINCE
     if not confirm:
         names: dict[str, dict[str, str]] = {}
         changes = []
-        for e in batch:
+        for e in candidates[:MAX_UNDO_SINCE]:
             if label_names_for and e["account"] not in names:
                 try:
                     names[e["account"]] = label_names_for(e["account"])
                 except Exception:
                     names[e["account"]] = {}
             changes.append(summarize_entry(e, False, names.get(e["account"], {})))
-        return {"changes": changes, "total": len(candidates), "remaining": remaining}
+        return {"changes": changes, "total": len(candidates), "remaining": len(candidates) > MAX_UNDO_SINCE}
 
     done: list[dict] = []
     failed: dict[str, str] = {}
-    for entry in batch:
-        change_id = entry["change_id"]
-        try:
-            res = undo(provider_for(entry["account"]), journal, entry["account"], change_id)
-        except Exception as exc:
-            detail = str(exc) if isinstance(exc, MailhubError) else f"{type(exc).__name__}: {exc}"
-            failed[change_id] = f"{entry['account']}: {detail}"
-            log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
-            continue
-        done.append({
-            "change_id": change_id, "undo_change_id": res["change_id"],
-            "modified": res["modified"], "skipped": res["skipped"],
-        })
-    return {"undone": done, "failed": failed, "remaining": remaining}
+    blocked_by: dict[tuple[str, str], str] = {}  # (account, message id) -> failed newer change
+    attempts = 0
+    for entry in candidates:
+        if len(done) >= MAX_UNDO_SINCE or attempts >= MAX_UNDO_SINCE_ATTEMPTS:
+            break
+        attempts += 1
+        change_id, account = entry["change_id"], entry["account"]
+        pairs = [(account, mid) for mid in entry.get("prior") or {}]
+        blocker = next((blocked_by[p] for p in pairs if p in blocked_by), None)
+        if blocker is None:
+            try:
+                res = undo(provider_for(account), journal, account, change_id)
+            except Exception as exc:
+                failed[change_id] = f"{account}: {describe_error(exc, account)}"
+                log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
+                blocker = change_id
+            else:
+                done.append({
+                    "change_id": change_id, "undo_change_id": res["change_id"],
+                    "modified": res["modified"], "skipped": res["skipped"],
+                })
+                continue
+        else:
+            failed[change_id] = f"{account}: blocked by failed newer change {blocker}; retry after fixing it"
+        for p in pairs:
+            blocked_by.setdefault(p, blocker)
+    return {"undone": done, "failed": failed, "remaining": attempts < len(candidates)}

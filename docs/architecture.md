@@ -59,7 +59,7 @@ Methods:
 
 ## Tools
 
-All 13 are defined in `server.py`.
+All 15 are defined in `server.py`.
 
 | Tool | Description |
 |---|---|
@@ -87,7 +87,7 @@ Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 
 Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`, `added`, `removed`, `prior` (per message, only the touched labels it had), `query` and `undo_of`. `prior` makes undo exact: it removes only labels the change added to messages that did not have them, and re-adds only labels it removed from messages that had them. Undoing is itself journaled (`undo_of`), so a change cannot be undone twice. If a message has since been deleted it is skipped and listed in `skipped`. If the journal write fails after labels changed, the full entry is logged as an error for manual recovery.
 
-`Journal.entries(since)` returns valid entries newest first (`since` is inclusive; naive times are UTC) and skips malformed lines. `organize.undo_since` takes the entries since a time, drops undo entries and changes already undone, optionally filters by account and keeps the newest 50 (`MAX_UNDO_SINCE`). It undoes them newest first, so two changes to the same message restore its exact original labels. Each change goes through `undo`, so every protection still applies and the journal lock is taken per change, not across the loop. A failure on one change is reported in `failed` and does not stop the others; `remaining` says whether more candidates were left beyond the cap, so call again. Without `confirm` it only returns the summaries and writes nothing.
+`Journal.entries(since)` returns valid entries newest first by reversed file order (append order is causal, serialized by the journal lock) and skips malformed lines; `since` only filters, inclusively, by timestamp (naive times are UTC). `organize.undo_since` takes the entries since a time, drops undo entries and changes already undone, and optionally filters by account. It undoes them newest first, so two changes to the same message restore its exact original labels. Each change goes through `undo`, so every protection still applies and the journal lock is taken per change, not across the loop. If a change fails (reported in `failed`), older candidates touching any of its messages are held back and also reported in `failed` as blocked, so retrying the failed one later still restores exactly. A call attempts candidates until 50 are undone (`MAX_UNDO_SINCE`) or 200 were attempted (`MAX_UNDO_SINCE_ATTEMPTS`), so persistent failures cannot starve healthy changes; `remaining` says whether candidates were left unattempted. Without `confirm` it only returns summaries (up to 50) and writes nothing.
 
 `modify_by_query` skips messages already in the target state and returns a hint when nothing is left.
 

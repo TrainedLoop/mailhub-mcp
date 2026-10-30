@@ -151,3 +151,54 @@ def test_preview_resolves_label_names_when_given_and_survives_lookup_errors(fake
 
     out = undo_since(lambda a: provider, journal, EPOCH, None, False, label_names_for=boom)
     assert out["total"] == 1
+
+
+def test_failed_newer_change_blocks_older_overlapping_change_then_retry_restores_exactly(fake, provider, journal):
+    original = sorted(fake.messages["m1"]["labelIds"])
+    c1 = modify(provider, journal, "a", ["m1"], [], [], True, None, None)["change_id"]
+    c2 = modify(provider, journal, "a", ["m1"], ["INBOX"], [], False, None, None)["change_id"]
+    fake.get_errors["m1"] = http_error(503, "Unavailable")
+    out = undo_since(lambda a: provider, journal, EPOCH, None, True)
+    assert out["undone"] == []
+    assert set(out["failed"]) == {c1, c2}
+    assert out["failed"][c1] == f"a: blocked by failed newer change {c2}; retry after fixing it"
+    assert not journal.is_undone(c1) and not journal.is_undone(c2)
+    del fake.get_errors["m1"]
+    out = undo_since(lambda a: provider, journal, EPOCH, None, True)
+    assert [u["change_id"] for u in out["undone"]] == [c2, c1] and out["failed"] == {}
+    assert sorted(fake.messages["m1"]["labelIds"]) == original
+
+
+@pytest.mark.parametrize("failing_is_older", [True, False])
+def test_persistent_failures_do_not_starve_healthy_changes(fake, provider, journal, failing_is_older):
+    def failing():
+        for i in range(60):
+            journal.record("bad", "modify_emails", ["X"], [], {f"z{i}": []})
+
+    def healthy():
+        for _ in range(5):
+            journal.record("a", "modify_emails", ["X"], [], {"m1": []})
+
+    (failing if failing_is_older else healthy)()
+    (healthy if failing_is_older else failing)()
+
+    def provider_for(alias):
+        if alias == "bad":
+            raise RuntimeError("unreachable")
+        return provider
+
+    out = undo_since(provider_for, journal, EPOCH, None, True)
+    assert len(out["undone"]) == 5 and len(out["failed"]) == 60 and out["remaining"] is False
+    assert all(m.startswith("bad: ") for m in out["failed"].values())
+
+
+def test_attempts_are_bounded_and_remaining_counts_unattempted(fake, provider, journal):
+    from mailhub_mcp.core.organize import MAX_UNDO_SINCE_ATTEMPTS
+    for i in range(MAX_UNDO_SINCE_ATTEMPTS + 10):
+        journal.record("bad", "modify_emails", ["X"], [], {f"z{i}": []})
+
+    def provider_for(alias):
+        raise RuntimeError("unreachable")
+
+    out = undo_since(provider_for, journal, EPOCH, None, True)
+    assert out["undone"] == [] and len(out["failed"]) == MAX_UNDO_SINCE_ATTEMPTS and out["remaining"] is True

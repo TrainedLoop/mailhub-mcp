@@ -1,7 +1,7 @@
 """Mailhub MCP server: multi-account triage, reversible organization and drafts, behind Google OAuth."""
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from urllib.parse import urlparse
 
 from anyio import to_thread
@@ -239,10 +239,9 @@ async def undo_change(change_id: str) -> dict:
 
 def _parse_since(since: str) -> datetime:
     try:
-        moment = datetime.fromisoformat(since)
+        return datetime.fromisoformat(since)  # naive is treated as UTC by Journal.entries
     except ValueError:
         raise ToolError("invalid since: expected ISO 8601 date/time, e.g. 2026-11-01T08:00") from None
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
 
 def _label_names(account) -> dict[str, str]:
@@ -269,7 +268,11 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
     names: dict[str, dict[str, str]] = {}
 
     def lookup(account) -> list:
-        names[account.alias] = _label_names(account)
+        try:
+            names[account.alias] = _label_names(account)
+        except Exception as exc:
+            log.warning("list_changes: label lookup failed for %s, showing ids: %s", account.alias, describe_error(exc, account.alias))
+            raise
         return []
 
     shown = {e.get("account") for e in page}
@@ -285,8 +288,10 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
     description=(
         "Panic button: undo every change recorded since a time (ISO 8601 date/time, naive means UTC), newest first, optionally limited to some accounts. "
         "By default (confirm=false) only previews the changes that would be undone. Pass confirm=true to undo them; "
-        "at most 50 changes per call, so call again while 'remaining' is true. "
-        "Changes already undone are skipped; one that cannot be undone is listed in 'failed' and the rest still proceed."
+        "at most 50 changes undone per call (and 200 attempted), so call again while 'remaining' is true. "
+        "Changes already undone are skipped. One that cannot be undone is listed in 'failed', the rest still proceed, "
+        "and older changes touching the same emails are held back (also in 'failed') so the restore stays exact. "
+        "If 'failed' is not empty, fix the cause before retrying those changes, and do not loop when nothing was undone."
     ),
 )
 async def undo_since(since: str, accounts: list[str] | None = None, confirm: bool = False) -> dict:

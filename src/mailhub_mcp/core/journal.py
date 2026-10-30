@@ -68,19 +68,25 @@ class Journal:
         return entries
 
     def entries(self, since: datetime | None = None) -> list[dict]:
-        """Valid entries, newest first (ties keep reverse file order); `since` is inclusive, naive means UTC."""
-        floor = _aware(since) if since is not None else None
-        dated = []
-        for entry in reversed(self._entries()):
+        """Valid entries, newest first, by reversed file order.
+
+        Append order is causal (writes are serialized), so it is trusted over wall-clock time. `since`
+        only filters, by timestamp, inclusively; naive times are UTC.
+        """
+        entries = list(reversed(self._entries()))
+        if since is None:
+            return entries
+        floor = _aware(since)
+        kept = []
+        for entry in entries:
             try:
                 ts = _aware(datetime.fromisoformat(entry["timestamp"]))
             except (KeyError, TypeError, ValueError):
                 log.warning("skipping journal entry %s with unreadable timestamp", entry["change_id"])
                 continue
-            if floor is None or ts >= floor:
-                dated.append((ts, entry))
-        dated.sort(key=lambda pair: pair[0], reverse=True)  # stable: ties stay in reverse file order
-        return [entry for _, entry in dated]
+            if ts >= floor:
+                kept.append(entry)
+        return kept
 
     def get(self, change_id: str) -> dict:
         for entry in self._entries():

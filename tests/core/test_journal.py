@@ -124,3 +124,16 @@ def test_entries_skips_malformed_lines(tmp_path):
                        _row("b", "2026-01-02T00:00:00+00:00")])
     assert [e["change_id"] for e in Journal(p).entries()] == ["b", "a"]
     assert Journal(tmp_path / "missing.jsonl").entries() == []
+
+
+def test_entries_order_is_reversed_file_order_not_wall_clock(tmp_path):
+    p = tmp_path / "c.jsonl"
+    _write_entries(p, [
+        _row("first", "2026-01-03T00:00:00+00:00"),
+        _row("second", "2026-01-01T00:00:00+00:00"),  # clock went backwards; append order is causal
+        _row("third", "2026-01-02T00:00:00+00:00"),
+    ])
+    j = Journal(p)
+    assert [e["change_id"] for e in j.entries()] == ["third", "second", "first"]
+    from datetime import datetime
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2))] == ["third", "first"]
