@@ -234,6 +234,18 @@ def test_inbox_overview_default_query_and_failed(fakes):
     assert out["results"][0]["failed"] == 1 and out["results"][0]["total"] == 1
 
 
+def test_inbox_overview_scans_200_by_default_and_states_its_cost(fakes):
+    call("inbox_overview", {"accounts": ["alice-personal"]})
+    lists = [kw for n, kw in fakes.a.calls if n == "messages.list"]
+    assert lists[0]["maxResults"] == 200
+
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    desc = asyncio.run(go())["inbox_overview"].description
+    assert "default 200" in desc and "20 Gmail quota units" in desc and "parallel" in desc
+
+
 def test_auth_expired_status_has_hint(fakes):
     fakes.b.fail = RefreshError("bad")
     by = {a["alias"]: a for a in call("list_accounts")["accounts"]}

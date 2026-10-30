@@ -58,7 +58,7 @@ Methods:
 |---|---|
 | `address()` | The mailbox's email address |
 | `search(query, limit)` / `search_report(query, limit)` | Matching summaries; the report variant also counts unreadable messages |
-| `list_ids(query, limit)` | Matching message IDs only |
+| `list_ids(query, limit, label_ids=None)` | Matching message IDs only, newest first; with `label_ids`, only messages carrying every one of them |
 | `get_messages(ids, detail)` | Fetch with `detail` of `"summary"`, `"full"` or `"labels"`; returns a `GetResult` |
 | `get_thread(thread_id)` | Thread with messages oldest first |
 | `list_labels()` / `ensure_label(name)` | Labels; create-or-return by name, case-insensitive |
@@ -67,7 +67,7 @@ Methods:
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 
-Gmail limits each user to 250 quota units per second over a moving window (a message read costs 5, a thread read 10, a `batchModify` 50). The Gmail provider budgets half of that, 125 units per second per mailbox, with one rate limiter shared by every call on that account (reads, listings, label and draft calls, writes), so large cleanups are paced (about 25 messages per second for reads) instead of bursting. Rate-limit responses (429, or 403 with the `rateLimitExceeded`/`userRateLimitExceeded` reason, read from the error body) are retried after 5, 15 and 30 seconds; 5xx responses keep a short backoff (batch reads per message; single requests through the client's built-in retries plus the long rate-limit waits). Draft creation is never retried, because a retry could duplicate a draft.
+Gmail limits each user to 6,000 quota units per minute over a moving window for Cloud projects created since May 2026 (15,000 for older ones). Costs per call: `messages.get` 20 (`metadata`/`minimal`) or 60 (`full`), `messages.list` 5, `threads.get` 120 (`full`), `messages.batchModify` 50, `labels.list` 1, `getProfile` 1, `drafts.list` 5; `drafts.get` 20, `labels.create` 5 and `drafts.create` 10 are assumptions (not in Google's table). Each call inside a batch counts. The Gmail provider spends a budget of `GMAIL_UNITS_PER_MINUTE` per mailbox (default 4800, 80% of 6,000; set 12000 on a project with the older limit), through one rate limiter shared by every call on that account (reads, listings, label and draft calls, writes). At the default that is 80 units per second: about 4 metadata reads per second, so `inbox_overview` over 200 messages takes about 50 seconds and over 500 about 2 minutes. There is one retry layer: the client library's own retries are off (`num_retries=0`) and `api._execute` (single requests) and `api._run_batches` (per message in a batch) retry 5xx and network errors after 1, 2 and 4 seconds, and rate limits after 2, 4, 8, 16 and 32 seconds, each wait plus up to 1 second of random jitter; every attempt is charged to the limiter. A rate limit is any 429 (including "Too many concurrent requests for user") or a 403 whose reason, read from the library's `error_details` and from both `error.errors` and `error.details` of the body, is `rateLimitExceeded`, `userRateLimitExceeded` or `RATE_LIMIT_EXCEEDED` (case-insensitive); `dailyLimitExceeded` and other 403s fail at once. Draft creation is never retried, because a retry could duplicate a draft.
 
 ## Tools
 
@@ -80,7 +80,7 @@ All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked re
 | `read_email` | read-only | One message in full |
 | `read_emails` | read-only | Up to 25 messages of one account |
 | `read_thread` | read-only | A whole thread |
-| `inbox_overview` | read-only | Per-account totals, unread, newsletters, categories, top 30 senders |
+| `inbox_overview` | read-only | Per-account totals, unread, newsletters, categories, top 30 senders; scans 200 messages by default (max 2000) |
 | `list_drafts` | read-only | Existing drafts |
 | `list_labels` | read-only | Labels of one account |
 | `create_label` | write | Create or return a label |
@@ -105,7 +105,9 @@ Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`,
 
 When an undo of a preference change is split (parts that raise attention apply at once, parts that lower it become proposals), approving any one of its proposals marks the original change undone. Approving one proposal therefore does not undo the others, and `undo_since` will not revisit the change: the remaining parts must each be approved before they expire (14 days) or be re-proposed manually with `set_preferences`.
 
-`modify_by_query` skips messages already in the target state and returns a hint when nothing is left.
+`modify_by_query` skips messages already in the target state and returns a hint when nothing is left. It learns label state without reading each message: under the journal lock it lists the query (up to 501 ids), then lists the query once per touched label (the labels added or removed, plus `claude/organized` when it exists) with `label_ids=[label]`. Because the ids are the newest matches, those of them carrying a label come first in that label's listing, so each listing is limited to the number of ids. The ids exist because they were just listed. The result drives the target-state filter, the daily cap and `prior`, exactly as a per-message read would. Finally the query is listed again; if its matches changed meanwhile (new mail, or a message leaving the query), or a full label listing shows a foreign id ahead of one of ours, it falls back to reading each message's labels. A 500-message change thus costs a few list calls (5 units per 500 ids each) plus 50 for the write, instead of 10,000 units of reads. `modify_emails` and `undo` still read every message (20 units each): they must prove explicit ids exist in the account and skip deleted ones, and they are smaller and rarer.
+
+The journal lock is held from the first read to the journal record, so on a throttled mailbox it also waits out the backoff (up to about a minute) and other organize calls, on any account, wait with it. The lock is what keeps `prior` exact and the cap atomic, so it is not split per account.
 
 ## Content defenses
 

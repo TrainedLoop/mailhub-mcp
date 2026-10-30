@@ -227,7 +227,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
 | `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |
 | `undo_change` says a preference "changed since" | The field was modified after that change; undo the later change first |
-| "temporary failure, retry" or `rateLimitExceeded` in the logs | Gmail's per-user rate limit. Calls are paced (about 25 messages per second) and retried after 5, 15 and 30 seconds, so large cleanups take a while; if it still fails, wait a minute and retry. Avoid running several large `inbox_overview` calls back to back |
+| "temporary failure, retry", `rateLimitExceeded` or `RATE_LIMIT_EXCEEDED` in the logs | Gmail's per-user quota (6,000 units per minute on new Cloud projects; a message read costs 20). Each mailbox spends at most `GMAIL_UNITS_PER_MINUTE` (default 4800), about 4 message reads per second, and rate-limited calls are retried after 2, 4, 8, 16 and 32 seconds, so large reads take a while: `inbox_overview` over 200 messages uses about 50 seconds of budget. If it still fails, wait a minute and retry, and avoid running several `inbox_overview` or large searches in parallel or back to back. If your Cloud project still has the older 15,000 limit, set `GMAIL_UNITS_PER_MINUTE=12000`; if other apps use the same mailbox heavily, lower it |
 
 ## 14. More than one person
 

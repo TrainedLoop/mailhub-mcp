@@ -302,8 +302,11 @@ async def read_thread(account: str, thread_id: str) -> dict:
     return await one(account, lambda p: with_account(p.get_thread(thread_id), account))
 
 
-@tool(annotations=READ_ONLY, description="Summarize an inbox per account: totals, unread, newsletters, categories and top 30 senders. Scans up to 'limit' (max 2000) messages per account; 'failed' counts messages that could not be read. Without 'query' each provider's default inbox query is used." + UNTRUSTED_NOTE)
-async def inbox_overview(accounts: list[str] | None = None, query: str | None = None, limit: int = 500) -> dict:
+@tool(annotations=READ_ONLY, description=(
+    "Summarize an inbox per account: totals, unread, newsletters, categories and top 30 senders. Scans up to 'limit' (default 200, max 2000) messages per account; 'failed' counts messages that could not be read. Without 'query' each provider's default inbox query is used. "
+    "Cost: each scanned message costs about 20 Gmail quota units, so 200 messages use about 50 s of the mailbox's per-minute budget and 500 about 2 minutes; do not run several in parallel or back to back."
+) + UNTRUSTED_NOTE)
+async def inbox_overview(accounts: list[str] | None = None, query: str | None = None, limit: int = 200) -> dict:
     def work(p) -> list[dict]:
         ids = p.list_ids(query or p.default_inbox_query, max(1, min(limit, 2000)))
         res = p.get_messages(ids, "summary")
