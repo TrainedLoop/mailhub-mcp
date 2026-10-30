@@ -9,7 +9,15 @@ from mailhub_mcp.providers.gmail.parsing import METADATA_HEADERS, _headers, full
 BATCH_SIZE = 50
 LIST_PAGE_SIZE = 500
 MAX_ATTEMPTS = 3
+# Gmail allows 250 quota units per user per second and messages.get costs 5,
+# so 50 ids/s is the ceiling; stay under it instead of bursting into 403s.
+MAX_IDS_PER_SECOND = 40
+_RATE_LIMIT_REASONS = (b"ratelimitexceeded", b"userratelimitexceeded")
+# googleapiclient retries 429, 5xx and 403 rate-limit responses with backoff.
+SINGLE_REQUEST_RETRIES = 3
 _sleep = time.sleep
+_pace_sleep = time.sleep
+_now = time.monotonic
 
 
 def status_of(exc: Exception) -> int | None:
@@ -20,9 +28,19 @@ def status_of(exc: Exception) -> int | None:
         return None
 
 
+def is_rate_limited(exc: Exception) -> bool:
+    """Gmail reports per-user rate limits as 403 (or 429) with a rateLimitExceeded reason."""
+    if status_of(exc) not in (403, 429):
+        return False
+    content = getattr(exc, "content", b"") or b""
+    if isinstance(content, str):
+        content = content.encode()
+    return any(reason in content.lower() for reason in _RATE_LIMIT_REASONS)
+
+
 def is_retryable(exc: Exception) -> bool:
     status = status_of(exc)
-    return status is not None and (status == 429 or status >= 500)
+    return status is not None and (status == 429 or status >= 500 or is_rate_limited(exc))
 
 
 def _run_batches(svc, ids: list[str], make_request) -> tuple[dict[str, dict], dict[str, Exception]]:
@@ -37,11 +55,18 @@ def _run_batches(svc, ids: list[str], make_request) -> tuple[dict[str, dict], di
         else:
             found[request_id] = response
 
+    interval = BATCH_SIZE / MAX_IDS_PER_SECOND
+    last_start = None
     pending = ids
     for attempt in range(MAX_ATTEMPTS):
         if attempt:
             _sleep(2 ** (attempt - 1))
         for start in range(0, len(pending), BATCH_SIZE):
+            if last_start is not None:
+                wait = interval - (_now() - last_start)
+                if wait > 0:
+                    _pace_sleep(wait)
+            last_start = _now()
             batch = svc.new_batch_http_request(callback=collect)
             for item_id in pending[start : start + BATCH_SIZE]:
                 batch.add(make_request(item_id), request_id=item_id)
@@ -78,7 +103,7 @@ def list_ids(svc, query: str, limit: int) -> list[str]:
                 maxResults=min(limit - len(ids), LIST_PAGE_SIZE),
                 pageToken=page_token,
             )
-            .execute()
+            .execute(num_retries=SINGLE_REQUEST_RETRIES)
         )
         ids.extend(ref["id"] for ref in resp.get("messages", []))
         page_token = resp.get("nextPageToken")
@@ -101,18 +126,28 @@ def search(svc, query: str, max_results: int) -> list[dict]:
 
 
 def get_message(svc, message_id: str) -> dict:
-    msg = svc.users().messages().get(userId="me", id=message_id, format="full").execute()
+    msg = (
+        svc.users()
+        .messages()
+        .get(userId="me", id=message_id, format="full")
+        .execute(num_retries=SINGLE_REQUEST_RETRIES)
+    )
     return full(msg)
 
 
 def get_thread(svc, thread_id: str) -> dict:
-    thread = svc.users().threads().get(userId="me", id=thread_id, format="full").execute()
+    thread = (
+        svc.users()
+        .threads()
+        .get(userId="me", id=thread_id, format="full")
+        .execute(num_retries=SINGLE_REQUEST_RETRIES)
+    )
     messages = [full(m) for m in thread.get("messages", [])]
     return {"messages": messages, "replied_by_me": any("SENT" in m["labels"] for m in messages)}
 
 
 def list_labels(svc) -> list[dict]:
-    resp = svc.users().labels().list(userId="me").execute()
+    resp = svc.users().labels().list(userId="me").execute(num_retries=SINGLE_REQUEST_RETRIES)
     return [{"id": l["id"], "name": l["name"], "type": l.get("type", "")} for l in resp.get("labels", [])]
 
 
@@ -128,7 +163,7 @@ def list_drafts(svc, max_results: int) -> list[dict]:
                 maxResults=min(max_results - len(ids), LIST_PAGE_SIZE),
                 pageToken=page_token,
             )
-            .execute()
+            .execute(num_retries=SINGLE_REQUEST_RETRIES)
         )
         ids.extend(ref["id"] for ref in resp.get("drafts", []))
         page_token = resp.get("nextPageToken")
@@ -168,7 +203,7 @@ def create_draft(
                 format="metadata",
                 metadataHeaders=["Subject", "Message-ID", "References"],
             )
-            .execute()
+            .execute(num_retries=SINGLE_REQUEST_RETRIES)
         )
         h = _headers(original["payload"])
         thread_id = original["threadId"]
@@ -194,11 +229,16 @@ def ensure_label(svc, name: str) -> dict:
     for label in list_labels(svc):
         if label["name"].lower() == name.lower():
             return label
-    created = svc.users().labels().create(userId="me", body={"name": name}).execute()
+    created = (
+        svc.users()
+        .labels()
+        .create(userId="me", body={"name": name})
+        .execute(num_retries=SINGLE_REQUEST_RETRIES)
+    )
     return {"id": created["id"], "name": created["name"], "type": created.get("type", "user")}
 
 
 def batch_modify(svc, ids: list[str], add: list[str], remove: list[str]) -> None:
     for start in range(0, len(ids), 1000):
         body = {"ids": ids[start:start + 1000], "addLabelIds": add, "removeLabelIds": remove}
-        svc.users().messages().batchModify(userId="me", body=body).execute()
+        svc.users().messages().batchModify(userId="me", body=body).execute(num_retries=SINGLE_REQUEST_RETRIES)

@@ -67,6 +67,8 @@ Methods:
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 
+Gmail limits each user to 250 quota units per second (a message read costs 5). The Gmail provider paces batch reads to about 40 messages per second instead of bursting, retries 429, 5xx and 403 `rateLimitExceeded`/`userRateLimitExceeded` responses with backoff (batch reads per message; single requests through the client's built-in retries), and never retries draft creation, which could duplicate a draft.
+
 ## Tools
 
 All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked read-only are registered.

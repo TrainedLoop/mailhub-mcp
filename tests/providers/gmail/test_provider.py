@@ -81,6 +81,25 @@ def test_429_is_transient(gmail, fake):
         gmail.list_labels()
 
 
+def test_403_rate_limit_is_transient(gmail, fake):
+    import json
+
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    body = {"error": {"code": 403, "errors": [{"reason": "rateLimitExceeded"}]}}
+    fake.fail = HttpError(httplib2.Response({"status": 403}), json.dumps(body).encode())
+    with pytest.raises(TransientError):
+        gmail.list_labels()
+
+
+def test_plain_403_is_not_transient(gmail, fake):
+    fake.fail = http_error(403, "forbidden")
+    with pytest.raises(MailhubError) as e:
+        gmail.list_labels()
+    assert not isinstance(e.value, TransientError)
+
+
 def test_unknown_thread_not_found(gmail):
     with pytest.raises(MessageNotFound):
         gmail.get_thread("nope")

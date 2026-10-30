@@ -216,3 +216,67 @@ def test_date_and_attachment_mime_type_are_cleaned():
     m = full(msg)
     assert m["date"] == "Mon, 1 Jan 2024 10:00 +0000"
     assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3}]
+
+
+def _rate_limited(status=403, reason="rateLimitExceeded"):
+    from googleapiclient.errors import HttpError
+    import httplib2
+    import json
+
+    body = {"error": {"code": status, "message": "Rate Limit Exceeded",
+                      "errors": [{"reason": reason, "domain": "usageLimits"}]}}
+    return HttpError(httplib2.Response({"status": status}), json.dumps(body).encode())
+
+
+@pytest.mark.parametrize("reason", ["rateLimitExceeded", "userRateLimitExceeded"])
+def test_403_rate_limit_is_retryable(reason):
+    from mailhub_mcp.providers.gmail.api import is_retryable
+
+    assert is_retryable(_rate_limited(403, reason))
+    assert not is_retryable(http_error(403, "Forbidden"))
+
+
+def test_batch_get_retries_403_rate_limit_then_succeeds(fake, _sleeps):
+    fake.add_message("m1")
+    fake.get_error_seq["m1"] = [_rate_limited()]
+    msgs, errors = batch_get(fake, ["m1"], "minimal")
+    assert [m["id"] for m in msgs] == ["m1"] and errors == {}
+    assert len(_get_calls(fake, "m1")) == 2 and _sleeps
+
+
+def test_batch_get_paces_batches(fake, monkeypatch):
+    from mailhub_mcp.providers.gmail import api
+
+    paced = []
+    monkeypatch.setattr(api, "_pace_sleep", paced.append)
+    monkeypatch.setattr(api, "_now", lambda: 0.0)  # batches look instantaneous
+    for i in range(120):
+        fake.add_message(f"p{i}")
+    batch_get(fake, [f"p{i}" for i in range(120)], "minimal")
+    # 3 batches of <=50: a pause before the 2nd and 3rd keeps ~MAX_IDS_PER_SECOND
+    assert len(paced) == 2
+    assert all(abs(s - api.BATCH_SIZE / api.MAX_IDS_PER_SECOND) < 1e-9 for s in paced)
+
+
+def test_single_batch_is_not_paced(fake, monkeypatch):
+    from mailhub_mcp.providers.gmail import api
+
+    paced = []
+    monkeypatch.setattr(api, "_pace_sleep", paced.append)
+    fake.add_message("m1")
+    batch_get(fake, ["m1"], "minimal")
+    assert paced == []
+
+
+def test_single_requests_use_client_retries_except_draft_create(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1", thread_id="t1")
+    fake.execute_retries.clear()
+    api.list_labels(fake)
+    api.get_thread(fake, "t1")
+    api.list_ids(fake, "", 5)
+    assert fake.execute_retries and all(n == api.SINGLE_REQUEST_RETRIES for n in fake.execute_retries)
+    fake.execute_retries.clear()
+    create_draft(fake, "x@y.com", "s", "b", None, None)
+    assert fake.execute_retries[-1] == 0  # a retried create could duplicate the draft

@@ -20,3 +20,4 @@ import pytest
 @pytest.fixture(autouse=True)
 def _no_retry_sleep(monkeypatch):
     monkeypatch.setattr("mailhub_mcp.providers.gmail.api._sleep", lambda s: None)
+    monkeypatch.setattr("mailhub_mcp.providers.gmail.api._pace_sleep", lambda s: None)

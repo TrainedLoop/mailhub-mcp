@@ -81,7 +81,7 @@ class GmailProvider:
             status = api.status_of(exc)
             if status == 404 and not_found:
                 raise MessageNotFound(not_found) from None
-            if status == 429 or (status is not None and status >= 500):
+            if api.is_retryable(exc):
                 raise TransientError(f"{status} {exc.reason}") from None
             raise MailhubError(f"{status} {exc.reason}") from None
 

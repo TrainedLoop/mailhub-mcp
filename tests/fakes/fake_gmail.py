@@ -33,7 +33,8 @@ class _Request:
         self._fake = fake
         self._fn = fn
 
-    def execute(self):
+    def execute(self, num_retries=0):
+        self._fake.execute_retries.append(num_retries)
         if self._fake.fail:
             raise self._fake.fail
         return self._fn()
@@ -74,6 +75,7 @@ class FakeGmail:
         self.calls: list[tuple[str, dict]] = []
         self.fail: Exception | None = None
         self.get_errors: dict[str, Exception] = {}
+        self.execute_retries: list[int] = []
         self.get_error_seq: dict[str, list[Exception]] = {}
         self.draft_errors: dict[str, Exception] = {}
         self.batch_limit = 100
