@@ -212,12 +212,14 @@ def _undo(
         entry = journal.get(change_id)
     except KeyError:
         raise OrganizeError(f"Unknown change_id: {change_id}") from None
-    if entry.get("kind") == "preferences":
-        if entry.get("scope") not in (GLOBAL, account):
-            raise OrganizeError(f"Change {change_id} belongs to another account")
-        return _undo_preferences(journal, entry, store, now)
-    if entry["account"] != account:
+    is_pref = entry.get("kind") == "preferences"
+    if (entry.get("scope") not in (GLOBAL, account)) if is_pref else entry["account"] != account:
         raise OrganizeError(f"Change {change_id} belongs to another account")
+    if entry.get("undo_of"):
+        # Undoing an undo would be a redo that skips the checks of a fresh change (daily cap, proposals).
+        raise OrganizeError("this change is an undo; to redo, make the change again")
+    if is_pref:
+        return _undo_preferences(journal, entry, store, now)
     if journal.is_undone(change_id):
         raise OrganizeError(f"Change {change_id} was already undone")
 

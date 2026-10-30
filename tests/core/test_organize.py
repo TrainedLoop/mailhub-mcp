@@ -157,6 +157,17 @@ def test_undo_twice_refused(fake, provider, journal):
         undo(provider, journal, "a", r["change_id"])
 
 
+def test_undo_of_a_label_undo_entry_is_refused(fake, provider, journal):
+    r = modify(provider, journal, "a", ["m1"], ["Shopping"], [], False, None, None, max_per_day=1)
+    u = undo(provider, journal, "a", r["change_id"])
+    before = {k: list(v["labelIds"]) for k, v in fake.messages.items()}
+    # Redoing through undo-of-undo would also bypass the daily cap (undo entries are not counted).
+    with pytest.raises(OrganizeError, match="this change is an undo; to redo, make the change again"):
+        undo(provider, journal, "a", u["change_id"])
+    assert {k: v["labelIds"] for k, v in fake.messages.items()} == before
+    assert len(journal.entries()) == 2
+
+
 def test_undo_other_account_and_unknown_refused(fake, provider, journal):
     r = modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     with pytest.raises(OrganizeError):

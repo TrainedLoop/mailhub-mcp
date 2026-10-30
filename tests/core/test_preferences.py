@@ -422,11 +422,13 @@ def test_undo_refused_when_restore_would_conflict(store, journal):
         undo(None, journal, "a", r["change_id"], store=store)
 
 
-def test_redo_by_undoing_the_undo(store, journal):
+def test_undo_of_an_undo_entry_is_refused(store, journal):
     r = put(store, journal, add={"important_keywords": ["a"]})
     u = undo(None, journal, "a", r["change_id"], store=store)
-    undo(None, journal, "a", u["change_id"], store=store)
-    assert store.load()["global"]["important_keywords"] == ["a"]
+    with pytest.raises(OrganizeError, match="this change is an undo; to redo, make the change again"):
+        undo(None, journal, "a", u["change_id"], store=store)
+    assert store.load()["global"]["important_keywords"] == []
+    assert len(journal.entries()) == 2
 
 
 def test_undo_since_preferences_newest_first_and_blocking(store, journal):
