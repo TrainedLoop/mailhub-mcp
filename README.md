@@ -1,8 +1,10 @@
 # mailhub-mcp
 
-An MCP server that exposes several mail accounts to Claude as a [custom connector](https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp) in claude.ai. Gmail is supported today; other providers plug in through a small provider interface (see [docs/architecture.md](docs/architecture.md)).
+An MCP server that exposes one person's mail accounts (say personal, work and a side project) to Claude as a [custom connector](https://support.claude.com/en/articles/11175166-getting-started-with-custom-connectors-using-remote-mcp) in claude.ai. Gmail is supported today; other providers plug in through a small provider interface (see [docs/architecture.md](docs/architecture.md)).
 
 It is built for inbox triage: Claude can search, read and summarize mail across all your accounts, then tidy up with labels, archiving and drafts. Every organizing change is reversible, and the server has no way to send, trash or delete mail.
+
+One instance serves one owner: `ALLOWED_EMAILS` holds only your own Google login, and every mailbox linked to the instance is yours. Someone else who wants the same setup runs their own instance (see [More than one person](#more-than-one-person)).
 
 ## Features
 
@@ -32,15 +34,19 @@ The server exposes 17 tools (10 read-only, 7 that change something); see [docs/a
 - `TOOLS=read-only` starts an instance that registers only the read tools, for routines that should report but never change anything.
 - Preferences follow a direction rule: anything that raises attention (marking a sender important, un-ignoring) applies immediately, anything that lowers attention (ignoring a sender, un-marking important) becomes a proposal that no MCP tool can approve. You approve it with `mailhub-admin preferences approve <id>` inside the container. As long as you only approve proposals you recognize, injected text cannot silently hide future alerts. Raising-attention changes apply without review, but are visible in `list_changes` and can be undone; since undoing them lowers attention, that undo is itself a proposal you approve the same way. Undo entries cannot be undone (make the change again instead). Proposals expire after 14 days.
 - These defenses have limits (heuristics can be evaded, the server cannot verify who motivated a call); see [Limitations](docs/architecture.md#limitations).
-- Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only Claude's own OAuth redirect URIs can register as clients.
+- Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only Claude's own OAuth redirect URIs can register as clients. Every allowed login sees every linked mailbox, so `ALLOWED_EMAILS` should hold only the owner's login; the server logs a warning at startup when it lists more than one address.
 
 Note on scope: Gmail's `gmail.modify` scope technically also permits sending and trashing, and it is the minimum that covers label changes and drafts. The protections above are in this code, not in the token. Review `src/` if that distinction matters to you.
 
 ## Quickstart
 
 1. Follow [docs/tutorial.md](docs/tutorial.md) for the Google Cloud setup, account linking, configuration and the claude.ai connector.
-2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d --build`. The server listens on `127.0.0.1:8742` (set `PORT` to change it; keep the compose port mapping in sync); it needs HTTPS at a public URL in front of it.
+2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d --build`. The server listens on `127.0.0.1:8742` (set `HOST_PORT` in `.env` to change the host port); it needs HTTPS at a public URL in front of it.
 3. [examples/tailscale-funnel/](examples/tailscale-funnel/) shows one complete way to publish it, including a firewall that isolates the container.
+
+## More than one person
+
+Run a separate instance per person: its own directory, `.env`, linked accounts, `data/`, container name, local port and Compose project name, and its own public URL. Each person adds their own custom connector in claude.ai with their instance's URL and logs in with their own Google account. See [docs/tutorial.md](docs/tutorial.md#14-more-than-one-person) for the steps and [examples/tailscale-funnel/](examples/tailscale-funnel/#more-than-one-person) for a second instance on the same host.
 
 ## Development
 

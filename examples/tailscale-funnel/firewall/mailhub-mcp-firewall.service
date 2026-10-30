@@ -7,6 +7,8 @@ Requires=docker.service
 Type=oneshot
 RemainAfterExit=yes
 # Adjust the path to where you installed the project on the host.
+# With more than one instance, list every instance's subnet:
+# Environment="SUBNETS=172.31.0.0/24 172.31.1.0/24"
 ExecStart=/opt/mailhub-mcp/examples/tailscale-funnel/firewall/mailhub-mcp-firewall.sh
 
 [Install]

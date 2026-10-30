@@ -37,6 +37,10 @@ src/mailhub_mcp/
 
 `core/errors.py`: `MailhubError` is the base. `AccountNotFound`, `DuplicateAlias`, `AuthExpired` (carries the re-authorize command), `MessageNotFound`, `TransientError`, and `OrganizeError` (a `ValueError`) for refused changes. The server turns them into `ToolError`s; aggregated tools put per-account failures in `errors` instead.
 
+## Ownership model
+
+One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that person's Google login; every linked mailbox (`<accounts_dir>/<provider>/<alias>.json`) belongs to them, and the preferences, journal and undo history are per instance, not per login. Nothing separates two logins inside an instance: every allowed login can read and change every linked mailbox. `server.py` therefore logs a warning at startup when `ALLOWED_EMAILS` has more than one address. Several people are served by several instances, each with its own directory, `.env`, accounts, `data/`, container name, local port (`HOST_PORT`), Compose project name and public URL, and each person adds their own connector.
+
 ## Accounts
 
 `AccountRegistry` scans `<accounts_dir>/<provider>/<alias>.json`. The folder name picks the provider; the file name (without `.json`) is the alias and must match `^[a-z0-9][a-z0-9-]{0,31}$`. Unknown provider folders, loose files and invalid aliases are skipped with a warning. The same alias under two providers raises `DuplicateAlias` at startup. Providers are built lazily on first use, so a bad credential file affects only its account. Accounts are read once at startup.

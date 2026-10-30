@@ -1,15 +1,17 @@
 services:
   mailhub-mcp:
     build: .
-    container_name: mailhub-mcp
+    # CONTAINER_NAME, HOST_PORT and PORT come from .env (Compose reads it for
+    # these substitutions). Defaults suit a single instance; a second instance
+    # (another person) sets its own CONTAINER_NAME and HOST_PORT.
+    container_name: ${CONTAINER_NAME:-mailhub-mcp}
     restart: unless-stopped
     env_file: .env
     # Loopback only: a plain "8742:8742" would expose the unencrypted server to
     # every network the host is on. Put a TLS-terminating proxy or tunnel in
-    # front of 127.0.0.1:8742. If you set PORT in
-    # .env, change both numbers below to match: PORT is the container port.
+    # front of 127.0.0.1:<HOST_PORT>. PORT is the port inside the container.
     ports:
-      - "127.0.0.1:8742:8742"
+      - "127.0.0.1:${HOST_PORT:-8742}:${PORT:-8742}"
     volumes:
       # OAuth state (client registrations, encrypted tokens) and the change
       # journal. Must survive restarts or the claude.ai connector has to

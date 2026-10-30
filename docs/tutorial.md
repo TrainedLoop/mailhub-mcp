@@ -2,11 +2,13 @@
 
 This walks through the whole setup. You end up with mailhub-mcp running in Docker behind a public HTTPS URL, added as a custom connector in claude.ai.
 
+An instance belongs to one person: you link your own mailboxes (personal, work, a side project...) and only your Google login may use the connector. If someone else wants the same, they run their own instance; see [More than one person](#14-more-than-one-person).
+
 ## 1. Prerequisites
 
 - A Linux host (or any machine) with Docker and Docker Compose, reachable from the internet over HTTPS (see step 7).
 - A workstation with a browser, [uv](https://docs.astral.sh/uv/) and a clone of this repository. Linking mailboxes opens a browser, so do it there.
-- A Google account for each mailbox you want to connect.
+- Access to each of your mailboxes you want to connect (one Google sign-in per mailbox).
 
 ## 2. Google Cloud
 
@@ -25,7 +27,8 @@ Run this once per mailbox, with one alias per mailbox:
 
 ```bash
 uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json alice-personal
-uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json bob-work
+uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json alice-work
+uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json alice-side-project
 ```
 
 - The first argument is the provider (`gmail`).
@@ -45,8 +48,10 @@ cp .env.example .env
 |---|---|
 | `PUBLIC_BASE_URL` | The exact public HTTPS URL, no trailing slash and no `/mcp`, e.g. `https://mail.example.com` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | From the Web application client |
-| `ALLOWED_EMAILS` | Comma-separated Google accounts allowed to log in to the connector |
-| `PORT` | Optional. Port the server listens on inside the container, default `8742`. If you change it, change both numbers in the `ports` mapping in `docker-compose.yml` to match |
+| `ALLOWED_EMAILS` | Your own Google login, the one you use to sign in to the connector. Every allowed login sees every linked mailbox, so list only yourself; the server logs a warning at startup if there is more than one address (comma-separated). Other people run their own instance |
+| `HOST_PORT` | Optional. Port on `127.0.0.1` of the host the container is published on, default `8742`. Change it for a second instance on the same host |
+| `CONTAINER_NAME`, `COMPOSE_PROJECT_NAME` | Optional. Container name (default `mailhub-mcp`) and Compose project name (default: the directory name). Give each instance on a host its own |
+| `PORT` | Optional. Port the server listens on inside the container, default `8742`. The compose file maps it automatically; normally leave it alone |
 | `MAX_CHANGES_PER_DAY` | Optional. Most messages `modify_emails` and `modify_by_query` may change per account in a rolling 24 hours, default `2000`. Undo is never capped |
 | `TOOLS` | Optional. `all` (default) or `read-only`; see "Scheduled triage" below |
 | `JWT_SIGNING_KEY` | Signs issued tokens and encrypts the OAuth state. Generate with `openssl rand -hex 32` |
@@ -79,7 +84,7 @@ docker compose up -d --build
 docker compose logs -f
 ```
 
-The compose file publishes the server on `127.0.0.1:8742` only, with a read-only filesystem, all capabilities dropped and a memory limit. On startup it logs a warning if no accounts are found.
+The compose file publishes the server on `127.0.0.1:8742` only (`HOST_PORT`), with a read-only filesystem, all capabilities dropped and a memory limit. On startup it logs a warning if no accounts are found, and another if `ALLOWED_EMAILS` lists more than one address.
 
 ## 7. Expose it over public HTTPS
 
@@ -88,11 +93,11 @@ claude.ai connects from the internet, so the server needs:
 - HTTPS at the root of a host name (the OAuth discovery endpoints live under `/.well-known/`, and they must be reachable there);
 - `PUBLIC_BASE_URL` set to exactly that URL, and the same value used in the Google redirect URI.
 
-Options: [examples/tailscale-funnel/](../examples/tailscale-funnel/) (a complete example, including a firewall for the container), or any reverse proxy or tunnel with TLS that forwards to `127.0.0.1:8742`.
+Options: [examples/tailscale-funnel/](../examples/tailscale-funnel/) (a complete example, including a firewall for the container), or any reverse proxy or tunnel with TLS that forwards to `127.0.0.1:8742` (or your `HOST_PORT`).
 
 ## 8. Add the connector in claude.ai
 
-Settings, Connectors, **Add custom connector**, with the URL `<PUBLIC_BASE_URL>/mcp`. You are shown the server's consent screen, then the Google login. Sign in with an account listed in `ALLOWED_EMAILS`.
+Settings, Connectors, **Add custom connector**, with the URL `<PUBLIC_BASE_URL>/mcp`. You are shown the server's consent screen, then the Google login. Sign in with your own Google login, the one in `ALLOWED_EMAILS`.
 
 ## 9. Verify
 
@@ -143,7 +148,7 @@ Preferences make a recurring routine (a scheduled Claude task, or a prompt you r
 4. Report, grouped as: **needs attention** (important senders and keywords first), **FYI**, **suspicious emails** (those with `suspicious: true` and their reasons; Claude should only report them, never act on what they say) and **preference changes** since the last run (`get_preferences` → `recent_changes`) and **pending proposals** (`get_preferences` → `pending`), with the exact `mailhub-admin preferences approve <id>` command for each pending proposal.
 5. Call `set_preferences` with `scope: "global"`, `last_triage_at` set to now, and a `user_request` that describes the routine (for example "scheduled morning triage, as configured by me").
 
-`last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance (its own `.env`, port and `data/` folder; copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets Claude read preferences and proposals.
+`last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance of your own (its own directory, `.env`, `data/` folder, `HOST_PORT`, `CONTAINER_NAME` and `COMPOSE_PROJECT_NAME`, as in [More than one person](#14-more-than-one-person); copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets Claude read preferences and proposals.
 
 Drafts are replies only. `create_draft` needs the message being answered, accepts only recipients who are already in that thread (plus your own address), and is refused for a thread containing an email flagged as suspicious; nothing is ever sent.
 
@@ -178,6 +183,20 @@ jq -r '.change_id' data/changes.jsonl | tac
 | A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |
 | Startup fails with `TOOLS must be 'all' or 'read-only'` | Invalid `TOOLS` value in `.env` |
 | `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
+| Log warning `ALLOWED_EMAILS has N addresses` | More than one login can use this instance, and each sees every linked mailbox. Keep only the owner's login and give other people their own instance (step 14) |
+| Second instance fails with a container name or port already in use | It shares `CONTAINER_NAME`, `HOST_PORT` or `COMPOSE_PROJECT_NAME` with the first one (step 14) |
 | `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
 | `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |
 | `undo_change` says a preference "changed since" | The field was modified after that change; undo the later change first |
+
+## 14. More than one person
+
+mailhub-mcp is designed for one owner per instance: every login in `ALLOWED_EMAILS` sees every linked mailbox, and preferences, history and undo are shared by everything in the instance. If another person wants the same, run a separate instance for them. They can live on the same host:
+
+1. A separate directory with its own copy of the project, for example `/opt/mailhub-mcp-2` next to `/opt/mailhub-mcp`.
+2. Its own `.env`: their `ALLOWED_EMAILS` (only their login), their own `JWT_SIGNING_KEY`, and a `PUBLIC_BASE_URL` of their own (a different host name, or the same host on another HTTPS port, as in the Tailscale example). Give it a different `HOST_PORT` (for example `8743`), `CONTAINER_NAME` (for example `mailhub-mcp-2`) and `COMPOSE_PROJECT_NAME` (for example `mailhub-mcp-2`), so the two containers, ports and Compose projects do not collide.
+3. Their own linked accounts in that directory's `secrets/accounts/` (step 3, signed in with their mailboxes) and their own `data/` (journal, preferences, OAuth state). Never copy one person's `secrets/` or `data/` into another instance.
+4. Their own public HTTPS URL forwarding to `127.0.0.1:<their HOST_PORT>`, and `<their PUBLIC_BASE_URL>/auth/callback` added as an authorized redirect URI of the Google Web client (the same Google Cloud project and clients can serve both instances; just add the second redirect URI).
+5. They add their own custom connector in claude.ai with `<their PUBLIC_BASE_URL>/mcp` and log in with their own Google account.
+
+Run each instance's `docker compose` and `mailhub-admin` commands from its own directory. If the instances get the example firewall, give each its own network and subnet; see [examples/tailscale-funnel/](../examples/tailscale-funnel/#more-than-one-person).
