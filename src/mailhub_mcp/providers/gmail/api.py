@@ -218,21 +218,21 @@ def batch_get(
     return [found[i] for i in dict.fromkeys(ids) if i in found], errors
 
 
-def list_ids(svc, query: str, limit: int, limiter: RateLimiter | None = None) -> list[str]:
+def list_ids(
+    svc, query: str, limit: int, limiter: RateLimiter | None = None, label_ids: list[str] | None = None
+) -> list[str]:
+    """Ids matching `query`, newest first; with `label_ids`, only messages carrying all of them."""
     limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     ids: list[str] = []
     page_token = None
     while len(ids) < limit:
-        request = (
-            svc.users()
-            .messages()
-            .list(
-                userId="me",
-                q=query,
-                maxResults=min(limit - len(ids), LIST_PAGE_SIZE),
-                pageToken=page_token,
-            )
-        )
+        kwargs = {
+            "userId": "me", "q": query, "maxResults": min(limit - len(ids), LIST_PAGE_SIZE),
+            "pageToken": page_token,
+        }
+        if label_ids is not None:
+            kwargs["labelIds"] = label_ids
+        request = svc.users().messages().list(**kwargs)
         resp = _execute(request, limiter, MESSAGE_LIST_UNITS)
         ids.extend(ref["id"] for ref in resp.get("messages", []))
         page_token = resp.get("nextPageToken")

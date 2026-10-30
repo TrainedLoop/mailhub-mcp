@@ -459,17 +459,30 @@ def _minimal_reads(fake):
     return [c for c in fake.calls if c[0] == "messages.get" and c[1].get("format") == "minimal"]
 
 
-def test_apply_query_reads_labels_once_per_message(fake, provider, journal):
+def _gets(fake):
+    return [c for c in fake.calls if c[0] == "messages.get"]
+
+
+def _lists(fake):
+    return [c for c in fake.calls if c[0] == "messages.list"]
+
+
+def test_apply_query_reads_label_state_by_listing_not_per_message(fake, provider, journal):
     fake.add_message("m3", labels=[])
     fake.query_results["q"] = ["m1", "m2", "m3"]
+    org = provider.ensure_label("claude/organized")
     fake.calls.clear()
     r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
                     archive=True, mark_read=None, star=None)
-    assert r["modified"] == 2
-    assert len(_minimal_reads(fake)) == 3  # one read of every matched id, not two
+    assert r["modified"] == 2 and _gets(fake) == []
+    # touched labels INBOX and the organized label: one listing each, plus the query and its re-check
+    label_lists = sorted(tuple(c[1]["labelIds"]) for c in _lists(fake) if "labelIds" in c[1])
+    assert label_lists == sorted([("INBOX",), (org.id,)])
+    assert len(_lists(fake)) == 2 + 2
+    assert journal.get(r["change_id"])["prior"] == {"m1": ["INBOX"], "m2": ["INBOX"]}
 
 
-def test_apply_query_all_already_changed_reads_once_and_writes_nothing(fake, provider, journal):
+def test_apply_query_all_already_changed_lists_only_and_writes_nothing(fake, provider, journal):
     fake.query_results["q"] = ["m1", "m2"]
     apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
                 archive=True, mark_read=None, star=None)
@@ -477,4 +490,98 @@ def test_apply_query_all_already_changed_reads_once_and_writes_nothing(fake, pro
     r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
                     archive=True, mark_read=None, star=None)
     assert r["modified"] == 0 and "hint" in r
-    assert len(_minimal_reads(fake)) == 2 and no_writes(fake)
+    assert _gets(fake) == [] and no_writes(fake)
+
+
+def test_apply_query_lists_under_the_journal_lock(fake, provider, journal):
+    fake.query_results["q"] = ["m1", "m2"]
+    seen = []
+    real = provider.list_ids
+
+    def spy(query, limit, label_ids=None):
+        seen.append(journal.lock.locked())
+        return real(query, limit, label_ids=label_ids)
+
+    provider.list_ids = spy
+    apply_query(provider, journal, "a", "q", add_labels=["Shopping"], remove_labels=[],
+                archive=False, mark_read=None, star=None)
+    assert seen and all(seen)
+
+
+def test_apply_query_prior_includes_existing_org_label_and_undo_is_exact(fake, provider, journal):
+    org = provider.ensure_label("claude/organized")
+    fake.add_message("m3", labels=["INBOX", org.id, "Label_9"])
+    fake.add_message("m4", labels=[org.id])
+    fake.query_results["q"] = ["m1", "m2", "m3", "m4"]
+    before = {i: list(fake.messages[i]["labelIds"]) for i in ("m1", "m2", "m3", "m4")}
+    r = apply_query(provider, journal, "a", "q", add_labels=["Shopping"], remove_labels=[],
+                    archive=True, mark_read=False, star=None)
+    prior = {i: sorted(v) for i, v in journal.get(r["change_id"])["prior"].items()}
+    assert prior == {
+        "m1": ["INBOX", "UNREAD"], "m2": ["INBOX", "UNREAD"],
+        "m3": sorted(["Label_9", "INBOX", org.id]), "m4": [org.id],
+    }
+    undo(provider, journal, "a", r["change_id"])
+    after = {i: fake.messages[i]["labelIds"] for i in before}
+    assert {i: sorted(v) for i, v in after.items()} == {i: sorted(v) for i, v in before.items()}
+
+
+def test_apply_query_skip_uses_listed_state(fake, provider, journal):
+    fake.add_message("m3", labels=["STARRED"])
+    fake.query_results["q"] = ["m1", "m2", "m3"]
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=False, mark_read=None, star=True)
+    assert r["modified"] == 1 and list(journal.get(r["change_id"])["prior"]) == ["m2"]
+    assert journal.get(r["change_id"])["prior"]["m2"] == []
+
+
+def test_apply_query_falls_back_to_reads_when_matches_change_meanwhile(fake, provider, journal):
+    fake.add_message("m3", labels=["INBOX"])
+    fake.query_results["q"] = ["m1", "m2"]
+    real = provider.list_ids
+    calls = []
+
+    def racing(query, limit, label_ids=None):
+        out = real(query, limit, label_ids=label_ids)
+        calls.append(label_ids)
+        if label_ids is not None:  # new mail arrives while label state is being listed
+            fake.query_results["q"] = ["m3", "m1", "m2"]
+        return out
+
+    provider.list_ids = racing
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert {c[1]["id"] for c in _gets(fake)} == {"m1", "m2"}  # exact per-message reads of the batch
+    assert r["modified"] == 2
+    assert journal.get(r["change_id"])["prior"] == {"m1": ["INBOX"], "m2": ["INBOX"]}
+
+
+def test_apply_query_falls_back_when_label_listing_order_is_inconsistent(fake, provider, journal):
+    ids = ["m1", "m2"]
+    fake.add_message("old", labels=["INBOX", "UNREAD"])
+    fake.query_results["q"] = ids
+    real = provider.list_ids
+
+    def odd(query, limit, label_ids=None):
+        if label_ids == ["UNREAD"]:  # a full listing with a foreign id ahead of ours
+            return ["old", "m1"][:limit]
+        return real(query, limit, label_ids=label_ids)
+
+    provider.list_ids = odd
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=False, mark_read=True, star=None)
+    assert {c[1]["id"] for c in _gets(fake)} == {"m1", "m2"}
+    assert journal.get(r["change_id"])["prior"] == {"m1": ["UNREAD"], "m2": ["UNREAD"]}
+
+
+def test_apply_query_validation_errors_write_nothing(fake, provider, journal):
+    fake.query_results["q"] = ["m1"]
+    with pytest.raises(OrganizeError, match="Unknown label"):
+        apply_query(provider, journal, "a", "q", add_labels=["Nope"], remove_labels=[],
+                    archive=False, mark_read=None, star=None)
+    with pytest.raises(OrganizeError, match="No change requested"):
+        apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=False, mark_read=None, star=None)
+    assert no_writes(fake)

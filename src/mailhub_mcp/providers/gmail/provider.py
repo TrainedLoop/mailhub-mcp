@@ -103,9 +103,9 @@ class GmailProvider:
     def search(self, query: str, limit: int) -> list[MessageSummary]:
         return self.search_report(query, limit).found
 
-    def list_ids(self, query: str, limit: int) -> list[str]:
+    def list_ids(self, query: str, limit: int, label_ids: list[str] | None = None) -> list[str]:
         with self._translate():
-            return api.list_ids(self._service(), query, limit, self._limiter)
+            return api.list_ids(self._service(), query, limit, self._limiter, label_ids=label_ids)
 
     def get_messages(self, ids: list[str], detail: Literal["summary", "full", "labels"]) -> GetResult:
         with self._translate():

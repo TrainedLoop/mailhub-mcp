@@ -101,6 +101,15 @@ def test_list_ids_paginates(fake):
     assert len(list_ids(fake, "", 50)) == 7
 
 
+def test_list_ids_sends_label_ids_only_when_given(fake):
+    fake.add_message("m1", labels=["INBOX", "Label_1"])
+    fake.add_message("m2", labels=["INBOX"])
+    assert list_ids(fake, "in:inbox", 10, label_ids=["Label_1"]) == ["m1"]
+    assert fake.calls[-1][1]["labelIds"] == ["Label_1"]
+    list_ids(fake, "in:inbox", 10)
+    assert "labelIds" not in fake.calls[-1][1]
+
+
 def test_list_labels(fake):
     assert {"id": "INBOX", "name": "INBOX", "type": "system"} in list_labels(fake)
 

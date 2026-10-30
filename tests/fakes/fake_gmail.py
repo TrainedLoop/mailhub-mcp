@@ -193,8 +193,10 @@ class _Messages:
             kwargs["metadataHeaders"] = metadataHeaders
         return self.f._request("messages.get", kwargs, lambda: self.f._get_message(id, format, metadataHeaders))
 
-    def list(self, userId="me", q=None, maxResults=None, pageToken=None):
+    def list(self, userId="me", q=None, maxResults=None, pageToken=None, labelIds=None):
         kwargs = {"userId": userId, "q": q, "maxResults": maxResults, "pageToken": pageToken}
+        if labelIds is not None:
+            kwargs["labelIds"] = labelIds
 
         def run():
             if q in self.f.query_results:
@@ -203,6 +205,8 @@ class _Messages:
                 ids = sorted(
                     self.f.messages, key=lambda i: int(self.f.messages[i]["internalDate"]), reverse=True
                 )
+            if labelIds:  # Gmail returns messages that carry every one of labelIds
+                ids = [i for i in ids if set(labelIds) <= set(self.f.messages[i]["labelIds"])]
             page, token = self.f._page(ids, maxResults, pageToken)
             resp = {
                 "messages": [{"id": i, "threadId": self.f.messages[i]["threadId"]} for i in page],

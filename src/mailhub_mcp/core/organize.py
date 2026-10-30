@@ -110,6 +110,11 @@ def changes_in_window(journal: Journal, account: str, now: datetime | None = Non
     )
 
 
+def _validate_change(add_labels, remove_labels, archive, mark_read, star) -> None:
+    if not (add_labels or remove_labels or archive or mark_read is not None or star is not None):
+        raise OrganizeError("No change requested")
+
+
 def modify(
     provider: Any,
     journal: Journal,
@@ -124,18 +129,18 @@ def modify(
     query: str | None = None,
     max_per_day: int | None = None,
     now: datetime | None = None,
-    skip_unchanged: bool = False,
 ) -> dict:
-    """Apply the change to `ids`. With `skip_unchanged`, ids already in the target state (per the
-    labels read under the lock) are dropped first; if none are left nothing is written and the
-    result is `{"change_id": None, "modified": 0, "unchanged": True}`."""
+    """Apply the change to explicit `ids`.
+
+    Reads every id's labels first (about 20 Gmail quota units per message): the read proves each id
+    exists in this account and gives the exact `prior` for undo.
+    """
     ids = _dedupe(ids)
     if not ids:
         raise OrganizeError("No message IDs given")
     if len(ids) > MAX_IDS:
         raise OrganizeError(f"At most {MAX_IDS} message IDs per call")
-    if not (add_labels or remove_labels or archive or mark_read is not None or star is not None):
-        raise OrganizeError("No change requested")
+    _validate_change(add_labels, remove_labels, archive, mark_read, star)
 
     labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
 
@@ -143,23 +148,37 @@ def modify(
     # the cap and `prior` cannot go stale between the read and the write.
     with journal.lock:
         found = _read_labels(provider, ids)
-        if skip_unchanged:
-            ids = [i for i in ids if not (set(add) <= set(found[i]) and not set(remove) & set(found[i]))]
-            if not ids:
-                return {"change_id": None, "modified": 0, "unchanged": True}
-        if max_per_day is not None:
-            remaining = max(0, max_per_day - changes_in_window(journal, account, now))
-            if len(ids) > remaining:
-                raise OrganizeError(
-                    f"{len(ids)} message(s) requested would exceed the daily change cap: only {remaining} "
-                    f"of {max_per_day} changes remain in the last 24 hours for this account; nothing was changed"
-                )
-        # Validation done; first write.
-        add = _dedupe(add + [provider.ensure_label(ORG_LABEL).id])
-        touched = set(add) | set(remove)
-        prior = {i: [l for l in found[i] if l in touched] for i in ids}
-        provider.modify_labels(ids, add, remove)
-        change_id = _record(journal, account, tool, add, remove, prior, query=query)
+        return _write(provider, journal, account, ids, found, add, remove, tool, query, max_per_day, now)
+
+
+def _write(
+    provider: Any, journal: Journal, account: str, ids: list[str], found: dict[str, list[str]],
+    add: list[str], remove: list[str], tool: str, query: str | None, max_per_day: int | None,
+    now: datetime | None, skip_unchanged: bool = False,
+) -> dict:
+    """Cap check, then the first write. Call under journal.lock with `found` read under it.
+
+    `found[i]` must hold every label of `add + remove + [ORG_LABEL]` that message i carries. With
+    `skip_unchanged`, ids already in the target state are dropped first; if none are left nothing is
+    written and the result is `{"change_id": None, "modified": 0, "unchanged": True}`.
+    """
+    if skip_unchanged:
+        ids = [i for i in ids if not (set(add) <= set(found[i]) and not set(remove) & set(found[i]))]
+        if not ids:
+            return {"change_id": None, "modified": 0, "unchanged": True}
+    if max_per_day is not None:
+        remaining = max(0, max_per_day - changes_in_window(journal, account, now))
+        if len(ids) > remaining:
+            raise OrganizeError(
+                f"{len(ids)} message(s) requested would exceed the daily change cap: only {remaining} "
+                f"of {max_per_day} changes remain in the last 24 hours for this account; nothing was changed"
+            )
+    # Validation done; first write.
+    add = _dedupe(add + [provider.ensure_label(ORG_LABEL).id])
+    touched = set(add) | set(remove)
+    prior = {i: [l for l in found[i] if l in touched] for i in ids}
+    provider.modify_labels(ids, add, remove)
+    change_id = _record(journal, account, tool, add, remove, prior, query=query)
     return {"change_id": change_id, "modified": len(ids)}
 
 
@@ -173,29 +192,77 @@ def preview_query(provider: Any, query: str) -> dict:
     }
 
 
+def _members_first(listed: list[str], ids: set[str]) -> bool:
+    """True when no foreign id comes before one of `ids` (the listing order matches the query's)."""
+    seen_foreign = False
+    for i in listed:
+        if i not in ids:
+            seen_foreign = True
+        elif seen_foreign:
+            return False
+    return True
+
+
+def _listed_label_state(provider: Any, query: str, ids: list[str], labels: list[str]) -> dict | None:
+    """Which of `labels` each of `ids` carries, from one label-filtered listing per label.
+
+    `ids` is the newest prefix of the query's matches, so the matches carrying label L that are in
+    `ids` come first in the listing of `query` filtered by L, within len(ids) results. A listing that
+    filled its limit with a foreign id ahead of one of ours, or a query whose matches changed while
+    listing (new mail, or a message leaving the query), returns None: the caller then reads labels
+    per message. Costs one list call (5 units per 500 ids) per label instead of 20 units per message.
+    """
+    id_set = set(ids)
+    members: dict[str, set[str]] = {}
+    for label in labels:
+        listed = provider.list_ids(query, len(ids), label_ids=[label])
+        if len(listed) >= len(ids) and not _members_first(listed, id_set):
+            return None
+        members[label] = set(listed) & id_set
+    if _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1)) != ids:
+        return None
+    return {i: [l for l in labels if i in members[l]] for i in ids}
+
+
 def apply_query(
-    provider: Any, journal: Journal, account: str, query: str, max_per_day: int | None = None, **changes
+    provider: Any, journal: Journal, account: str, query: str, max_per_day: int | None = None,
+    *, add_labels: list[str], remove_labels: list[str], archive: bool, mark_read: bool | None,
+    star: bool | None,
 ) -> dict:
-    ids = provider.list_ids(query, MAX_QUERY_APPLY + 1)
-    if not ids:
-        return {"change_id": None, "modified": 0, "remaining": False}
-    batch = ids[:MAX_QUERY_APPLY]
-    result = modify(
-        provider, journal, account, batch, tool="modify_by_query", query=query,
-        max_per_day=max_per_day, skip_unchanged=True, **changes,
-    )
+    """Apply the change to up to MAX_QUERY_APPLY messages matching `query`.
+
+    Label state comes from label-filtered listings (see `_listed_label_state`), not per-message
+    reads: the ids were just listed, so they exist in this account. Everything from the listing to
+    the journal record runs under journal.lock, like `modify`; on a throttled mailbox the lock waits
+    out the backoff and other organize calls wait with it.
+    """
+    _validate_change(add_labels, remove_labels, archive, mark_read, star)
+    with journal.lock:
+        labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
+        ids = _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1))
+        if not ids:
+            return {"change_id": None, "modified": 0, "remaining": False}
+        more = len(ids) > MAX_QUERY_APPLY
+        batch = ids[:MAX_QUERY_APPLY]
+        org = next((l for l in labels if l.name.lower() == ORG_LABEL.lower()), None)
+        touched = _dedupe(add + remove + ([org.id] if org else []))
+        state = _listed_label_state(provider, query, ids, touched)
+        found = state if state is not None else _read_labels(provider, batch)
+        result = _write(
+            provider, journal, account, batch, found, add, remove, "modify_by_query", query,
+            max_per_day, None, skip_unchanged=True,
+        )
     if result.get("unchanged"):
-        return {
-            "change_id": None, "modified": 0, "remaining": len(ids) > MAX_QUERY_APPLY,
-            "hint": QUERY_HINT_ALREADY_CHANGED,
-        }
-    return {**result, "remaining": len(ids) > MAX_QUERY_APPLY}
+        return {"change_id": None, "modified": 0, "remaining": more, "hint": QUERY_HINT_ALREADY_CHANGED}
+    return {**result, "remaining": more}
 
 
 def undo(
     provider: Any, journal: Journal, account: str, change_id: str,
     store: PreferenceStore | None = None, now: datetime | None = None,
 ) -> dict:
+    """Restore the labels a change touched. Reads every message of the change first (about 20 Gmail
+    quota units each) to skip messages deleted since and to record the undo's own `prior`."""
     with journal.lock:  # check-is_undone -> apply -> record must not interleave per journal
         return _undo(provider, journal, account, change_id, store, now)
 

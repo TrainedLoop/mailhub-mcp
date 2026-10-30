@@ -63,6 +63,15 @@ class ProviderContract:
             seed["transient_ids"]
         )
 
+    def test_list_ids_filters_by_label_ids(self, provider, seed):
+        query = provider.default_inbox_query
+        assert provider.list_ids(query, 10, label_ids=None) == provider.list_ids(query, 10)
+        unread = [m["id"] for m in seed["messages"] if provider.unread_label in m["labels"]]
+        assert provider.list_ids(query, 10, label_ids=[provider.unread_label]) == unread
+        both = [provider.inbox_label, provider.unread_label]
+        assert provider.list_ids(query, 10, label_ids=both) == unread  # messages carrying every label
+        assert provider.list_ids(query, 10, label_ids=[provider.starred_label]) == []
+
     def test_get_messages_splits_found_missing_failed(self, provider, seed):
         first, transient = seed["messages"][0]["id"], seed["transient_ids"][0]
         r = provider.get_messages([first, "nope", transient], "labels")
