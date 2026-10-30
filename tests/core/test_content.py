@@ -489,4 +489,16 @@ def test_round5_timing():
 )
 def test_stale_stack_index_does_not_leak(html):
     text, removed = html_to_safe_text(html)
-    assert "SECRET" not in text and removed >= 0
+    assert "SECRET" not in text and removed > 0
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<marquee><p hidden>x<div>VISIBLE</div></marquee>",
+        "<table><tr><td><p hidden>x<div>VISIBLE</div></td></tr></table>",
+        "<i></i><i></i><i></i><td><p hidden>x<div>VISIBLE</div>",
+    ],
+)
+def test_implied_p_close_inside_scope(html):
+    assert html_to_safe_text(html)[0] == "VISIBLE"

@@ -196,6 +196,8 @@ class _Extractor(HTMLParser):
         # open non-void elements: (tag, hides, is_barrier)
         self.stack: list[tuple[str, bool, bool]] = []
         self.positions: defaultdict[str, list[int]] = defaultdict(list)
+        # push counter of each open element, parallel to positions (stoppers use counters)
+        self.counters: defaultdict[str, list[int]] = defaultdict(list)
         # stack indices of block or hiding elements (inline end tags stop at these)
         self.barriers: list[int] = []
         self.stoppers: list[int] = []  # push counters of button-scope boundaries
@@ -217,6 +219,7 @@ class _Extractor(HTMLParser):
         idx = len(self.stack)
         self.stack.append((tag, hides, barrier))
         self.positions[tag].append(idx)
+        self.counters[tag].append(self.pushes + 1)
         if barrier:
             self.barriers.append(idx)
         self.pushes += 1
@@ -230,6 +233,7 @@ class _Extractor(HTMLParser):
     def _pop(self) -> None:
         name, hides, barrier = self.stack.pop()
         self.positions[name].pop()
+        self.counters[name].pop()
         if barrier:
             self.barriers.pop()
         if name in _SCOPE_STOP:
@@ -247,7 +251,8 @@ class _Extractor(HTMLParser):
             # Close the nearest open <p> in button scope, even through inline
             # elements opened above it.
             p_idx = self.positions["p"][-1]
-            if not self.stoppers or self.stoppers[-1] < p_idx:
+            p_counter = self.counters["p"][-1]
+            if not self.stoppers or self.stoppers[-1] < p_counter:
                 while len(self.stack) > p_idx:
                     self._pop()
                 return

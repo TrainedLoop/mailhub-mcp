@@ -55,8 +55,15 @@ WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": Fals
 MAX_READ_IDS = 25
 
 
+_tool_names_cache: frozenset[str] | None = None
+
+
 async def _tool_names() -> frozenset[str]:
-    return frozenset(t.name for t in await mcp.list_tools())
+    # All tools are registered at import time, so the set is stable after first use.
+    global _tool_names_cache
+    if _tool_names_cache is None:
+        _tool_names_cache = frozenset(t.name for t in await mcp.list_tools())
+    return _tool_names_cache
 
 
 def _present(value, nonce: str, tool_names: frozenset[str]):
@@ -239,6 +246,7 @@ async def modify_emails(
         "at most 500 emails per call ('remaining' says whether more match). "
         "The query should exclude emails already changed (e.g. add in:inbox when archiving, -label:X when adding X); "
         "messages already in the target state are skipped, and a hint is returned if nothing is left to change."
+        + UNTRUSTED_NOTE
     ),
 )
 async def modify_by_query(
