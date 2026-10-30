@@ -453,3 +453,142 @@ def test_summarize_preference_entry(store, journal):
         "kind": "preferences", "scope": "a", "fields": ["important_keywords", "last_triage_at"],
         "user_request": "why", "undone": False, "undo_of": None,
     }
+
+
+# ----- fix round -----
+
+@pytest.mark.parametrize("bad", ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-01:00"])
+def test_triage_extreme_offsets_give_normal_error(store, journal, bad):
+    with pytest.raises(PreferenceError, match="Invalid last_triage_at"):
+        put(store, journal, triage=bad)
+
+
+def test_malformed_proposals_dropped_on_load(store, journal, caplog):
+    good = put(store, journal, add={"ignored_keywords": ["x"]})["pending"][0]["proposal_id"]
+    state = json.loads(store.path.read_text())
+    ok = state["proposals"][0]
+    state["proposals"] += [
+        {"id": "p-bad1"},
+        {**ok, "id": "p-bad2", "values": "notalist"},
+        {**ok, "id": "p-bad3", "op": "set"},
+        {**ok, "id": "p-bad4", "field": "nope"},
+        {**ok, "id": "p-bad5", "expires": 5},
+        {**ok, "id": 7},
+        "junk",
+    ]
+    store.path.write_text(json.dumps(state))
+    with caplog.at_level("WARNING"):
+        assert [p["id"] for p in store.load()["proposals"]] == [good]
+    assert "malformed proposal" in caplog.text
+    assert [p["proposal_id"] for p in list_proposals(store, T0)] == [good]
+    assert view(store, journal, None, T0)["pending"][0]["proposal_id"] == good
+    assert approve(store, journal, good, T0)["applied"]
+
+
+def move(store, journal):
+    put(store, journal, add={"important_keywords": ["x"]})
+    return put(store, journal, add={"ignored_keywords": ["X"]}, remove={"important_keywords": ["x"]})
+
+
+def test_move_between_lists_makes_two_proposals(store, journal):
+    r = move(store, journal)
+    assert r["applied"] == [] and {(p["field"], p["op"]) for p in r["pending"]} == {
+        ("ignored_keywords", "add"), ("important_keywords", "remove")}
+    s = store.load()["global"]
+    assert s["important_keywords"] == ["x"] and s["ignored_keywords"] == []
+
+
+def test_move_approved_in_right_order(store, journal):
+    r = move(store, journal)
+    ids = {(p["field"], p["op"]): p["proposal_id"] for p in r["pending"]}
+    approve(store, journal, ids[("important_keywords", "remove")], T0)
+    approve(store, journal, ids[("ignored_keywords", "add")], T0)
+    s = store.load()["global"]
+    assert s["important_keywords"] == [] and s["ignored_keywords"] == ["X"]
+
+
+def test_move_approved_in_wrong_order_is_refused_clearly(store, journal):
+    r = move(store, journal)
+    ids = {(p["field"], p["op"]): p["proposal_id"] for p in r["pending"]}
+    with pytest.raises(PreferenceError, match="remove it from important_keywords first"):
+        approve(store, journal, ids[("ignored_keywords", "add")], T0)
+    approve(store, journal, ids[("important_keywords", "remove")], T0)
+    approve(store, journal, ids[("ignored_keywords", "add")], T0)
+    assert store.load()["global"]["ignored_keywords"] == ["X"]
+
+
+def test_move_without_removal_still_conflicts(store, journal):
+    put(store, journal, add={"important_keywords": ["x"]})
+    with pytest.raises(PreferenceError, match="Conflict"):
+        put(store, journal, add={"ignored_keywords": ["x"]})
+
+
+def test_duplicate_proposal_returns_existing(store, journal):
+    first = put(store, journal, add={"ignored_keywords": ["a", "B"]})["pending"][0]["proposal_id"]
+    again = put(store, journal, add={"ignored_keywords": ["b", "A"]})["pending"]
+    assert [p["proposal_id"] for p in again] == [first] and len(store.load()["proposals"]) == 1
+    other_scope = put(store, journal, scope="a", add={"ignored_keywords": ["a", "B"]})["pending"][0]["proposal_id"]
+    assert other_scope != first and len(store.load()["proposals"]) == 2
+    # Once the proposal expired a new one is created.
+    late = T0 + timedelta(days=15)
+    assert put(store, journal, add={"ignored_keywords": ["a", "B"]}, now=late)["pending"][0]["proposal_id"] != first
+
+
+def test_proposal_cap(store, journal):
+    for i in range(50):
+        put(store, journal, add={"ignored_keywords": [f"k{i}"]})
+    with pytest.raises(PreferenceError, match="mailhub-admin"):
+        put(store, journal, add={"ignored_keywords": ["one-more"]})
+    with pytest.raises(PreferenceError, match="mailhub-admin"):
+        put(store, journal, add={"important_keywords": ["imm"], "ignored_keywords": ["another"]})
+    assert store.load()["global"]["important_keywords"] == [] and len(store.load()["proposals"]) == 50
+    # A duplicate of a live proposal is still answered at the cap.
+    assert put(store, journal, add={"ignored_keywords": ["k3"]})["pending"]
+    # Expired ones free the space.
+    assert put(store, journal, add={"ignored_keywords": ["fresh"]}, now=T0 + timedelta(days=15))["pending"]
+
+
+def test_journal_recorded_while_store_lock_held(store, journal, monkeypatch):
+    import fcntl
+    held = []
+    real = journal.record
+
+    def spy(*a, **k):
+        fd = open(store.lock_path, "a")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held.append(False)
+        except BlockingIOError:
+            held.append(True)
+        finally:
+            fd.close()
+        return real(*a, **k)
+
+    monkeypatch.setattr(journal, "record", spy)
+    r = put(store, journal, add={"important_keywords": ["a"]})
+    pid = put(store, journal, add={"ignored_keywords": ["z"]})["pending"][0]["proposal_id"]
+    approve(store, journal, pid, T0)
+    undo(None, journal, "a", r["change_id"], store=store)
+    assert held == [True, True, True]
+
+
+def test_journal_failure_leaves_state_unchanged(store, journal, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk")
+    monkeypatch.setattr(journal, "record", boom)
+    with pytest.raises(OSError):
+        put(store, journal, add={"important_keywords": ["a"]})
+    assert store.load()["global"]["important_keywords"] == []
+
+
+def test_effective_dedupes_by_key(store, journal):
+    put(store, journal, add={"important_keywords": ["Invoice"], "important_senders": ["@x.com"]})
+    put(store, journal, scope="a", add={"important_keywords": ["invoice", "Other"], "important_senders": ["@X.com"]})
+    eff = view(store, journal, "a", T0)["effective"]
+    assert eff["important_keywords"] == ["Invoice", "Other"] and eff["important_senders"] == ["@x.com"]
+
+
+def test_sender_rejects_consecutive_dots():
+    for bad in ["bob@bank..com", "@a..b.com"]:
+        with pytest.raises(PreferenceError):
+            normalize_sender(bad)

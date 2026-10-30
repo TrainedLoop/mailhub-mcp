@@ -45,6 +45,7 @@ OPPOSITE = {
 MAX_SENDER_LEN = 254
 MAX_KEYWORD_LEN = 40
 MAX_ITEMS = 200
+MAX_PROPOSALS = 50
 MAX_USER_REQUEST = 500
 PROPOSAL_TTL = timedelta(days=14)
 CLOCK_SKEW = timedelta(minutes=5)
@@ -72,7 +73,7 @@ def normalize_sender(value: Any) -> str:
     v = value.strip().lower()
     if (
         not v or len(v) > MAX_SENDER_LEN or _has_bad_chars(v) or not _SENDER_RE.fullmatch(v)
-        or "." not in v.split("@", 1)[1]
+        or "." not in v.split("@", 1)[1] or ".." in v
     ):
         raise PreferenceError(
             f"Invalid sender pattern {value!r}: use name@domain or @domain (lowercase, at most "
@@ -128,6 +129,30 @@ def _clean_rules(raw: Any, where: str) -> dict:
     return rules
 
 
+_PROPOSAL_TYPES = {
+    "id": str, "scope": str, "field": str, "op": str, "values": list, "user_request": str,
+    "created": str, "expires": str,
+}
+
+
+def _valid_proposal(p: Any) -> bool:
+    ok = (
+        isinstance(p, dict)
+        and all(isinstance(p.get(k), t) for k, t in _PROPOSAL_TYPES.items())
+        and p["field"] in LIST_FIELDS and p["op"] in ("add", "remove")
+        and all(isinstance(v, str) for v in p["values"])
+    )
+    if ok:
+        try:
+            datetime.fromisoformat(p["created"])
+            datetime.fromisoformat(p["expires"])
+        except ValueError:
+            ok = False
+    if not ok:
+        log.warning("dropping malformed proposal %r from preferences file", p.get("id") if isinstance(p, dict) else p)
+    return ok
+
+
 class PreferenceStore:
     """JSON file guarded by an exclusive flock on `<path>.lock` (same stem) and replaced atomically."""
 
@@ -153,7 +178,7 @@ class PreferenceStore:
         return {
             "global": _clean_rules(raw.get("global"), "global"),
             "accounts": {a: _clean_rules(r, f"accounts.{a}") for a, r in accounts.items()},
-            "proposals": [p for p in proposals if isinstance(p, dict)],
+            "proposals": [p for p in proposals if _valid_proposal(p)],
         }
 
     @contextlib.contextmanager
@@ -285,7 +310,7 @@ def _parse_triage_time(value: Any, now: datetime) -> str:
         if not isinstance(value, str):
             raise ValueError
         moment = _aware(datetime.fromisoformat(value.strip())).astimezone(timezone.utc)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise PreferenceError(f"Invalid last_triage_at {value!r}: expected an ISO 8601 timestamp") from None
     if moment > now + CLOCK_SKEW:
         raise PreferenceError(f"Invalid last_triage_at {value!r}: it is in the future")
@@ -307,7 +332,7 @@ def _record(
         )
     except Exception:
         log.error(
-            "journal write failed after preferences were changed; manual recovery entry: %s",
+            "journal write failed for a preference change; manual recovery entry: %s",
             json.dumps({"scope": scope, "tool": tool, "before": before, "after": after,
                         "user_request": user_request}, default=str),
         )
@@ -349,6 +374,9 @@ def set_preferences(
         if clash:
             raise PreferenceError(f"Conflict: {clash} both added to and removed from {field}")
 
+    change_id = None
+    # Lock order everywhere: journal.lock -> store flock -> journal's internal write lock. The journal
+    # entry is written while the flock is held so journal order matches commit order across processes.
     with journal.lock:
         with store.transaction() as state:
             _prune(state, now)
@@ -358,11 +386,15 @@ def set_preferences(
             for op, field, values in sorted(ops, key=lambda o: o[0] != "remove"):
                 _apply_op(trial, field, op, values)
             _check_rules(trial, scope, {f for _, f, _ in ops})
+            pending_removals = {
+                f: vs for o, f, vs in ops if o == "remove" and not is_raising(f, o)
+            }
 
             before: dict[str, Any] = {}
             after: dict[str, Any] = {}
             applied: list[dict] = []
             pending: list[dict] = []
+            live = _live(state, now)
             for op, field, values in ops:
                 if is_raising(field, op):
                     before.setdefault(field, list(rules[field]))
@@ -380,16 +412,31 @@ def set_preferences(
                     if not todo:
                         continue
                     one = _snapshot(rules, FIELDS)
+                    if op == "add" and field in OPPOSITE:
+                        # A value moving between lists: its removal is proposed in this same request.
+                        _apply_op(one, OPPOSITE[field], "remove", pending_removals.get(OPPOSITE[field], []))
                     _apply_op(one, field, op, todo)
                     _check_rules(one, scope, {field})
-                    proposal = {
-                        "id": "p-" + secrets.token_hex(4), "scope": scope, "field": field, "op": op,
-                        "values": todo, "user_request": request, "created": now.isoformat(),
-                        "expires": (now + PROPOSAL_TTL).isoformat(),
-                    }
-                    state["proposals"].append(proposal)
-                    pending.append({"proposal_id": proposal["id"], "scope": scope, "field": field,
-                                    "op": op, "values": todo})
+                    keys = {_key(field, v) for v in todo}
+                    existing = next((
+                        p for p in live if (p["scope"], p["field"], p["op"]) == (scope, field, op)
+                        and {_key(field, v) for v in p["values"]} == keys
+                    ), None)
+                    if existing is None:
+                        if len(live) >= MAX_PROPOSALS:
+                            raise PreferenceError(
+                                f"Too many pending proposals ({len(live)}; the limit is {MAX_PROPOSALS}): "
+                                "review them with `mailhub-admin preferences list` before proposing more"
+                            )
+                        existing = {
+                            "id": "p-" + secrets.token_hex(4), "scope": scope, "field": field, "op": op,
+                            "values": todo, "user_request": request, "created": now.isoformat(),
+                            "expires": (now + PROPOSAL_TTL).isoformat(),
+                        }
+                        state["proposals"].append(existing)
+                        live.append(existing)
+                    pending.append({"proposal_id": existing["id"], "scope": scope, "field": field,
+                                    "op": op, "values": list(existing["values"])})
             _check_rules(rules, scope, {f for f in after if f in LIST_FIELDS})
             if triage is not None:
                 before["last_triage_at"] = rules["last_triage_at"]
@@ -401,13 +448,21 @@ def set_preferences(
             touched = [f for f in after if after[f] != before[f]]
             before = {f: before[f] for f in touched}
             after = {f: after[f] for f in touched}
-        change_id = _record(journal, scope, "set_preferences", before, after, request, now) if touched else None
+            if touched:
+                change_id = _record(journal, scope, "set_preferences", before, after, request, now)
     return {"change_id": change_id, "applied": applied, "pending": pending}
+
+
+def _merge(field: str, items: list[str]) -> list[str]:
+    seen: dict[str, str] = {}
+    for v in items:
+        seen.setdefault(_key(field, v), v)
+    return list(seen.values())
 
 
 def _effective(state: dict, account: str) -> dict:
     g, a = state["global"], _peek(state, account)
-    eff = {f: list(dict.fromkeys(g[f] + a[f])) for f in LIST_FIELDS}
+    eff = {f: _merge(f, g[f] + a[f]) for f in LIST_FIELDS}
     eff["last_triage_at"] = a["last_triage_at"] or g["last_triage_at"]
     return eff
 
@@ -482,24 +537,35 @@ def approve(
     store: PreferenceStore, journal: Journal, proposal_id: str, now: datetime | None = None
 ) -> dict:
     now = _now(now)
+    change_id = None
     with journal.lock:
         with store.transaction() as state:
             others = [p for p in state["proposals"] if p.get("id") != proposal_id]
             proposal = _find(state, proposal_id, now)
             scope, field, op = proposal["scope"], proposal["field"], proposal["op"]
-            if field not in LIST_FIELDS or op not in ("add", "remove"):
-                raise PreferenceError(f"Proposal {proposal_id} is malformed")
             rules = _rules(state, scope)
             before = {field: list(rules[field])}
             values = [_normalize(field, v) for v in proposal["values"]]
+            if op == "add":
+                opposite = OPPOSITE[field]
+                held = {_key(opposite, v) for v in rules[opposite]}
+                clash = [v for v in values if _key(field, v) in held]
+                if clash:
+                    raise PreferenceError(
+                        f"Conflict in scope {scope!r}: {clash} is in {opposite}; remove it from "
+                        f"{opposite} first (approve that proposal first), then approve this one"
+                    )
             trial = _snapshot(rules, FIELDS)
             _apply_op(trial, field, op, values)
             _check_rules(trial, scope, {field})  # re-validated against the current state
             changed = _apply_op(rules, field, op, values)
             state["proposals"] = [p for p in others if not _expired(p, now)]
             after = {field: list(rules[field])}
-            request = proposal.get("user_request") or ""
-        change_id = _record(journal, scope, "approve_preference", before, after, request, now) if changed else None
+            if changed:
+                change_id = _record(
+                    journal, scope, "approve_preference", before, after,
+                    proposal.get("user_request") or "", now,
+                )
     return {
         "proposal_id": proposal_id, "change_id": change_id,
         "applied": [{"scope": scope, "field": field, "op": op, "values": changed}] if changed else [],
@@ -549,10 +615,10 @@ def undo_entry(
                 _check_rules(rules, scope, [f for f in fields if f in LIST_FIELDS])
             except PreferenceError as exc:
                 raise OrganizeError(f"Cannot undo {change_id}: {exc}") from None
+            undo_id = _record(
+                journal, scope, "undo_changes", current, _snapshot(before, fields),
+                entry.get("user_request") or "", now, undo_of=change_id,
+            )
     except PreferenceError as exc:
         raise OrganizeError(str(exc)) from None
-    undo_id = _record(
-        journal, scope, "undo_changes", current, _snapshot(before, fields),
-        entry.get("user_request") or "", now, undo_of=change_id,
-    )
     return {"change_id": undo_id, "undone": change_id, "modified": 0, "skipped": []}
