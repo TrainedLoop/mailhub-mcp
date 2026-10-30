@@ -198,9 +198,10 @@ class _Extractor(HTMLParser):
         self.positions: defaultdict[str, list[int]] = defaultdict(list)
         # stack indices of block or hiding elements (inline end tags stop at these)
         self.barriers: list[int] = []
-        self.stoppers: list[int] = []  # stack indices of button-scope boundaries
+        self.stoppers: list[int] = []  # push counters of button-scope boundaries
+        self.pushes = 0  # monotonically increasing push counter, never decremented
         self.dropped = 0  # open elements currently hiding content
-        # Per formatting tag, (hides, stack index at push) of entries not yet
+        # Per formatting tag, (hides, push counter at push) of entries not yet
         # closed by their own end tag. A hiding entry keeps hiding until its end tag or EOF, even
         # after being popped structurally (fail-closed approximation of
         # active-formatting re-creation).
@@ -218,8 +219,9 @@ class _Extractor(HTMLParser):
         self.positions[tag].append(idx)
         if barrier:
             self.barriers.append(idx)
+        self.pushes += 1
         if tag in _SCOPE_STOP:
-            self.stoppers.append(idx)
+            self.stoppers.append(self.pushes)
         if hides:
             self.dropped += 1
         if tag == "style":
@@ -262,7 +264,7 @@ class _Extractor(HTMLParser):
         if tag in _FORMATTING:
             # Hiding is tracked by the formatting list, not the stack entry;
             # still a barrier so inline end tags stop at it.
-            self.formatting[tag].append((hides, len(self.stack)))
+            self.formatting[tag].append((hides, self.pushes + 1))
             if hides:
                 self.dropped += 1
             self._push(tag, False, barrier=hides)
@@ -280,10 +282,10 @@ class _Extractor(HTMLParser):
         if tag in _FORMATTING and self.formatting[tag]:
             # Closes the most recent entry for this tag, as browsers do, unless
             # a scope boundary (table, td, marquee, ...) opened above it: then
-            # browsers ignore the end tag entirely. The recorded index is kept
-            # after structural pops, so this errs toward hiding.
-            hides, idx = self.formatting[tag][-1]
-            if self.stoppers and self.stoppers[-1] > idx:
+            # browsers ignore the end tag entirely. Both sides use the push
+            # counter, which stays valid after structural pops.
+            hides, counter = self.formatting[tag][-1]
+            if self.stoppers and self.stoppers[-1] > counter:
                 return
             self.formatting[tag].pop()
             if hides:

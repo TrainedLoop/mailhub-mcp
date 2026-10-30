@@ -475,3 +475,18 @@ def test_formatting_end_tag_in_scope_still_closes():
 
 def test_round5_timing():
     _fast(lambda: html_to_safe_text("<b hidden><table><tr><td></b>" * 80_000))
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<div><b hidden>x</div><marquee></b></marquee>SECRET",
+        "<p><b hidden>x</p><marquee></b></marquee>SECRET",
+        "<div><div><b hidden>x</div></div><object></b></object>SECRET",
+        "<div><div><div><b hidden>x</div></div></div>"
+        "<table><tr><td></b></td></tr></table>SECRET",
+    ],
+)
+def test_stale_stack_index_does_not_leak(html):
+    text, removed = html_to_safe_text(html)
+    assert "SECRET" not in text and removed >= 0
