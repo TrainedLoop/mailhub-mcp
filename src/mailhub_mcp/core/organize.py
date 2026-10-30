@@ -143,7 +143,7 @@ def modify(
             remaining = max(0, max_per_day - changes_in_window(journal, account, now))
             if len(ids) > remaining:
                 raise OrganizeError(
-                    f"Daily change cap reached: {len(ids)} message(s) requested but only {remaining} "
+                    f"{len(ids)} message(s) requested would exceed the daily change cap: only {remaining} "
                     f"of {max_per_day} changes remain in the last 24 hours for this account; nothing was changed"
                 )
         # Validation done; first write.

@@ -430,7 +430,7 @@ def test_undo_entries_not_counted_and_undo_not_capped(fake, provider, journal):
 def test_apply_query_respects_cap(fake, provider, journal):
     fake.query_results["in:inbox"] = ["m1", "m2"]
     _seed(journal, "a", 1)
-    with pytest.raises(OrganizeError, match="only 1 of 2"):
+    with pytest.raises(OrganizeError, match=r"^2 message\(s\) requested would exceed the daily change cap: only 1 of 2"):
         apply_query(provider, journal, "a", "in:inbox", max_per_day=2, add_labels=["Shopping"],
                     remove_labels=[], archive=False, mark_read=None, star=None)
     assert no_writes(fake)

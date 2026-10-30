@@ -172,7 +172,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `list_accounts` is empty, log warning mentions `/secrets/accounts` | Folder missing or no `<provider>/<alias>.json`; invalid alias in a file name; unknown provider folder |
 | Startup fails with a duplicate alias error | The same alias exists under two provider folders; rename one file |
 | Container restarts with `PermissionError` | `data/` or `secrets/accounts/` is not owned by uid 10001 |
-| `Daily change cap reached` | `MAX_CHANGES_PER_DAY` messages were already changed on that account in the last 24 hours; raise it in `.env` and restart, or wait. Undo still works |
+| `would exceed the daily change cap` | `MAX_CHANGES_PER_DAY` messages were already changed on that account in the last 24 hours; raise it in `.env` and restart, or wait. Undo still works |
 | `create_draft` says drafts are replies only, or lists allowed addresses | The draft needs `reply_to_message_id`, and `to` and `cc` must be people already in that thread |
 | `create_draft` says the thread is flagged as a possible prompt injection | A message in the thread matched the injection heuristics; reply manually in Gmail |
 | A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |
