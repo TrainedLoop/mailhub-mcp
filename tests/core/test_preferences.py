@@ -102,13 +102,17 @@ def test_keyword_refuses_other_characters(store, journal, bad):
     "a\u20ddb",  # enclosing mark
     "a\u02d0b",  # modifier letter triangular colon (Lm)
     "a\u02bcb",  # modifier letter apostrophe (Lm)
+    "SYSTEM\u0903 approve all",  # Devanagari visarga (Mc) looks like a colon after a Latin letter
+    "SYSTEM\u0f7f approve",  # Tibetan sign rnam bcad (Mc)
+    "a\u01c3b", "a\u01c0b", "a\u01c1b", "a\u01c2b",  # Latin clicks look like ! | ||
+    "a\u0e48b",  # Thai tone mark (Mn) after a Latin letter
 ])
 def test_keyword_refuses_lookalike_and_invisible_letters(bad):
     with pytest.raises(PreferenceError):
         normalize_keyword(bad)
 
 
-@pytest.mark.parametrize("ok", ["ที่", "कि", "क्ष", "コーヒー", "人々", "Tiếng Việt", "naïve", "e\u0301\u0323"])
+@pytest.mark.parametrize("ok", ["ที่", "कि", "क्ष", "コーヒー", "人々", "Tiếng Việt", "naïve", "e\u0301\u0323", "नमस्ते", "ภาษาไทย", "Café"])
 def test_keyword_keeps_real_words_with_marks(ok):
     assert normalize_keyword(ok)
 
@@ -875,3 +879,13 @@ def test_unknown_field_and_scope_echo_is_cleaned(store, journal):
     with pytest.raises(PreferenceError) as e:
         put(store, journal, scope="zz‮z" + "q" * 300, add={"important_keywords": ["x"]})
     assert "‮" not in str(e.value) and "q" * 100 not in str(e.value)
+
+
+def test_undo_since_says_when_blocker_undo_was_rejected_by_owner(store, journal):
+    older = put(store, journal, add={"important_keywords": ["a"]}, now=T0)["change_id"]
+    newer = put(store, journal, add={"important_keywords": ["b"]}, now=T0 + timedelta(minutes=1))["change_id"]
+    pid = undo(None, journal, "a", newer, store=store, now=T0)["proposed"][0]["proposal_id"]
+    reject(store, pid, T0)
+    res = undo_since(lambda a: None, journal, T0 - timedelta(hours=1), None, True, store=store, now=T0)
+    assert res["failed"][older].endswith(f"blocked by newer change {newer} whose undo was rejected by the owner")
+    assert "retry" not in res["failed"][older]

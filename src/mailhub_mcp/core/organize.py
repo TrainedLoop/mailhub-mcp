@@ -11,7 +11,7 @@ from mailhub_mcp.core.aggregate import describe_error
 from mailhub_mcp.core.errors import OrganizeError
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
-from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, undo_entry
+from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, UndoRejectedError, undo_entry
 
 ORG_LABEL = "claude/organized"
 MAX_IDS = 1000
@@ -296,6 +296,7 @@ def undo_since(
     proposed: list[dict] = []
     failed: dict[str, str] = {}
     blocked_by: dict[tuple[str, str], str] = {}  # (account, message id) -> failed newer change
+    rejected: set[str] = set()  # failed changes whose undo the owner rejected
     attempts = 0
     for entry in candidates:
         if len(done) >= MAX_UNDO_SINCE or attempts >= MAX_UNDO_SINCE_ATTEMPTS:
@@ -319,6 +320,8 @@ def undo_since(
                 failed[change_id] = f"{account}: {describe_error(exc, account)}"
                 log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
                 blocker = change_id
+                if isinstance(exc, UndoRejectedError):
+                    rejected.add(change_id)
             else:
                 if res.get("proposed"):
                     proposed.append({"change_id": change_id, "proposed": res["proposed"]})
@@ -329,7 +332,10 @@ def undo_since(
                     })
                 continue
         else:
-            failed[change_id] = f"{account}: blocked by failed newer change {blocker}; retry after fixing it"
+            if blocker in rejected:
+                failed[change_id] = f"{account}: blocked by newer change {blocker} whose undo was rejected by the owner"
+            else:
+                failed[change_id] = f"{account}: blocked by failed newer change {blocker}; retry after fixing it"
         for p in pairs:
             blocked_by.setdefault(p, blocker)
     return {"undone": done, "proposed": proposed, "failed": failed, "remaining": attempts < len(candidates)}

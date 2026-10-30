@@ -809,6 +809,14 @@ def test_get_preferences_wraps_every_preference_value_with_one_nonce(fakes):
     assert server.store.load()["global"]["important_keywords"] == ["boleto"]  # storage stays raw
 
 
+def test_set_preferences_does_not_wrap_last_triage_at(fakes):
+    out = _set(add={"important_keywords": ["boleto"]}, last_triage_at="2026-10-30T08:00:00Z")
+    applied = {a["field"]: a for a in out["applied"]}
+    ts = applied["last_triage_at"]["values"][0]
+    assert ts.startswith("2026-10-30T08:00") and "untrusted" not in ts
+    assert WRAPPED.fullmatch(applied["important_keywords"]["values"][0]).group(2) == "boleto"
+
+
 def test_undo_results_wrap_proposed_values(fakes):
     c1 = _set(add={"important_keywords": ["boleto"]})["change_id"]
     out = call("undo_change", {"change_id": c1})

@@ -140,6 +140,8 @@ def _guard_prefs(value, nonce: str, key: str | None = None):
     if isinstance(value, str):
         return wrap_untrusted(value, nonce) if key in _WRAPPED_PREF_KEYS else clean_text(value)
     if isinstance(value, dict):
+        if value.get("field") == "last_triage_at":  # an applied/pending entry: its values are a timestamp
+            return {k: _guard_prefs(v, nonce) if k == "values" else _guard_prefs(v, nonce, k) for k, v in value.items()}
         return {k: _guard_prefs(v, nonce, k) for k, v in value.items()}
     if isinstance(value, list):
         return [_guard_prefs(v, nonce, key) for v in value]

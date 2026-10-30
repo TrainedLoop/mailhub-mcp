@@ -63,6 +63,10 @@ class PreferenceError(MailhubError, ValueError):
     pass
 
 
+class UndoRejectedError(OrganizeError):
+    """The owner rejected the proposed undo of this change."""
+
+
 def _quote(value: Any) -> str:
     """A value echoed in an error message: invisible characters removed, repr-escaped, at most MAX_QUOTED
     characters. Error text goes back to the model without untrusted markers, so it carries as little of a
@@ -112,6 +116,12 @@ _DEFAULT_IGNORABLE = (
 # Modifier letters (Lm) are refused (several look like a colon, apostrophe or slash) except these word
 # characters: Japanese prolonged sound and iteration marks, the CJK iteration mark and Thai mai yamok.
 _ALLOWED_LM = frozenset("\u3005\u309d\u309e\u30fc\u30fd\u30fe\uff70\u0e46")
+# Latin click letters that look like "!", "|" and "||".
+_REFUSED_LETTERS = frozenset("\u01c0\u01c1\u01c2\u01c3")
+# Script-neutral combining marks (diacritics, symbols and kana voicing marks) may follow a letter of any script.
+_INHERITED_MARKS = (
+    (0x0300, 0x036F), (0x1AB0, 0x1AFF), (0x1DC0, 0x1DFF), (0x20D0, 0x20FF), (0x3099, 0x309A), (0xFE20, 0xFE2F),
+)
 # Combining marks stacked on one letter beyond this are refused (real words use at most three).
 MAX_MARKS_PER_LETTER = 3
 
@@ -121,13 +131,30 @@ def _default_ignorable(c: str) -> bool:
     return any(lo <= o <= hi for lo, hi in _DEFAULT_IGNORABLE)
 
 
+def _script(c: str) -> str:
+    """First word of the character name, past 'COMBINING': LATIN, DEVANAGARI, THAI, ... (UNKNOWN if unnamed)."""
+    words = unicodedata.name(c, "UNKNOWN").split()
+    return words[1] if words[0] == "COMBINING" and len(words) > 1 else words[0]
+
+
+def _foreign_mark(mark: str, base_script: str) -> bool:
+    """A combining mark whose script differs from its base letter's (a visarga after a Latin letter looks like
+    a colon)."""
+    o = ord(mark)
+    if any(lo <= o <= hi for lo, hi in _INHERITED_MARKS):
+        return False
+    return _script(mark) != base_script
+
+
 def _keyword_chars_ok(value: str) -> bool:
     """Letters of any script (with their combining marks), decimal digits, space, apostrophe, dot, hyphen.
 
     A combining mark must follow a letter (or a mark on a letter), at most MAX_MARKS_PER_LETTER per letter;
-    overlay marks (which draw a slash or bar through a letter) and enclosing marks are refused, as are
+    a mark must belong to its letter's script (diacritics aside); overlay marks (which draw a slash or bar
+    through a letter) and enclosing marks are refused, as are
     default-ignorable code points and modifier letters outside a short allowlist."""
     marks = None  # None: the previous character is not a letter or a mark on a letter
+    base = ""  # script of the letter the marks sit on
     for c in value:
         cat = unicodedata.category(c)
         if _default_ignorable(c):
@@ -135,12 +162,15 @@ def _keyword_chars_ok(value: str) -> bool:
         if c in KEYWORD_PUNCTUATION or cat == "Nd":
             marks = None
         elif cat[0] == "L":
-            if cat == "Lm" and c not in _ALLOWED_LM:
+            if (cat == "Lm" and c not in _ALLOWED_LM) or c in _REFUSED_LETTERS:
                 return False
             marks = 0
+            base = _script(c)
         elif cat in ("Mn", "Mc"):
             if marks is None or marks >= MAX_MARKS_PER_LETTER or unicodedata.combining(c) == 1:
                 return False  # combining class 1 = overlay
+            if _foreign_mark(c, base):
+                return False  # e.g. a Devanagari visarga after a Latin letter
             marks += 1
         else:  # Me (enclosing marks), symbols, other punctuation, separators, controls, unassigned
             return False
@@ -736,7 +766,7 @@ def undo_entry(
         with store.transaction() as state:
             _prune(state, now)
             if change_id in state["rejected_undos"]:
-                raise OrganizeError(
+                raise UndoRejectedError(
                     f"the undo of {change_id} was rejected by the owner; to change these preferences, "
                     "make the change again with set_preferences"
                 )
