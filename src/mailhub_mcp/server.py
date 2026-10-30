@@ -84,6 +84,14 @@ def tool(**kwargs):
     return decorator
 
 
+def _assess_fields(m: MessageSummary) -> list[str]:
+    """Every sender-controlled text field of a message that feeds the suspicion heuristics."""
+    fields = [m.subject, m.from_, m.to, m.reply_to, m.snippet]
+    if isinstance(m, Message):
+        fields += [m.cc, m.body, *(a.filename for a in m.attachments)]
+    return fields
+
+
 def _present(value, nonce: str, tool_names: frozenset[str]):
     """Delimit and assess every message inside a provider result.
 
@@ -92,10 +100,8 @@ def _present(value, nonce: str, tool_names: frozenset[str]):
     internal hidden_removed count is still available.
     """
     if isinstance(value, Message):
-        fields = [value.subject, value.from_, value.snippet, value.body]
         update = {"body": wrap_untrusted(value.body, nonce), "snippet": wrap_untrusted(value.snippet, nonce)}
     elif isinstance(value, MessageSummary):  # also DraftSummary
-        fields = [value.subject, value.from_, value.snippet]
         update = {"snippet": wrap_untrusted(value.snippet, nonce)}
     elif isinstance(value, Thread):
         return value.model_copy(update={"messages": [_present(m, nonce, tool_names) for m in value.messages]})
@@ -105,7 +111,7 @@ def _present(value, nonce: str, tool_names: frozenset[str]):
         return [_present(v, nonce, tool_names) for v in value]
     else:
         return value
-    reasons = assess(fields, getattr(value, "hidden_removed", 0), tool_names)
+    reasons = assess(_assess_fields(value), getattr(value, "hidden_removed", 0), tool_names)
     return value.model_copy(update={**update, "suspicious": bool(reasons), "suspicious_reasons": reasons})
 
 
@@ -529,7 +535,7 @@ async def create_draft(
             raise MessageNotFound([reply_to_message_id])
         thread = p.get_thread(found.found[0].thread_id)
         if any(
-            assess([m.subject, m.from_, m.snippet, m.body], m.hidden_removed, names) for m in thread.messages
+            assess(_assess_fields(m), m.hidden_removed, names) for m in thread.messages
         ):
             raise MailhubError(
                 "this thread contains a message flagged as a possible prompt injection; "

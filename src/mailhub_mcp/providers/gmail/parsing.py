@@ -32,7 +32,7 @@ def _extract_body(payload: dict) -> tuple[str, list[dict], int]:
         body = part.get("body", {})
         if part.get("filename"):
             attachments.append(
-                {"filename": clean_text(part["filename"]), "mime_type": mime, "size": body.get("size", 0)}
+                {"filename": clean_text(part["filename"]), "mime_type": clean_text(mime), "size": body.get("size", 0)}
             )
         elif mime == "text/plain" and body.get("data"):
             plain.append(_decode(body["data"]))
@@ -63,7 +63,7 @@ def summarize(msg: dict) -> dict:
         "to": clean_text(h.get("to", "")),
         "reply_to": clean_text(h.get("reply-to", "")),
         "subject": clean_text(h.get("subject", "")),
-        "date": h.get("date", ""),
+        "date": clean_text(h.get("date", "")),
         "snippet": clean_text(msg.get("snippet", "")),
         "labels": labels,
         "internal_date": int(msg.get("internalDate", 0)),

@@ -197,3 +197,22 @@ def test_invisible_chars_stripped_and_reply_to_parsed(fake):
     )
     m = get_message(fake, "m1")
     assert (m["subject"], m["reply_to"], m["from"], m["snippet"]) == ("Hello", "r@x.com", "a@b.com", "snip")
+
+
+def test_date_and_attachment_mime_type_are_cleaned():
+    from mailhub_mcp.providers.gmail.parsing import full
+    msg = {
+        "id": "m1", "threadId": "t1", "labelIds": [], "snippet": "", "internalDate": "0",
+        "payload": {
+            "mimeType": "multipart/mixed",
+            "headers": [{"name": "Date", "value": "Mon, 1 Jan 2024‮ 10:00\U000e0041 +0000"}],
+            "parts": [
+                {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(b"hi").decode()}},
+                {"mimeType": "application/pdf​\U000e0049", "filename": "a⁦.pdf",
+                 "body": {"size": 3, "attachmentId": "x"}},
+            ],
+        },
+    }
+    m = full(msg)
+    assert m["date"] == "Mon, 1 Jan 2024 10:00 +0000"
+    assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3}]
