@@ -483,7 +483,8 @@ async def get_preferences(account: str | None = None) -> dict:
         "Changes that raise attention (marking something important, un-ignoring) apply immediately. Changes that lower attention "
         "(ignoring something, un-marking important) create a proposal that does NOT apply: tell the user to approve it outside this chat with "
         "`mailhub-admin preferences approve <id>` (or reject it with `... reject <id>`). "
-        "Returns change_id, 'applied' and 'pending' (proposal_id, scope, field, op, values); undo applied changes with undo_change."
+        "Returns change_id, 'applied' and 'pending' (proposal_id, scope, field, op, values); each value is enclosed in "
+        "[untrusted:<nonce>] ... [/untrusted:<nonce>] markers (one nonce per response). Undo applied changes with undo_change."
     ),
 )
 async def set_preferences(
@@ -495,13 +496,14 @@ async def set_preferences(
 ) -> dict:
     valid = set(registry.aliases())
     try:
-        return await to_thread.run_sync(
+        res = await to_thread.run_sync(
             lambda: preferences.set_preferences(
                 store, journal, scope, add, remove, last_triage_at, user_request, valid_scopes={preferences.GLOBAL, *valid},
             )
         )
     except MailhubError as exc:
         raise _pref_error(scope, exc) from exc
+    return _guard_prefs(res, new_nonce())
 
 
 @tool(

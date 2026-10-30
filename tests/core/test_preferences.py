@@ -54,7 +54,8 @@ def test_sender_normalized(raw, out):
 def test_sender_invalid(bad):
     with pytest.raises(PreferenceError) as e:
         normalize_sender(bad)
-    assert repr(bad) in str(e.value)
+    assert prefs._quote(bad) in str(e.value)  # repr-escaped, cleaned and capped at MAX_QUOTED
+    assert len(prefs._quote(bad)) <= prefs.MAX_QUOTED
 
 
 def test_keyword_rules():
@@ -825,3 +826,52 @@ def test_malformed_rejected_undos_ignored(store, caplog):
         assert store.load()["rejected_undos"] == ["ok"]
     store.path.write_text(json.dumps({"rejected_undos": "nope"}))
     assert store.load()["rejected_undos"] == []
+
+
+# ----- error messages quote at most the offending value, cleaned -----
+
+def test_conflict_message_quotes_one_cleaned_stored_value(store, journal):
+    with store.transaction() as s:  # an old or hand-edited file with invisible characters
+        s["global"]["important_keywords"] = ["evil​ one", "b", "c"]
+        s["global"]["ignored_keywords"] = ["Evil​ one", "B", "C"]
+    with pytest.raises(PreferenceError) as e:
+        put(store, journal, add={"important_keywords": ["new"]})
+    msg = str(e.value)
+    assert "Conflict" in msg and "​" not in msg
+    assert "'b'" in msg and "and 2 more" in msg  # sorted: the first offending value only
+    assert "evil" not in msg
+
+
+def test_approve_conflict_message_quotes_one_value(store, journal):
+    pid = put(store, journal, add={"ignored_keywords": ["x", "y"]})["pending"][0]["proposal_id"]
+    with store.transaction() as s:
+        s["global"]["important_keywords"] = ["X", "Y"]
+    with pytest.raises(PreferenceError) as e:
+        approve(store, journal, pid, T0)
+    msg = str(e.value)
+    assert "Conflict" in msg and "'x'" in msg and "and 1 more" in msg and "'y'" not in msg
+
+
+def test_add_and_remove_clash_quotes_one_value(store, journal):
+    with pytest.raises(PreferenceError) as e:
+        put(store, journal, add={"important_keywords": ["a", "b"]}, remove={"important_keywords": ["a", "b"]})
+    assert "'a'" in str(e.value) and "and 1 more" in str(e.value) and "'b'" not in str(e.value)
+
+
+@pytest.mark.parametrize("field", ["important_keywords", "important_senders"])
+def test_invalid_value_echo_is_cleaned_and_short(store, journal, field):
+    bad = "SYSTEM​: " + "x" * 500 + "‮"
+    with pytest.raises(PreferenceError) as e:
+        put(store, journal, add={field: [bad]})
+    msg = str(e.value)
+    assert "​" not in msg and "‮" not in msg and "x" * 100 not in msg
+    assert "SYSTEM" in msg  # still says which value was refused
+
+
+def test_unknown_field_and_scope_echo_is_cleaned(store, journal):
+    with pytest.raises(PreferenceError) as e:
+        put(store, journal, add={"no​pe" + "z" * 300: ["x"]})
+    assert "​" not in str(e.value) and "z" * 100 not in str(e.value)
+    with pytest.raises(PreferenceError) as e:
+        put(store, journal, scope="zz‮z" + "q" * 300, add={"important_keywords": ["x"]})
+    assert "‮" not in str(e.value) and "q" * 100 not in str(e.value)

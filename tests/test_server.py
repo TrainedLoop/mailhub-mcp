@@ -609,7 +609,7 @@ def test_preference_tools_annotations_and_description():
 def test_set_preferences_raise_applies_and_lower_creates_proposal(fakes):
     out = _set(add={"important_senders": ["Boss@Corp.com"]})
     assert out["change_id"] and out["pending"] == []
-    assert out["applied"][0]["values"] == ["boss@corp.com"]
+    assert _raw(out["applied"][0]["values"]) == ["boss@corp.com"]
     low = _set(scope="alice-personal", add={"ignored_keywords": ["promo"]}, user_request="stop promo")
     assert low["change_id"] is None and low["applied"] == []
     assert low["pending"][0]["proposal_id"].startswith("p-")
@@ -864,3 +864,15 @@ def test_create_draft_refused_when_attachment_name_is_suspicious(fakes):
     with pytest.raises(ToolError, match="flagged as a possible prompt injection"):
         call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "at2"})
     assert not fakes.a.drafts
+
+
+def test_set_preferences_wraps_applied_and_pending_values_with_one_nonce(fakes):
+    out = _set(add={"important_keywords": ["boleto"], "ignored_keywords": ["promo"]})
+    assert _raw(out["applied"][0]["values"]) == ["boleto"]
+    assert _raw(out["pending"][0]["values"]) == ["promo"]
+    nonces = _nonces(out)
+    assert len(nonces) == 2 and len(set(nonces)) == 1
+    assert out["pending"][0]["proposal_id"].startswith("p-")  # ids stay plain
+    assert out["applied"][0]["field"] == "important_keywords"
+    other = _set(add={"important_keywords": ["nota"]})
+    assert set(_nonces(other)) != set(nonces)

@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from mailhub_mcp.core.content import clean_text
 from mailhub_mcp.core.errors import MailhubError, OrganizeError
 from mailhub_mcp.core.history import undone_ids
 from mailhub_mcp.core.journal import Journal
@@ -52,6 +53,7 @@ MAX_USER_REQUEST = 500
 PROPOSAL_TTL = timedelta(days=14)
 CLOCK_SKEW = timedelta(minutes=5)
 RECENT_DEFAULT = 20
+MAX_QUOTED = 60
 
 _SENDER_RE = re.compile(r"[^@\s<>,;:\"'()\[\]\\]*@[a-z0-9]([a-z0-9.-]*[a-z0-9])?")
 _BAD_CATEGORIES = {"Cc", "Cf", "Zl", "Zp"}
@@ -59,6 +61,21 @@ _BAD_CATEGORIES = {"Cc", "Cf", "Zl", "Zp"}
 
 class PreferenceError(MailhubError, ValueError):
     pass
+
+
+def _quote(value: Any) -> str:
+    """A value echoed in an error message: invisible characters removed, repr-escaped, at most MAX_QUOTED
+    characters. Error text goes back to the model without untrusted markers, so it carries as little of a
+    value as needed to say which one was refused."""
+    text = repr(clean_text(value)) if isinstance(value, str) else clean_text(repr(value))
+    return text if len(text) <= MAX_QUOTED else text[: MAX_QUOTED - 1] + "\u2026"
+
+
+def _quote_some(values: Collection[Any]) -> str:
+    """The first offending value, quoted, and how many more there are."""
+    items = list(values)
+    more = f" (and {len(items) - 1} more)" if len(items) > 1 else ""
+    return _quote(items[0]) + more if items else "''"
 
 
 def is_raising(field: str, op: str) -> bool:
@@ -71,14 +88,14 @@ def _has_bad_chars(value: str) -> bool:
 
 def normalize_sender(value: Any) -> str:
     if not isinstance(value, str):
-        raise PreferenceError(f"Invalid sender pattern {value!r}: must be a string")
+        raise PreferenceError(f"Invalid sender pattern {_quote(value)}: must be a string")
     v = value.strip().lower()
     if (
         not v or len(v) > MAX_SENDER_LEN or _has_bad_chars(v) or not _SENDER_RE.fullmatch(v)
         or "." not in v.split("@", 1)[1] or ".." in v
     ):
         raise PreferenceError(
-            f"Invalid sender pattern {value!r}: use name@domain or @domain (lowercase, at most "
+            f"Invalid sender pattern {_quote(value)}: use name@domain or @domain (lowercase, at most "
             f"{MAX_SENDER_LEN} characters)"
         )
     return v
@@ -135,15 +152,15 @@ def normalize_keyword(value: Any) -> str:
     text shown back to the model: no colons, slashes, brackets or @ leaves no room for instruction-like
     syntax or sender patterns hidden in a keyword."""
     if not isinstance(value, str):
-        raise PreferenceError(f"Invalid keyword {value!r}: must be a string")
+        raise PreferenceError(f"Invalid keyword {_quote(value)}: must be a string")
     v = unicodedata.normalize("NFC", value).strip()
     if not v or len(v) > MAX_KEYWORD_LEN or _has_bad_chars(v):
         raise PreferenceError(
-            f"Invalid keyword {value!r}: 1-{MAX_KEYWORD_LEN} characters, no control characters or newlines"
+            f"Invalid keyword {_quote(value)}: 1-{MAX_KEYWORD_LEN} characters, no control characters or newlines"
         )
     if not _keyword_chars_ok(v):
         raise PreferenceError(
-            f"Invalid keyword {value!r}: only letters, digits, spaces, apostrophes, dots and hyphens are "
+            f"Invalid keyword {_quote(value)}: only letters, digits, spaces, apostrophes, dots and hyphens are "
             "allowed (use important_senders / ignored_senders for addresses)"
         )
     return v
@@ -327,7 +344,7 @@ def _check_rules(rules: dict, scope: str, touched: Collection[str]) -> None:
             clash = {_key(a, v) for v in rules[a]} & {_key(b, v) for v in rules[b]}
             if clash:
                 raise PreferenceError(
-                    f"Conflict in scope {scope!r}: {sorted(clash)} cannot be both in {a} and {b}"
+                    f"Conflict in scope {scope!r}: {_quote_some(sorted(clash))} cannot be both in {a} and {b}"
                 )
 
 
@@ -354,7 +371,7 @@ def _parse_ops(spec: Any, op: str) -> list[tuple[str, str, list[str]]]:
         if field == "last_triage_at":
             raise PreferenceError("last_triage_at is not a list field; use the last_triage_at argument")
         if field not in LIST_FIELDS:
-            raise PreferenceError(f"Unknown field {field!r}; valid fields: {', '.join(LIST_FIELDS)}")
+            raise PreferenceError(f"Unknown field {_quote(field)}; valid fields: {', '.join(LIST_FIELDS)}")
         if not isinstance(values, list):
             raise PreferenceError(f"{op}[{field!r}] must be a list of values")
         seen: dict[str, str] = {}
@@ -381,9 +398,9 @@ def _parse_triage_time(value: Any, now: datetime) -> str:
             raise ValueError
         moment = _aware(datetime.fromisoformat(value.strip())).astimezone(timezone.utc)
     except (ValueError, OverflowError):
-        raise PreferenceError(f"Invalid last_triage_at {value!r}: expected an ISO 8601 timestamp") from None
+        raise PreferenceError(f"Invalid last_triage_at {_quote(value)}: expected an ISO 8601 timestamp") from None
     if moment > now + CLOCK_SKEW:
-        raise PreferenceError(f"Invalid last_triage_at {value!r}: it is in the future")
+        raise PreferenceError(f"Invalid last_triage_at {_quote(value)}: it is in the future")
     return moment.isoformat()
 
 
@@ -464,7 +481,7 @@ def set_preferences(
     request = _validate_user_request(user_request)
     if scope != GLOBAL and scope not in valid_scopes:
         raise PreferenceError(
-            f"Unknown scope {scope!r}; valid scopes: {', '.join([GLOBAL, *sorted(valid_scopes)])}"
+            f"Unknown scope {_quote(scope)}; valid scopes: {', '.join([GLOBAL, *sorted(valid_scopes)])}"
         )
     ops = _parse_ops(add, "add") + _parse_ops(remove, "remove")
     triage = None if last_triage_at is None else _parse_triage_time(last_triage_at, now)
@@ -474,7 +491,7 @@ def set_preferences(
         removing = {_key(field, v) for o, f, vs in ops if o == "remove" and f == field for v in vs}
         clash = [v for v in values if _key(field, v) in removing]
         if clash:
-            raise PreferenceError(f"Conflict: {clash} both added to and removed from {field}")
+            raise PreferenceError(f"Conflict: {_quote_some(clash)} both added to and removed from {field}")
 
     change_id = None
     # Lock order everywhere: journal.lock -> store flock -> journal's internal write lock. The journal
@@ -635,7 +652,7 @@ def approve(
                 clash = [v for v in values if _key(field, v) in held]
                 if clash:
                     raise PreferenceError(
-                        f"Conflict in scope {scope!r}: {clash} is in {opposite}; remove it from "
+                        f"Conflict in scope {scope!r}: {_quote_some(clash)} is in {opposite}; remove it from "
                         f"{opposite} first (approve that proposal first), then approve this one"
                     )
             trial = _snapshot(rules, FIELDS)
