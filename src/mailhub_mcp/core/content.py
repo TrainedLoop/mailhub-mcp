@@ -6,7 +6,7 @@ markers) and heuristic suspicion flags. The flags are an aid, not a guarantee.
 
 import re
 import secrets
-from collections import Counter
+from collections import defaultdict
 from html.parser import HTMLParser
 
 HIDDEN_TEXT_THRESHOLD = 200
@@ -44,9 +44,31 @@ _BLOCK = frozenset(
     "tbody td tfoot th thead tr ul br".split()
 )
 _ALWAYS_DROPPED = frozenset({"head", "script", "style", "template", "noscript"})
-_NUM = re.compile(r"^([0-9]*\.?[0-9]+)([a-z%]*)$")
+_NUM = re.compile(r"^([+-]?(?:[0-9]*\.?[0-9]+)(?:e[+-]?[0-9]+)?)([a-z%]*)$")
 _IMPORTANT = re.compile(r"!\s*important")
-_PX_PER = {"px": 1.0, "pt": 4 / 3, "em": 16.0, "rem": 16.0, "%": 0.16}
+_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})[ \t\n\r\f]?|(.))", re.DOTALL)
+_PX_PER = {
+    "px": 1.0,
+    "pt": 4 / 3,
+    "pc": 16.0,
+    "in": 96.0,
+    "cm": 37.8,
+    "mm": 3.78,
+    "q": 0.945,
+    "em": 16.0,
+    "rem": 16.0,
+    "%": 0.16,
+}
+
+
+def _css_unescape(s: str) -> str:
+    def repl(m: re.Match) -> str:
+        if m.group(1):
+            cp = int(m.group(1), 16)
+            return chr(cp) if 0 < cp <= 0x10FFFF else "\ufffd"
+        return m.group(2)
+
+    return _CSS_ESCAPE.sub(repl, s)
 
 
 def _strip_css_comments(s: str) -> str:
@@ -65,16 +87,24 @@ def _strip_css_comments(s: str) -> str:
 
 
 def _style_hides(style: str) -> bool:
-    style = _IMPORTANT.sub("", _strip_css_comments(style.lower()))
+    style = _css_unescape(_strip_css_comments(style.lower()))
     props: dict[str, str] = {}
+    important: set[str] = set()
     for part in style.split(";"):
         key, sep, value = part.partition(":")
-        if sep:
-            props[key.strip()] = value.strip()
+        if not sep:
+            continue
+        key = key.strip()
+        is_important = bool(_IMPORTANT.search(value))
+        if key in important and not is_important:
+            continue
+        if is_important:
+            important.add(key)
+        props[key] = _IMPORTANT.sub("", value).strip()
     if props.get("display") == "none" or props.get("visibility") == "hidden":
         return True
     m = _NUM.match(props.get("opacity", ""))
-    if m and float(m.group(1)) == 0 and m.group(2) in ("", "%"):
+    if m and float(m.group(1)) <= 0 and m.group(2) in ("", "%"):
         return True
     m = _NUM.match(props.get("font-size", ""))
     if m:
@@ -82,7 +112,7 @@ def _style_hides(style: str) -> bool:
         if size == 0 or (unit in _PX_PER and size * _PX_PER[unit] <= 1):
             return True
     m = _NUM.match(props.get("max-height", ""))
-    if m and float(m.group(1)) == 0 and props.get("overflow") == "hidden":
+    if m and float(m.group(1)) <= 0 and props.get("overflow") == "hidden":
         return True
     return False
 
@@ -105,6 +135,13 @@ _SAME_KIND_CLOSES = {
     "tr": {"tr"},
     "option": {"option"},
 }
+# Start tags that implicitly close an open <p> (HTML spec; table parts, body and
+# table are deliberately absent).
+_CLOSES_P = frozenset(
+    "address article aside blockquote center details dialog dir div dl fieldset "
+    "figcaption figure footer header hgroup main menu nav ol p pre section summary "
+    "ul h1 h2 h3 h4 h5 h6 li dd dt form hr".split()
+)
 
 
 class _Extractor(HTMLParser):
@@ -112,9 +149,11 @@ class _Extractor(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.out: list[str] = []
         self.hidden_removed = 0
-        # open non-void elements: (tag, hides)
-        self.stack: list[tuple[str, bool]] = []
-        self.open_counts: Counter[str] = Counter()
+        # open non-void elements: (tag, hides, is_barrier)
+        self.stack: list[tuple[str, bool, bool]] = []
+        self.positions: defaultdict[str, list[int]] = defaultdict(list)
+        # stack indices of block or hiding elements (inline end tags stop at these)
+        self.barriers: list[int] = []
         self.dropped = 0  # open elements currently hiding content
         self.in_style = 0  # style content is dropped but not counted
 
@@ -122,9 +161,23 @@ class _Extractor(HTMLParser):
         if not self.in_style:
             self.hidden_removed += len("".join(data.split()))
 
+    def _push(self, tag: str, hides: bool) -> None:
+        barrier = hides or tag in _BLOCK
+        idx = len(self.stack)
+        self.stack.append((tag, hides, barrier))
+        self.positions[tag].append(idx)
+        if barrier:
+            self.barriers.append(idx)
+        if hides:
+            self.dropped += 1
+        if tag == "style":
+            self.in_style += 1
+
     def _pop(self) -> None:
-        name, hides = self.stack.pop()
-        self.open_counts[name] -= 1
+        name, hides, barrier = self.stack.pop()
+        self.positions[name].pop()
+        if barrier:
+            self.barriers.pop()
         if hides:
             self.dropped -= 1
         if name == "style":
@@ -135,7 +188,7 @@ class _Extractor(HTMLParser):
         if not self.stack:
             return
         top = self.stack[-1][0]
-        if (top == "p" and tag in _BLOCK) or top in _SAME_KIND_CLOSES.get(tag, ()):
+        if (top == "p" and tag in _CLOSES_P) or top in _SAME_KIND_CLOSES.get(tag, ()):
             self._pop()
 
     def handle_starttag(self, tag, attrs):
@@ -144,13 +197,7 @@ class _Extractor(HTMLParser):
                 self.out.append("\n")
             return
         self._implied_end(tag)
-        hides = tag in _ALWAYS_DROPPED or _attr_hides(attrs)
-        self.stack.append((tag, hides))
-        self.open_counts[tag] += 1
-        if hides:
-            self.dropped += 1
-        if tag == "style":
-            self.in_style += 1
+        self._push(tag, tag in _ALWAYS_DROPPED or _attr_hides(attrs))
         if tag in _BLOCK and not self.dropped:
             self.out.append("\n")
 
@@ -160,7 +207,10 @@ class _Extractor(HTMLParser):
         self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
-        if tag in _VOID or not self.open_counts[tag]:
+        if tag in _VOID or not self.positions[tag]:
+            return
+        # An inline end tag never pops past an open block or hiding element.
+        if tag not in _BLOCK and self.barriers and self.barriers[-1] > self.positions[tag][-1]:
             return
         while True:
             name = self.stack[-1][0]

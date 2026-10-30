@@ -281,3 +281,68 @@ def test_footer_phrases_not_flagged(text):
 )
 def test_true_positives_still_flagged(text):
     assert "requests_action" in assess([text], 0, TOOLS)
+
+
+# ---- fix round 2 regressions ----
+
+
+@pytest.mark.parametrize("tag", ["td", "tr", "th", "tbody", "thead", "tfoot", "body", "table"])
+def test_p_not_closed_by_table_parts_or_body(tag):
+    text, removed = html_to_safe_text(f"<p hidden>hid<{tag}>X")
+    assert "X" not in text and removed > 0
+
+
+def test_p_closed_by_div():
+    text, _ = html_to_safe_text("<p hidden>a<div>visible")
+    assert text == "visible"
+
+
+def test_inline_end_tag_does_not_pop_past_hiding_block():
+    text, _ = html_to_safe_text("<span>v<div hidden>hid</span>X</div>after")
+    assert "".join(text.split()) == "vafter"
+
+
+def test_inline_end_tag_does_not_pop_past_block():
+    text, _ = html_to_safe_text("<b><p hidden>hid</b>X")
+    assert "X" not in text and "hid" not in text
+
+
+def test_inline_end_tag_does_not_pop_past_hiding_inline():
+    text, _ = html_to_safe_text('<b>v<span style="display:none">hid</b>X</span>after')
+    assert "X" not in text and "after" in text
+
+
+@pytest.mark.parametrize(
+    "style",
+    [
+        "display:none!important;display:block",
+        "opacity:0 !important;opacity:1",
+        "opacity:-1",
+        "opacity:+0",
+        "opacity:0e0",
+        "opacity:0e5",
+        "font-size:1e-5px",
+        "font-size:0.01in",
+        "font-size:0.1mm",
+        "font-size:0.2cm".replace("0.2", "0.02"),
+        "font-size:1q",
+        "font-size:0.05pc",
+        "font-size:+0px",
+        "\\64 isplay:none",
+        "d\\isplay:none",
+        "display:\\6e one",
+        "display:n\\6fne",
+        "\\64\\69splay:none",
+    ],
+)
+def test_round2_style_probes_hidden(style):
+    text, removed = html_to_safe_text(f'<p>Hello</p><span style="{style}">SECRET</span>')
+    assert "SECRET" not in text and "Hello" in text and removed > 0
+
+
+@pytest.mark.parametrize(
+    "style", ["font-size:1in", "font-size:1cm", "font-size:2mm", "opacity:1e-1", "display:none;display:block"]
+)
+def test_round2_visible_styles_kept(style):
+    text, _ = html_to_safe_text(f'<span style="{style}">shown</span>')
+    assert text == "shown"
