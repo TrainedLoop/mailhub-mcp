@@ -82,3 +82,9 @@ def test_existing_dirs_are_left_alone(tmp_path, fake_gmail):
     tmp_path.chmod(0o755)
     assert run(tmp_path, "gmail", "cs.json", "x") == 0
     assert stat.S_IMODE((tmp_path / "gmail").stat().st_mode) == 0o755
+
+
+def test_refuses_reserved_alias_global(tmp_path, capsys, fake_gmail):
+    assert run(tmp_path, "gmail", "cs.json", "global") == 2
+    assert "global" in capsys.readouterr().err
+    assert fake_gmail == []

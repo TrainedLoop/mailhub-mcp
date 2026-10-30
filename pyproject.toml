@@ -25,6 +25,7 @@ authorize = ["google-auth-oauthlib"]
 [project.scripts]
 mailhub-mcp = "mailhub_mcp.server:main"
 mailhub-authorize = "mailhub_mcp.cli:main"
+mailhub-admin = "mailhub_mcp.admin:main"
 
 [tool.uv]
 package = true

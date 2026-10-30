@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from mailhub_mcp.core.accounts import ALIAS_RE
+from mailhub_mcp.core.accounts import ALIAS_RE, RESERVED_ALIASES
 from mailhub_mcp.providers import AUTHORIZERS
 
 
@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if not ALIAS_RE.fullmatch(args.alias):
         return _fail(f"invalid alias {args.alias!r}: must match {ALIAS_RE.pattern}")
+    if args.alias in RESERVED_ALIASES:
+        return _fail(f"alias {args.alias!r} is reserved (it names the global preferences scope)")
     for other in sorted(AUTHORIZERS):
         if other != args.provider and (args.accounts_dir / other / f"{args.alias}.json").exists():
             return _fail(f"alias {args.alias!r} already exists under provider {other!r}")

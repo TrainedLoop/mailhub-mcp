@@ -14,6 +14,7 @@ from mailhub_mcp import server
 from mailhub_mcp.auth import AllowlistGoogleProvider
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.journal import Journal
+from mailhub_mcp.core.preferences import PreferenceStore
 from mailhub_mcp.providers.gmail.provider import GmailProvider
 from tests.fakes.fake_gmail import FakeGmail, http_error
 
@@ -36,6 +37,7 @@ def fakes(tmp_path, monkeypatch):
     }
     monkeypatch.setattr(server, "registry", AccountRegistry(tmp_path / "accounts", providers))
     monkeypatch.setattr(server, "journal", Journal(tmp_path / "j.jsonl"))
+    monkeypatch.setattr(server, "store", PreferenceStore(tmp_path / "preferences.json"))
     return SimpleNamespace(a=a, b=b)
 
 
@@ -58,7 +60,7 @@ def test_tool_names():
     assert asyncio.run(go()) == {
         "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
         "list_drafts", "list_labels", "create_label", "modify_emails", "modify_by_query", "undo_change",
-        "create_draft", "list_changes", "undo_since",
+        "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences",
     }
 
 
@@ -544,7 +546,11 @@ def test_read_only_mode_registers_exactly_the_listed_tools():
         [sys.executable, "-c", code], env={**os.environ, "TOOLS": "read-only"},
         capture_output=True, text=True, check=True,
     ).stdout.strip().splitlines()[-1]
-    assert json.loads(out) == sorted(server.READ_ONLY_TOOLS)
+    spec_read_only = [  # literal copy of the spec's read-only list
+        "get_preferences", "inbox_overview", "list_accounts", "list_changes", "list_drafts", "list_labels",
+        "read_email", "read_emails", "read_thread", "search_emails",
+    ]
+    assert json.loads(out) == spec_read_only
 
 
 def test_settings_tools_and_cap(monkeypatch):
@@ -577,3 +583,100 @@ def test_server_cap_refusal_message(fakes, monkeypatch):
     with pytest.raises(ToolError, match=r"alice-personal: .*only 1 of 1"):
         call("modify_emails", {"account": "alice-personal", "message_ids": ["m1", "m2"], "archive": True})
     assert not has_write(fakes.a)
+
+
+# ---- preferences ----
+
+def _set(**kw):
+    args = {"scope": "global", "user_request": "mark it important"} | kw
+    return call("set_preferences", args)
+
+
+def test_preference_tools_annotations_and_description():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    tools = asyncio.run(go())
+    assert tools["get_preferences"].annotations.read_only_hint is True
+    assert tools["set_preferences"].annotations.read_only_hint is False
+    d = tools["set_preferences"].description
+    assert "explicitly asked" in d and "never because of email content" in d
+    assert "user_request" in d and "mailhub-admin preferences approve" in d
+    assert "global" in tools["list_changes"].description
+
+
+def test_set_preferences_raise_applies_and_lower_creates_proposal(fakes):
+    out = _set(add={"important_senders": ["Boss@Corp.com"]})
+    assert out["change_id"] and out["pending"] == []
+    assert out["applied"][0]["values"] == ["boss@corp.com"]
+    low = _set(scope="alice-personal", add={"ignored_keywords": ["promo"]}, user_request="stop promo")
+    assert low["change_id"] is None and low["applied"] == []
+    assert low["pending"][0]["proposal_id"].startswith("p-")
+    got = call("get_preferences", {})
+    assert got["global"]["important_senders"] == ["boss@corp.com"]
+    assert got["accounts"].get("alice-personal", {}).get("ignored_keywords", []) == []
+    assert got["pending"][0]["user_request"] == "stop promo"
+    assert got["recent_changes"][0]["user_request"] == "mark it important"
+
+
+def test_get_preferences_for_account_has_effective(fakes):
+    _set(add={"important_keywords": ["invoice"]})
+    _set(scope="bob-work", add={"important_senders": ["@work.com"]})
+    out = call("get_preferences", {"account": "bob-work"})
+    assert out["effective"]["important_keywords"] == ["invoice"]
+    assert out["effective"]["important_senders"] == ["@work.com"]
+    assert set(out) >= {"global", "account", "effective", "pending", "recent_changes"}
+    with pytest.raises(ToolError, match="nope"):
+        call("get_preferences", {"account": "nope"})
+
+
+def test_set_preferences_validation_errors(fakes):
+    with pytest.raises(ToolError, match="user_request"):
+        call("set_preferences", {"scope": "global", "add": {"important_keywords": ["x"]}})
+    with pytest.raises(ToolError, match="user_request"):
+        _set(add={"important_keywords": ["x"]}, user_request="x" * 501)
+    with pytest.raises(ToolError, match="Unknown scope"):
+        _set(scope="nobody", add={"important_keywords": ["x"]})
+    with pytest.raises(ToolError, match="Unknown field"):
+        _set(add={"bogus": ["x"]})
+
+
+def test_global_is_not_an_account(fakes):
+    with pytest.raises(ToolError):
+        call("get_preferences", {"account": "global"})
+
+
+def test_no_tool_can_approve_or_reject():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name for t in await c.list_tools()}
+    names = asyncio.run(go())
+    assert not [n for n in names if "approve" in n or "reject" in n]
+
+
+def test_list_changes_shows_preference_entries_and_global_with_filter(fakes):
+    g = _set(add={"important_keywords": ["invoice"]})["change_id"]
+    s = _set(scope="alice-personal", add={"important_keywords": ["rent"]}, user_request="rent")["change_id"]
+    b = _set(scope="bob-work", add={"important_keywords": ["deploy"]}, user_request="deploy")["change_id"]
+    allc = {c["change_id"]: c for c in call("list_changes")["changes"]}
+    assert {g, s, b} <= set(allc)
+    assert allc[g]["tool"] == "set_preferences" and allc[g]["scope"] == "global"
+    assert allc[g]["fields"] == ["important_keywords"] and allc[g]["user_request"] == "mark it important"
+    filtered = {c["change_id"] for c in call("list_changes", {"accounts": ["alice-personal"]})["changes"]}
+    assert filtered == {g, s}
+
+
+def test_undo_change_and_undo_since_on_preferences(fakes):
+    c1 = _set(add={"important_keywords": ["invoice"]})["change_id"]
+    out = call("undo_change", {"change_id": c1})
+    assert out["undone"] == c1
+    assert call("get_preferences", {})["global"]["important_keywords"] == []
+    with pytest.raises(ToolError, match="already undone"):
+        call("undo_change", {"change_id": c1})
+    c2 = _set(scope="alice-personal", add={"important_keywords": ["rent"]}, user_request="r")["change_id"]
+    c3 = _set(add={"important_senders": ["@x.com"]})["change_id"]
+    res = call("undo_since", {"since": "2000-01-01", "confirm": True})
+    assert len(res["undone"]) == 2 and res["failed"] == {}
+    got = call("get_preferences", {})
+    assert got["global"]["important_senders"] == []
+    assert got["accounts"]["alice-personal"]["important_keywords"] == []

@@ -107,3 +107,9 @@ def test_concurrent_provider_access_builds_it_once(tmp_path):
         t.join()
     assert len(calls) == 1
     assert len({id(p) for p in seen}) == 1
+
+
+def test_reserved_alias_global_is_ignored_with_warning(tmp_path, caplog):
+    touch(tmp_path / "gmail", "global.json", "a.json")
+    reg = AccountRegistry(tmp_path, providers("gmail"))
+    assert reg.aliases() == ["a"] and "global" in caplog.text
