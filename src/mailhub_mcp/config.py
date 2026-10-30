@@ -18,6 +18,8 @@ class Settings:
     port: int
     max_changes_per_day: int = 2000
     tools_mode: Literal["all", "read-only"] = "all"
+    # Gmail quota units each mailbox may spend per minute (80% of the 6,000 per-user limit).
+    gmail_units_per_minute: int = 4800
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -34,6 +36,7 @@ class Settings:
             port=int(os.environ.get("PORT", "8742")),
             max_changes_per_day=_int_env("MAX_CHANGES_PER_DAY", 2000),
             tools_mode=_tools_mode(os.environ.get("TOOLS", "all")),
+            gmail_units_per_minute=_positive_int_env("GMAIL_UNITS_PER_MINUTE", 4800),
         )
 
 
@@ -47,6 +50,13 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}") from None
     if value < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
+    return value
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    value = _int_env(name, default)
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {value!r}")
     return value
 
 

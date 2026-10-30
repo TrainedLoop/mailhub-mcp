@@ -15,20 +15,29 @@ LIST_PAGE_SIZE = 500
 # Per-id batch attempts: a rate-limited id gets 4 (waits below), anything else 3 (1 s, 2 s).
 MAX_ATTEMPTS = 3
 MAX_RATE_LIMIT_ATTEMPTS = 4
-# Gmail allows 250 quota units per user per second over a moving window. Budget half of it:
-# headroom for window effects and for other clients of the same mailbox.
-MAX_UNITS_PER_SECOND = 125
-# Quota units per call (https://developers.google.com/gmail/api/reference/quota).
-MESSAGE_GET_UNITS = 5
+# Gmail's per-user limit is 6,000 quota units per minute for projects created since May 2026
+# (15,000 for older ones). Budget 80% of it by default: headroom for the moving window and for
+# other clients of the same mailbox. GMAIL_UNITS_PER_MINUTE overrides it.
+GMAIL_UNITS_PER_MINUTE_LIMIT = 6000
+DEFAULT_UNITS_PER_MINUTE = 4800
+DEFAULT_UNITS_PER_SECOND = DEFAULT_UNITS_PER_MINUTE / 60
+# Quota units per call (https://developers.google.com/workspace/gmail/api/reference/quota).
+MESSAGE_GET_UNITS = 20  # format=metadata or minimal
+MESSAGE_GET_FULL_UNITS = 60  # format=full or raw
 MESSAGE_LIST_UNITS = 5
-THREAD_GET_UNITS = 10
+THREAD_GET_UNITS = 120  # format=full, the only format used here
 LABELS_LIST_UNITS = 1
-LABELS_CREATE_UNITS = 5
 BATCH_MODIFY_UNITS = 50
 DRAFT_LIST_UNITS = 5
-DRAFT_GET_UNITS = 5
-DRAFT_CREATE_UNITS = 10
 PROFILE_UNITS = 1
+# Not documented in the 2026 table; assumed from the costs of comparable calls.
+LABELS_CREATE_UNITS = 5
+DRAFT_GET_UNITS = 20  # format=metadata, like messages.get
+DRAFT_CREATE_UNITS = 10
+
+
+def message_get_units(fmt: str) -> int:
+    return MESSAGE_GET_FULL_UNITS if fmt in ("full", "raw") else MESSAGE_GET_UNITS
 # Waits before each retry of a rate-limited call; the moving window needs seconds to drain.
 RATE_LIMIT_BACKOFF = (5, 15, 30)
 # googleapiclient retries 429, 5xx and 403 rate-limit responses with a short jittered backoff
@@ -87,6 +96,7 @@ class RateLimiter:
     """
 
     def __init__(self, units_per_second: float, now=None, sleep=None):
+        self.units_per_second = units_per_second
         self._interval = 1 / units_per_second
         self._now = now
         self._sleep = sleep
@@ -108,7 +118,7 @@ def _execute(request, limiter: RateLimiter | None, units: int, retry: bool = Tru
 
     `retry=False` (draft creation) sends exactly once: a retried create could duplicate the draft.
     """
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     limiter.acquire(units)
     if not retry:
         return request.execute()
@@ -133,7 +143,7 @@ def _run_batches(
     ids = list(dict.fromkeys(ids))
     found: dict[str, dict] = {}
     errors: dict[str, Exception] = {}
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
 
     def collect(request_id, response, exception):
         if exception is not None:
@@ -178,12 +188,12 @@ def batch_get(
             kwargs["metadataHeaders"] = METADATA_HEADERS
         return svc.users().messages().get(**kwargs)
 
-    found, errors = _run_batches(svc, ids, make_request, limiter)
+    found, errors = _run_batches(svc, ids, make_request, limiter, message_get_units(fmt))
     return [found[i] for i in dict.fromkeys(ids) if i in found], errors
 
 
 def list_ids(svc, query: str, limit: int, limiter: RateLimiter | None = None) -> list[str]:
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     ids: list[str] = []
     page_token = None
     while len(ids) < limit:
@@ -209,7 +219,7 @@ def search_report(
     svc, query: str, max_results: int, limiter: RateLimiter | None = None
 ) -> tuple[list[dict], int]:
     """Summaries of the readable matches, and how many matches could not be read."""
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     ids = list_ids(svc, query, max_results, limiter)
     msgs, errors = batch_get(svc, ids, "metadata", limiter=limiter)
     # A 404 means the message vanished between list and fetch: not a read failure.
@@ -223,7 +233,7 @@ def search(svc, query: str, max_results: int, limiter: RateLimiter | None = None
 
 def get_message(svc, message_id: str, limiter: RateLimiter | None = None) -> dict:
     request = svc.users().messages().get(userId="me", id=message_id, format="full")
-    msg = _execute(request, limiter, MESSAGE_GET_UNITS)
+    msg = _execute(request, limiter, MESSAGE_GET_FULL_UNITS)
     return full(msg)
 
 
@@ -240,7 +250,7 @@ def list_labels(svc, limiter: RateLimiter | None = None) -> list[dict]:
 
 
 def list_drafts(svc, max_results: int, limiter: RateLimiter | None = None) -> list[dict]:
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     ids: list[str] = []
     page_token = None
     while len(ids) < max_results:
@@ -281,7 +291,7 @@ def create_draft(
     reply_to_message_id: str | None,
     limiter: RateLimiter | None = None,
 ) -> dict:
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     msg = EmailMessage()
     msg["To"] = to
     if cc:
@@ -322,7 +332,7 @@ def create_draft(
 
 
 def ensure_label(svc, name: str, limiter: RateLimiter | None = None) -> dict:
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     for label in list_labels(svc, limiter):
         if label["name"].lower() == name.lower():
             return label
@@ -334,7 +344,7 @@ def ensure_label(svc, name: str, limiter: RateLimiter | None = None) -> dict:
 def batch_modify(
     svc, ids: list[str], add: list[str], remove: list[str], limiter: RateLimiter | None = None
 ) -> None:
-    limiter = limiter or RateLimiter(MAX_UNITS_PER_SECOND)
+    limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     for start in range(0, len(ids), 1000):
         body = {"ids": ids[start:start + 1000], "addLabelIds": add, "removeLabelIds": remove}
         request = svc.users().messages().batchModify(userId="me", body=body)

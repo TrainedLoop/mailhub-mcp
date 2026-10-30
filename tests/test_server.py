@@ -559,17 +559,22 @@ def test_settings_tools_and_cap(monkeypatch):
 
     monkeypatch.delenv("TOOLS", raising=False)
     monkeypatch.delenv("MAX_CHANGES_PER_DAY", raising=False)
+    monkeypatch.delenv("GMAIL_UNITS_PER_MINUTE", raising=False)
     s = Settings.from_env()
     assert s.tools_mode == "all" and s.max_changes_per_day == 2000
+    assert s.gmail_units_per_minute == 4800
     monkeypatch.setenv("TOOLS", "read-only")
     monkeypatch.setenv("MAX_CHANGES_PER_DAY", "5")
+    monkeypatch.setenv("GMAIL_UNITS_PER_MINUTE", "12000")
     s = Settings.from_env()
     assert s.tools_mode == "read-only" and s.max_changes_per_day == 5
+    assert s.gmail_units_per_minute == 12000
 
 
 @pytest.mark.parametrize(
     "name,value",
-    [("TOOLS", "readonly"), ("TOOLS", "write"), ("MAX_CHANGES_PER_DAY", "lots"), ("MAX_CHANGES_PER_DAY", "-1")],
+    [("TOOLS", "readonly"), ("TOOLS", "write"), ("MAX_CHANGES_PER_DAY", "lots"), ("MAX_CHANGES_PER_DAY", "-1"),
+     ("GMAIL_UNITS_PER_MINUTE", "0"), ("GMAIL_UNITS_PER_MINUTE", "-5"), ("GMAIL_UNITS_PER_MINUTE", "fast")],
 )
 def test_settings_invalid_values_raise(monkeypatch, name, value):
     from mailhub_mcp.config import Settings

@@ -53,6 +53,7 @@ cp .env.example .env
 | `CONTAINER_NAME`, `COMPOSE_PROJECT_NAME` | Optional. Container name (default `mailhub-mcp`) and Compose project name (default: the directory name). Give each instance on a host its own |
 | `PORT` | Optional. Port the server listens on inside the container, default `8742`. The compose file maps it automatically; normally leave it alone |
 | `MAX_CHANGES_PER_DAY` | Optional. Most messages `modify_emails` and `modify_by_query` may change per account in a rolling 24 hours, default `2000`. Undo is never capped |
+| `GMAIL_UNITS_PER_MINUTE` | Optional. Gmail quota units each mailbox may spend per minute, default `4800` (80% of Google's 6,000 per-user limit for Cloud projects created since May 2026). Set `12000` if your project still has the older 15,000 limit |
 | `TOOLS` | Optional. `all` (default) or `read-only`; see "Scheduled triage" below |
 | `JWT_SIGNING_KEY` | Signs issued tokens and encrypts the OAuth state. Generate with `openssl rand -hex 32` |
 

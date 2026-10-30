@@ -26,7 +26,7 @@ from mailhub_mcp.core.journal import Journal
 from mailhub_mcp.core.models import Message, MessageSummary, Thread, with_account
 from mailhub_mcp.core.preferences import PreferenceStore
 from mailhub_mcp.core.overview import build_overview
-from mailhub_mcp.providers import PROVIDERS
+from mailhub_mcp.providers import provider_factories
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("mailhub-mcp")
@@ -78,7 +78,9 @@ class AuditLog(Middleware):
 
 mcp = FastMCP("mailhub", auth=build_auth(settings), middleware=[AuditLog()])
 
-registry = AccountRegistry(settings.accounts_dir, PROVIDERS)
+registry = AccountRegistry(
+    settings.accounts_dir, provider_factories(gmail_units_per_minute=settings.gmail_units_per_minute)
+)
 journal = Journal(settings.journal_path)
 store = PreferenceStore(settings.journal_path.parent / "preferences.json")
 if not registry.all():

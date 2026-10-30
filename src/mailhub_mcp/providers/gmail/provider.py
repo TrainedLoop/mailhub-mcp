@@ -46,6 +46,7 @@ class GmailProvider:
         alias: str,
         credential_path: Path,
         build_service: Callable[[Credentials], Any] = default_build,
+        units_per_minute: int = api.DEFAULT_UNITS_PER_MINUTE,
     ):
         self.alias = alias
         self._credential_path = credential_path
@@ -54,7 +55,7 @@ class GmailProvider:
         self._address: str | None = None
         self._lock = threading.Lock()
         # Gmail's quota is per mailbox: every call on this account shares one pace.
-        self._limiter = api.RateLimiter(api.MAX_UNITS_PER_SECOND)
+        self._limiter = api.RateLimiter(units_per_minute / 60)
 
     def _service(self) -> Any:
         # httplib2 is not thread-safe: build a fresh client per call, share only credentials.

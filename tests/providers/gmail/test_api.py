@@ -261,7 +261,7 @@ def test_batch_get_paces_batches(fake, monkeypatch):
     batch_get(fake, [f"p{i}" for i in range(120)], "minimal")
     # batches of 50, 50, 20: the 2nd and 3rd wait for the previous batch's budget
     assert len(paced) == 2
-    cost = api.BATCH_SIZE * api.MESSAGE_GET_UNITS / api.MAX_UNITS_PER_SECOND
+    cost = api.BATCH_SIZE * api.MESSAGE_GET_UNITS / api.DEFAULT_UNITS_PER_SECOND
     assert all(abs(s - cost) < 1e-9 for s in paced)
 
 
@@ -294,7 +294,7 @@ def test_shared_limiter_paces_across_calls(fake):
     from mailhub_mcp.providers.gmail import api
 
     paced = []
-    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=paced.append)
+    limiter = api.RateLimiter(500, now=lambda: 0.0, sleep=paced.append)
     for i in range(50):
         fake.add_message(f"q{i}")
     batch_get(fake, [f"q{i}" for i in range(50)], "minimal", limiter=limiter)
@@ -369,10 +369,16 @@ def test_is_rate_limited_reads_error_details_when_populated():
     assert is_rate_limited(exc)
 
 
+def test_default_budget_is_80_percent_of_6000_units_per_minute():
+    from mailhub_mcp.providers.gmail import api
+
+    assert api.DEFAULT_UNITS_PER_MINUTE == 4800
+    assert api.DEFAULT_UNITS_PER_SECOND == 80
+
+
 def test_limiter_budgets_units():
     from mailhub_mcp.providers.gmail import api
 
-    assert api.MAX_UNITS_PER_SECOND == 125
     paced = []
     limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=paced.append)
     limiter.acquire(250)
@@ -380,14 +386,13 @@ def test_limiter_budgets_units():
     assert paced == [2.0]
 
 
-def test_batch_get_charges_five_units_per_message(fake):
-    from mailhub_mcp.providers.gmail import api
-
-    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=lambda s: None)
+@pytest.mark.parametrize("fmt,units", [("minimal", 20), ("metadata", 20), ("full", 60)])
+def test_batch_get_charges_units_by_format(fake, fmt, units):
+    spy = _SpyLimiter()
     fake.add_message("m1")
     fake.add_message("m2")
-    batch_get(fake, ["m1", "m2"], "minimal", limiter=limiter)
-    assert limiter.next_free == pytest.approx(10 / 125)
+    batch_get(fake, ["m1", "m2"], fmt, limiter=spy)
+    assert spy.units == [2 * units]
 
 
 def test_batch_get_rate_limit_backoff_is_5_15_30(fake, _sleeps):
@@ -422,7 +427,7 @@ def test_every_single_call_charges_its_units(fake):
     api.get_message(fake, "m1", limiter=spy)
     api.get_thread(fake, "t1", limiter=spy)
     api.list_labels(fake, limiter=spy)
-    assert spy.units == [5, 5, 10, 1]
+    assert spy.units == [5, 60, 120, 1]  # list, get(full), threads.get(full), labels.list
     spy.units.clear()
     api.ensure_label(fake, "new", limiter=spy)
     assert spy.units == [1, 5]  # labels.list + labels.create
@@ -431,10 +436,10 @@ def test_every_single_call_charges_its_units(fake):
     assert spy.units == [50]
     spy.units.clear()
     api.create_draft(fake, "x@y.com", "s", "b", None, "m1", limiter=spy)
-    assert spy.units == [5, 10]
+    assert spy.units == [20, 10]  # get(metadata) of the replied message, drafts.create
     spy.units.clear()
     api.list_drafts(fake, 5, limiter=spy)
-    assert spy.units[0] == 5
+    assert spy.units == [5, 20]  # drafts.list, then one drafts.get(metadata) in a batch
     spy.units.clear()
     api.get_profile(fake, limiter=spy)
     assert spy.units == [1]

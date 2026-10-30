@@ -246,4 +246,20 @@ def test_provider_charges_every_call_to_its_shared_limiter(tmp_path):
     provider.ensure_label("brand-new")
     provider.modify_labels(["mx"], ["INBOX"], [])
     provider.create_draft("x@y.com", "s", "b", None, None)
-    assert units == [5, 10, 1, 1, 5, 50, 10]
+    assert units == [5, 120, 1, 1, 5, 50, 10]
+
+
+def test_provider_budget_comes_from_units_per_minute(tmp_path):
+    provider = GmailProvider("a", tmp_path / "a.json", build_service=lambda c: None, units_per_minute=1200)
+    assert provider._limiter.units_per_second == pytest.approx(20)
+    default = GmailProvider("a", tmp_path / "a.json", build_service=lambda c: None)
+    assert default._limiter.units_per_second == pytest.approx(80)
+
+
+def test_provider_factories_pass_the_configured_budget(tmp_path):
+    from mailhub_mcp.providers import provider_factories
+
+    factories = provider_factories(gmail_units_per_minute=600)
+    provider = factories["gmail"]("a", tmp_path / "a.json")
+    assert isinstance(provider, GmailProvider) and provider.alias == "a"
+    assert provider._limiter.units_per_second == pytest.approx(10)
