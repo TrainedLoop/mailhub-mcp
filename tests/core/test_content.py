@@ -363,7 +363,7 @@ def test_round3_uppercase_escapes_hidden(style):
 @pytest.mark.parametrize(
     "style",
     [
-        "color:red\;display:none",
+        "color:red\\;display:none",
         "display\\3a none",
         "display:none\\!important;display:block",
         "font-size:-1px",
@@ -395,5 +395,55 @@ def test_p_not_closed_across_table_scope():
 def test_round3_timing():
     _fast(lambda: html_to_safe_text("<p hidden>" + "<span>" * 50_000 + "<div>x" * 50_000))
     _fast(lambda: html_to_safe_text("<p><b>a" * 50_000))
-    _fast(lambda: html_to_safe_text('<span style="' + "\;" * 100_000 + '">x</span>'))
+    _fast(lambda: html_to_safe_text('<span style="' + "\\;" * 100_000 + '">x</span>'))
     _fast(lambda: html_to_safe_text('<span style="' + "a:b!" * 50_000 + '">x</span>'))
+
+
+# ---- fix round 4 regressions: hiding formatting elements persist ----
+
+
+@pytest.mark.parametrize(
+    "html,visible",
+    [
+        ('<p><font style="display:none"><div>SECRET</div></font>after', "after"),
+        ('<p><a href="x" style="display:none"><div>SECRET</div></a>after', "after"),
+        ("<p><b hidden>x<div>SECRET</div></b>z", "z"),
+        ('<p><em aria-hidden="true">a<ul><li>SECRET</li></ul></em>tail', "tail"),
+        ("<p><b hidden>a</p>SECRET</b>tail", "tail"),
+        ('<p><em aria-hidden="true">a<ul><li>SECRET</li></ul>', None),
+        ("<p><b hidden>a</p>SECRET", None),
+    ],
+)
+def test_hiding_formatting_element_persists(html, visible):
+    text, removed = html_to_safe_text(html)
+    assert "SECRET" not in text and removed > 0
+    if visible:
+        assert visible in text
+
+
+def test_hiding_formatting_survives_stray_end_tags_and_li_siblings():
+    text, _ = html_to_safe_text("<ul><li><i hidden>a<li>SECRET</span></div></li></ul>")
+    assert "SECRET" not in text
+    text, _ = html_to_safe_text("<b hidden><font>a</b>shown")
+    assert text == "shown"  # </b> closes the hiding b; the re-created font is visible
+    # nested hiding formatting: both must close before text is visible again
+    text, _ = html_to_safe_text('<b hidden><font style="display:none">a<p>b</font>SECRET</b>shown')
+    assert "SECRET" not in text and "shown" in text
+
+
+def test_end_tag_closes_most_recent_formatting_entry():
+    text, _ = html_to_safe_text("<b hidden>a<div><b>c</div>SECRET</b>SECRET2</b>shown")
+    assert "SECRET" not in text and "shown" in text
+
+
+def test_non_hiding_formatting_unchanged():
+    text, _ = html_to_safe_text("<p><b>x<div>y</div></b>z")
+    assert text.split() == ["x", "y", "z"]
+    text, _ = html_to_safe_text("<p><span hidden><div>X")
+    assert text == "X"
+
+
+def test_round4_timing():
+    chunk = '<p><b hidden><font style="display:none"><a hidden>x<div>y</p></i></span></b></div>'
+    _fast(lambda: html_to_safe_text(chunk * 20_000))
+    _fast(lambda: html_to_safe_text('<p><b hidden><em hidden>x<div>y</p></i>' * 20_000))

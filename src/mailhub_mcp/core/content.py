@@ -177,6 +177,12 @@ _CLOSES_P = frozenset(
 )
 
 
+# Browsers keep these on the list of active formatting elements and re-create
+# them (with their attributes) after implied closes and stray end tags.
+_FORMATTING = frozenset(
+    "a b big code em font i nobr s small strike strong tt u".split()
+)
+
 _SCOPE_STOP = frozenset(
     "applet caption html table td th marquee object template button".split()
 )
@@ -194,14 +200,19 @@ class _Extractor(HTMLParser):
         self.barriers: list[int] = []
         self.stoppers: list[int] = []  # stack indices of button-scope boundaries
         self.dropped = 0  # open elements currently hiding content
+        # Per formatting tag, hides-flags of entries not yet closed by their own
+        # end tag. A hiding entry keeps hiding until its end tag or EOF, even
+        # after being popped structurally (fail-closed approximation of
+        # active-formatting re-creation).
+        self.formatting: defaultdict[str, list[bool]] = defaultdict(list)
         self.in_style = 0  # style content is dropped but not counted
 
     def _count(self, data: str) -> None:
         if not self.in_style:
             self.hidden_removed += len("".join(data.split()))
 
-    def _push(self, tag: str, hides: bool) -> None:
-        barrier = hides or tag in _BLOCK
+    def _push(self, tag: str, hides: bool, barrier: bool = False) -> None:
+        barrier = barrier or hides or tag in _BLOCK
         idx = len(self.stack)
         self.stack.append((tag, hides, barrier))
         self.positions[tag].append(idx)
@@ -247,7 +258,16 @@ class _Extractor(HTMLParser):
                 self.out.append("\n")
             return
         self._implied_end(tag)
-        self._push(tag, tag in _ALWAYS_DROPPED or _attr_hides(attrs))
+        hides = tag in _ALWAYS_DROPPED or _attr_hides(attrs)
+        if tag in _FORMATTING:
+            # Hiding is tracked by the formatting list, not the stack entry;
+            # still a barrier so inline end tags stop at it.
+            self.formatting[tag].append(hides)
+            if hides:
+                self.dropped += 1
+            self._push(tag, False, barrier=hides)
+        else:
+            self._push(tag, hides)
         if tag in _BLOCK and not self.dropped:
             self.out.append("\n")
 
@@ -257,6 +277,10 @@ class _Extractor(HTMLParser):
         self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
+        if tag in _FORMATTING and self.formatting[tag]:
+            # Closes the most recent entry for this tag, as browsers do.
+            if self.formatting[tag].pop():
+                self.dropped -= 1
         if tag in _VOID or not self.positions[tag]:
             return
         # An inline end tag never pops past an open block or hiding element.
