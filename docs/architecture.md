@@ -8,10 +8,15 @@ src/mailhub_mcp/
   auth.py          Google OAuth with an email allowlist; Claude-only redirect URIs
   config.py        Settings.from_env()
   cli.py           mailhub-authorize: links an account
+  admin.py         mailhub-admin: out-of-band approval of preference proposals
   core/            Provider-agnostic logic
     accounts.py    Account discovery and registry
     aggregate.py   Fan-out across accounts, per-account error isolation
-    organize.py    Guarded, journaled label changes and undo
+    organize.py    Guarded, journaled label changes, daily cap and undo
+    content.py     Sanitizing, untrusted markers and suspicion heuristics
+    drafts.py      Thread participants and draft recipient rules
+    preferences.py Triage preferences, proposals, approval and undo
+    history.py     Journal entry summaries for list_changes
     journal.py     Append-only JSONL change journal
     models.py      Typed mail models
     errors.py      Shared exceptions
@@ -22,7 +27,7 @@ src/mailhub_mcp/
     gmail/         Gmail implementation and its authorize flow
 ```
 
-**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse.
+**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse. Providers may import only `core.models`, `core.errors` and `core.content` from it.
 
 ## Models
 
@@ -59,25 +64,27 @@ Methods:
 
 ## Tools
 
-All 15 are defined in `server.py`.
+All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked read-only are registered.
 
-| Tool | Description |
-|---|---|
-| `list_accounts` | Aliases with email, provider, query hint and credential status |
-| `search_emails` | Search all or selected accounts; max 100 per account |
-| `read_email` | One message in full |
-| `read_emails` | Up to 25 messages of one account |
-| `read_thread` | A whole thread |
-| `inbox_overview` | Per-account totals, unread, newsletters, categories, top 30 senders |
-| `list_drafts` | Existing drafts |
-| `list_labels` | Labels of one account |
-| `create_label` | Create or return a label |
-| `modify_emails` | Labels, archive, read, star on specific IDs (max 1000) |
-| `modify_by_query` | Same, by query; preview unless `confirm=true`; max 500 per call |
-| `undo_change` | Revert a journaled change |
-| `list_changes` | Journal entries, newest first, with label names; filter by accounts and `since`; max 100 per call |
-| `undo_since` | Undo every change since a time, newest first; preview unless `confirm=true`; max 50 per call |
-| `create_draft` | Create an unsent reply draft (thread participants only; refused if any message in the thread is flagged suspicious) |
+| Tool | Mode | Description |
+|---|---|---|
+| `list_accounts` | read-only | Aliases with email, provider, query hint and credential status |
+| `search_emails` | read-only | Search all or selected accounts; max 100 per account |
+| `read_email` | read-only | One message in full |
+| `read_emails` | read-only | Up to 25 messages of one account |
+| `read_thread` | read-only | A whole thread |
+| `inbox_overview` | read-only | Per-account totals, unread, newsletters, categories, top 30 senders |
+| `list_drafts` | read-only | Existing drafts |
+| `list_labels` | read-only | Labels of one account |
+| `create_label` | write | Create or return a label |
+| `modify_emails` | write | Labels, archive, read, star on specific IDs (max 1000) |
+| `modify_by_query` | write | Same, by query; preview unless `confirm=true`; max 500 per call |
+| `undo_change` | write | Revert a journaled change |
+| `list_changes` | read-only | Journal entries (labels and preferences), newest first, with label names; filter by accounts and `since`; max 100 per call |
+| `undo_since` | write | Undo every change (labels and preferences) since a time, newest first; preview unless `confirm=true`; max 50 per call |
+| `create_draft` | write | Create an unsent reply draft (replies only, thread participants only; refused if any message in the thread is flagged suspicious) |
+| `get_preferences` | read-only | Triage preferences: global and account rules, pending proposals, recent changes |
+| `set_preferences` | write | Change preferences (needs `user_request`); lowering attention creates a proposal |
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 
@@ -90,6 +97,34 @@ Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`,
 `Journal.entries(since)` returns valid entries newest first by reversed file order (append order is causal, serialized by the journal lock) and skips malformed lines; `since` only filters, inclusively, by timestamp (naive times are UTC). `organize.undo_since` takes the entries since a time, drops undo entries and changes already undone, and optionally filters by account. It undoes them newest first, so two changes to the same message restore its exact original labels. Each change goes through `undo`, so every protection still applies and the journal lock is taken per change, not across the loop. If a change fails (reported in `failed`), older candidates touching any of its messages are held back and also reported in `failed` as blocked, so retrying the failed one later still restores exactly. A call attempts candidates until 50 are undone (`MAX_UNDO_SINCE`) or 200 were attempted (`MAX_UNDO_SINCE_ATTEMPTS`), so persistent failures cannot starve healthy changes; `remaining` says whether candidates were left unattempted. Without `confirm` it only returns summaries (up to 50) and writes nothing.
 
 `modify_by_query` skips messages already in the target state and returns a hint when nothing is left.
+
+## Content defenses
+
+Every email is text written by a third party, so what reaches Claude is sanitized, delimited and assessed. `core/content.py` is provider-agnostic; the Gmail provider does the sanitizing and the server (`server.py`) does the delimiting and the assessment, for every tool that returns messages (search, read, thread, drafts, overview).
+
+**What is removed.** `html_to_safe_text(html)` returns the visible text and a count of removed hidden characters. It drops `<head>`, `<script>`, `<style>`, `<template>`, `<noscript>`, comments, elements hidden by inline style (`display:none`, `visibility:hidden`, `opacity:0`, a font size of zero or tiny, `max-height:0` with `overflow:hidden`) and elements with the `hidden` attribute or `aria-hidden="true"`. It does not compare colors. `clean_text(s)` removes zero-width and bidirectional control characters, Unicode tag characters, other control characters except newline and tab, and collapses runs of blank lines. The Gmail provider applies `html_to_safe_text` and `clean_text` to the body and `clean_text` to subject, sender, recipients, snippet and attachment names.
+
+**Markers.** Each tool response uses one random nonce of 12 hex characters. `body` and `snippet` are wrapped as `[untrusted:<nonce>]` and `[/untrusted:<nonce>]` on their own lines. Any `[untrusted:` or `[/untrusted:` already inside the text is rewritten to `[untrusted_:` and `[/untrusted_:` first, so an email cannot forge a closing marker. The descriptions of the read tools explain the markers.
+
+**Flags.** Each message gets `suspicious` and `suspicious_reasons`, computed by `assess` from the text fields and the hidden-text count. Reasons: `mentions_tools` (the name of any mailhub-mcp tool, in any mode), `instruction_override` (for example "ignore previous instructions", in English and Portuguese), `addresses_assistant`, `requests_action` (forward, create a draft, change preferences or settings, "reply to ... with") and `hidden_text` (more than 200 hidden characters removed). The flags are a heuristic aid, not a guarantee. Because they are computed in the server, they are also what `create_draft` uses to refuse a suspicious thread.
+
+## Preferences
+
+`core/preferences.py` stores triage preferences in `preferences.json` next to the journal (`JOURNAL_PATH`). There are two kinds of scope: `global` and one per account alias; the effective rules for an account are the global rules plus its own. Fields: `important_senders`, `ignored_senders` (`name@domain` or `@domain`, at most 254 characters), `important_keywords`, `ignored_keywords` (1-40 characters), each list capped at 200 items, and `last_triage_at` (ISO 8601, not in the future). A value cannot be both important and ignored in a scope. There is no free-text field, so stored preferences cannot carry instructions.
+
+**Direction rule.** Adding to an important list, or removing from an ignored list, raises attention and applies immediately. Adding to an ignored list, or removing from an important list, lowers attention and becomes a proposal. `last_triage_at` is set immediately. Each `set_preferences` call needs a `user_request` (1-500 characters), stored with the change and shown by `get_preferences` and `list_changes`; it is wrapped in untrusted markers when shown.
+
+**Proposals.** A proposal lives in `preferences.json` under `proposals` and is never applied by an MCP tool. It expires after 14 days; expired proposals are dropped on read. An identical open proposal is reused rather than duplicated, and at most 50 can be open at once. `mailhub-admin preferences list|show|approve|reject <id>` is the only way to resolve one. Approval validates it again against the current state, applies it and journals a change with tool `approve_preference`; rejection journals nothing. `mailhub-admin` reads only `JOURNAL_PATH` (default `/data/changes.jsonl`), needs no OAuth settings, and exits 0 on success and 2 on any error.
+
+**Store locking.** The server and the CLI both write `preferences.json`. Writes hold an exclusive `fcntl.flock` on `preferences.lock` and replace the file atomically (temporary file, `fsync`, `os.replace`).
+
+**Journal and undo.** Preference changes are journal entries with `kind: "preferences"`, plus `scope`, `before` and `after` per touched field and `user_request`; entries without a `kind` are label changes. `list_changes` shows both, and `undo_change` on a preference entry restores `before`, even if that lowers attention, because it returns the user to an earlier state. `undo_since` includes preference entries in the same newest-first order, but holds changes back by `(scope, field)` instead of `(account, message_id)`. Undo is refused, and nothing is changed, if a touched field no longer equals `after`: a later change is never overwritten. Double undo is refused.
+
+## Capability limits
+
+- **Drafts.** `create_draft` requires `reply_to_message_id`. Participants are every address in From, To, Cc and Reply-To across the thread, plus the account's own address; `to` and `cc` outside that set are refused and the error lists the allowed addresses. `to` defaults to the Reply-To of the replied message, else its From. A thread containing any message flagged suspicious is refused. Nothing is ever sent.
+- **Daily cap.** `MAX_CHANGES_PER_DAY` (default 2000) limits messages changed by `modify_emails` and `modify_by_query` per account in a rolling 24 hours, counted from the journal (undo entries excluded). The check runs under the journal lock, before any write, and the error says how many changes remain. Undo is never capped.
+- **Read-only mode.** `TOOLS=all|read-only` (default `all`). In `read-only` only `list_accounts`, `search_emails`, `read_email`, `read_emails`, `read_thread`, `inbox_overview`, `list_drafts`, `list_labels`, `list_changes` and `get_preferences` are registered; the write tools do not exist on that instance. Any other value fails startup. Since `set_preferences` is not available either, such an instance cannot record `last_triage_at`.
 
 ## Adding a provider
 

@@ -708,7 +708,9 @@ def test_descriptions_explain_markers():
     tools = asyncio.run(go())
     for n in ("get_preferences", "list_changes"):
         assert "[untrusted:<nonce>]" in tools[n].description
+        assert "[/untrusted:<nonce>]" in tools[n].description
     d = tools["undo_since"].description
+    assert "[untrusted:<nonce>]" in d and "[/untrusted:<nonce>]" in d
     assert "global preference changes" in d and "only when no 'accounts' filter" in d.replace("included only", "only")
 
 

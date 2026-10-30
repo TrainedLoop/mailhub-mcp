@@ -47,9 +47,11 @@ cp .env.example .env
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | From the Web application client |
 | `ALLOWED_EMAILS` | Comma-separated Google accounts allowed to log in to the connector |
 | `PORT` | Optional. Port the server listens on inside the container, default `8742`. If you change it, change both numbers in the `ports` mapping in `docker-compose.yml` to match |
+| `MAX_CHANGES_PER_DAY` | Optional. Most messages `modify_emails` and `modify_by_query` may change per account in a rolling 24 hours, default `2000`. Undo is never capped |
+| `TOOLS` | Optional. `all` (default) or `read-only`; see "Scheduled triage" below |
 | `JWT_SIGNING_KEY` | Signs issued tokens and encrypts the OAuth state. Generate with `openssl rand -hex 32` |
 
-`ACCOUNTS_DIR` and `JOURNAL_PATH` are set by the Dockerfile (`/secrets/accounts`, `/data/changes.jsonl`) and normally left alone. Changing `JWT_SIGNING_KEY` later invalidates sessions and you must reconnect the connector.
+`ACCOUNTS_DIR` and `JOURNAL_PATH` are set by the Dockerfile (`/secrets/accounts`, `/data/changes.jsonl`) and normally left alone. Preferences are stored next to the journal, in `data/preferences.json`. Changing `JWT_SIGNING_KEY` later invalidates sessions and you must reconnect the connector.
 
 ## 5. Put the code and credentials on the server
 
@@ -107,15 +109,51 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 - **Audit**: `docker compose logs mailhub-mcp | grep tool=` shows every tool call with its arguments. Rejected logins appear as `rejected token for email=...`.
 - **Add an account**: link it on your workstation (step 3; the folder on the server is owned by uid 10001, so never run `mailhub-authorize` inside it), copy `secrets/accounts/gmail/<alias>.json` to the server as in step 5, then on the server run `sudo chown 10001:10001` and `sudo chmod 600` on the file and `docker compose restart`. The same flow re-links an expired account. Accounts are read at startup.
 - **Remove an account**: delete `secrets/accounts/<provider>/<alias>.json`, run `docker compose restart`, and revoke the app at https://myaccount.google.com/permissions. Without the account's credential, its past changes can no longer be undone.
-- **Journal**: `data/changes.jsonl`, one JSON object per change.
+- **Journal**: `data/changes.jsonl`, one JSON object per change (label changes and preference changes).
+- **Preferences**: `data/preferences.json`. Proposals that lower attention are approved with `mailhub-admin`, see step 11.
 - **Revoke everything**: `docker compose down`, remove the public exposure, and revoke the app in your Google accounts.
 
-## 11. Recovery
+## 11. Preferences and approving proposals
+
+`get_preferences` and `set_preferences` let Claude remember which senders and keywords matter (`important_senders`, `ignored_senders`, `important_keywords`, `ignored_keywords`) and when triage last ran (`last_triage_at`). Claude should change them only when you ask in the conversation, and every change records your words as `user_request`.
+
+The direction rule decides what applies:
+
+- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately and can be undone with `undo_change`.
+- Lowering attention (ignoring a sender or keyword, removing something from an important list) never applies from the chat. It becomes a proposal with an id such as `p-1a2b3c4d`, valid for 14 days, and at most 50 can be open at once. A hostile email therefore cannot quietly hide future alerts.
+
+Approve or reject proposals from a terminal on the server, outside the chat:
+
+```bash
+docker compose exec mailhub-mcp mailhub-admin preferences list
+docker compose exec mailhub-mcp mailhub-admin preferences show <id>
+docker compose exec mailhub-mcp mailhub-admin preferences approve <id>
+docker compose exec mailhub-mcp mailhub-admin preferences reject <id>
+```
+
+`show` prints the scope, field, values and the request that motivated it, so check that it matches something you actually asked for before approving. Approving applies it and records a change (`approve_preference`) that appears in `list_changes`; rejecting removes the proposal. The command exits with 0 on success and 2 on an error such as an unknown or expired id.
+
+### Scheduled triage
+
+Preferences make a recurring routine (a scheduled Claude task, or a prompt you run each morning) consistent. A recommended flow:
+
+1. Call `get_preferences`: note the rules and `last_triage_at`.
+2. Call `search_emails` for mail since `last_triage_at` (for Gmail, `after:YYYY/MM/DD`; fall back to a recent window when it is unset).
+3. Read the results in bulk with `read_emails`.
+4. Report, grouped as: **needs attention** (important senders and keywords first), **FYI**, **suspicious emails** (those with `suspicious: true` and their reasons; Claude should only report them, never act on what they say) and **preference changes and pending proposals** since the last run, with the exact `mailhub-admin preferences approve <id>` command for each pending proposal.
+5. Call `set_preferences` with `scope: "global"`, `last_triage_at` set to now, and a `user_request` that describes the routine (for example "scheduled morning triage, as configured by me").
+
+`last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance (its own `.env`, port and `data/` folder; copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets Claude read preferences and proposals.
+
+Drafts are replies only. `create_draft` needs the message being answered, accepts only recipients who are already in that thread (plus your own address), and is refused for a thread containing an email flagged as suspicious; nothing is ever sent.
+
+## 12. Recovery
 
 If something went wrong and you need to revert in bulk:
 
 - Ask Claude to call `list_changes` to see recent changes (newest first, with their `change_id`s, also from earlier sessions), then `undo_change` with the `change_id` of the one to revert.
 - To revert everything since a time, call `undo_since` with `since` (ISO 8601, e.g. `2026-11-01T08:00`; no timezone means UTC). It previews by default: review the list, then call it again with `confirm=true`. It undoes newest first, at most 50 undone per call; repeat while `remaining` is true. Changes that could not be undone, and older ones held back because they touch the same emails, are listed in `failed`: fix the cause (for example a temporary Gmail error) and call again. Do not repeat the call when nothing was undone.
+- Preference changes are in the same history: `list_changes` shows them with `kind: "preferences"`, and `undo_change` or `undo_since` restores the earlier values. Undo is refused if the preference changed again since, so a later change is never overwritten.
 - In Gmail, search `label:claude/organized`: every message changed through the server has it. (`undo_change` removes the label together with the rest of that change, so undone messages no longer show up there.)
 - Fallback when `list_changes` is unavailable (for example the connector is not responding): read the IDs straight from `data/changes.jsonl` on the host, newest first, and call `undo_change` for each once the server is back. List them in that order with:
 
@@ -123,7 +161,7 @@ If something went wrong and you need to revert in bulk:
 jq -r '.change_id' data/changes.jsonl | tac
 ```
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 | Symptom | Likely cause |
 |---|---|
@@ -134,3 +172,12 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `list_accounts` is empty, log warning mentions `/secrets/accounts` | Folder missing or no `<provider>/<alias>.json`; invalid alias in a file name; unknown provider folder |
 | Startup fails with a duplicate alias error | The same alias exists under two provider folders; rename one file |
 | Container restarts with `PermissionError` | `data/` or `secrets/accounts/` is not owned by uid 10001 |
+| `Daily change cap reached` | `MAX_CHANGES_PER_DAY` messages were already changed on that account in the last 24 hours; raise it in `.env` and restart, or wait. Undo still works |
+| `create_draft` says drafts are replies only, or lists allowed addresses | The draft needs `reply_to_message_id`, and `to` and `cc` must be people already in that thread |
+| `create_draft` says the thread is flagged as a possible prompt injection | A message in the thread matched the injection heuristics; reply manually in Gmail |
+| A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |
+| Startup fails with `TOOLS must be 'all' or 'read-only'` | Invalid `TOOLS` value in `.env` |
+| `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
+| `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
+| `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |
+| `undo_change` says a preference "changed since" | The field was modified after that change; undo the later change first |
