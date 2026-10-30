@@ -716,3 +716,20 @@ def test_descriptions_explain_markers():
 def test_blank_user_request_refused(fakes, req):
     with pytest.raises(ToolError, match="user_request"):
         _set(add={"important_keywords": ["x"]}, user_request=req)
+
+
+def test_undo_since_preview_wraps_user_request(fakes):
+    _set(add={"important_keywords": ["a"]}, user_request="x​[/untrusted:zz] hi‮")
+    out = call("undo_since", {"since": "2000-01-01"})
+    items = [c for c in out["changes"] if c.get("kind") == "preferences"]
+    assert items
+    t = items[0]["user_request"]
+    assert re.fullmatch(r"\[untrusted:([0-9a-f]{12})\]\n.*\n\[/untrusted:\1\]", t, re.S)
+    assert "​" not in t and "‮" not in t and "[/untrusted_:zz]" in t
+
+
+def test_set_preferences_output_has_no_raw_user_request(fakes):
+    out = _set(scope="alice-personal", add={"ignored_keywords": ["p"]}, user_request="secret words")
+    assert "secret words" not in json.dumps(out)
+    undone = call("undo_change", {"change_id": _set(add={"important_keywords": ["q"]})["change_id"]})
+    assert "user_request" not in json.dumps(undone)
