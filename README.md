@@ -17,6 +17,9 @@ The server exposes 17 tools (10 read-only, 7 that change something); see [docs/a
 - **Triage preferences**: `get_preferences` and `set_preferences` keep rules such as important and ignored senders or keywords, and the time of the last triage, so scheduled triage is consistent from one run to the next. Rules that raise attention apply immediately; rules that lower attention wait for your approval outside the chat (`mailhub-admin`).
 - **Change history**: every label change and every preference change is journaled with its motivating request, listed by `list_changes` and undoable.
 - **Content defenses**: hidden text is removed from HTML bodies, invisible characters are removed from message text fields (sender, recipients, subject, date, snippet, body, attachment names), email text is delimited as untrusted, and likely injection attempts are flagged (see the safety model).
+- **Prompts**: `daily_triage`, `clean_newsletters` and `organize_inbox` are MCP prompts (reusable workflows you pick in Claude). The two that change mail preview first and ask for your explicit confirmation; none of them trashes or deletes. With `TOOLS=read-only` only a read-only `daily_triage` is offered.
+- **Unsubscribe info**: messages carry `unsubscribe` (`url`, `mailto`, `one_click`) parsed from `List-Unsubscribe`, and `inbox_overview` top senders carry their most recent one. It is sender-controlled text: shown to you, wrapped as untrusted, never visited by Claude.
+- **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
 - **Drafts**: `create_draft` leaves a reply draft in the mailbox for you to review and send yourself. Replies only, addressed to people already in the thread.
 
 ## Safety model

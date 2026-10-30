@@ -158,6 +158,10 @@ docker compose exec mailhub-mcp mailhub-admin preferences reject <id>
 
 `show` prints the scope, field, values and the request that motivated it, so check that it matches something you actually asked for before approving. Approving applies it and records a change (`approve_preference`) that appears in `list_changes`; rejecting removes the proposal. The command exits with 0 on success and 2 on an error such as an unknown or expired id.
 
+### Prompts
+
+The server also offers three MCP prompts, which Claude clients list as ready-made workflows: `daily_triage` (optionally with `accounts`, a comma-separated list of aliases), `clean_newsletters` and `organize_inbox` (both take an `account`). The last two preview every change and wait for your explicit confirmation in the conversation; nothing is trashed or deleted, and every change can be undone with `undo_change` or `undo_since`. With `TOOLS=read-only` only a read-only `daily_triage` is offered. Messages also show `unsubscribe` options when the sender provides them; Claude shows these to you and never visits them.
+
 ### Scheduled triage
 
 Preferences make a recurring routine (a scheduled Claude task, or a prompt you run each morning) consistent. A recommended flow:
@@ -171,6 +175,16 @@ Preferences make a recurring routine (a scheduled Claude task, or a prompt you r
 `last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance of your own (its own directory, `.env`, `data/` folder, `HOST_PORT`, `CONTAINER_NAME` and `COMPOSE_PROJECT_NAME`, as in [More than one person](#14-more-than-one-person); copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets Claude read preferences and proposals.
 
 Drafts are replies only. `create_draft` needs the message being answered, accepts only recipients who are already in that thread (plus your own address), and is refused for a thread containing an email flagged as suspicious; nothing is ever sent.
+
+### Health checks
+
+`GET /health` answers `{"status":"ok"}` without authentication and with nothing else; the Docker image uses it for its `HEALTHCHECK`, so `docker compose ps` shows `healthy` or `unhealthy`. That only means the server is up. To find out whether the linked mailboxes still work (for example an expired credential), run:
+
+```bash
+docker compose exec mailhub-mcp mailhub-admin accounts
+```
+
+It prints one line per account, `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>`, and exits 0 when all are ok, 1 when any failed and 2 when the accounts cannot be loaded. Run it from cron or a scheduled task and notify yourself on a non-zero exit.
 
 ## 12. Recovery
 
@@ -205,6 +219,8 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
 | Log warning `ALLOWED_EMAILS has N addresses` | More than one login can use this instance, and each sees every linked mailbox. Keep only the owner's login and give other people their own instance (step 14) |
 | Second instance fails with a container name or port already in use | It shares `CONTAINER_NAME`, `HOST_PORT` or `COMPOSE_PROJECT_NAME` with the first one (step 14) |
+| `docker compose ps` shows `unhealthy` | `GET /health` is not answering: check `docker compose logs`, and that `PORT` in `.env` matches the published port |
+| `mailhub-admin accounts` prints `ERROR` for an alias | The credential no longer works; run `mailhub-authorize` again for that alias (see `invalid_grant` above) |
 | `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
 | `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |
 | `undo_change` says a preference "changed since" | The field was modified after that change; undo the later change first |
