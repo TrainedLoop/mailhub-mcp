@@ -3,6 +3,7 @@
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,8 @@ class Settings:
     accounts_dir: Path
     journal_path: Path
     port: int
+    max_changes_per_day: int = 2000
+    tools_mode: Literal["all", "read-only"] = "all"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -29,4 +32,28 @@ class Settings:
             accounts_dir=Path(os.environ.get("ACCOUNTS_DIR", "/secrets/accounts")),
             journal_path=Path(os.environ.get("JOURNAL_PATH", "/data/changes.jsonl")),
             port=int(os.environ.get("PORT", "8742")),
+            max_changes_per_day=_int_env("MAX_CHANGES_PER_DAY", 2000),
+            tools_mode=_tools_mode(os.environ.get("TOOLS", "all")),
         )
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}") from None
+    if value < 0:
+        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
+    return value
+
+
+def _tools_mode(raw: str) -> Literal["all", "read-only"]:
+    value = raw.strip().lower() or "all"
+    if value == "all":
+        return "all"
+    if value == "read-only":
+        return "read-only"
+    raise ValueError(f"TOOLS must be 'all' or 'read-only', got {raw!r}")

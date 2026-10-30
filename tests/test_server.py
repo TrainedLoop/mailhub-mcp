@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import dataclasses
 import json
 import re
 from types import SimpleNamespace
@@ -511,3 +512,68 @@ def test_create_draft_empty_to_uses_default(fakes):
     out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "to": ""})
     raw = base64.urlsafe_b64decode(fakes.a.drafts[out["draft_id"]]["message"]["raw"]).decode()
     assert "To: x@y.com" in raw
+
+
+def test_all_tool_names_covers_registered_tools():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name for t in await c.list_tools()}
+    assert server.ALL_TOOL_NAMES >= asyncio.run(go())
+    assert {"get_preferences", "set_preferences"} <= server.ALL_TOOL_NAMES
+
+
+def test_read_only_tool_set_is_subset_of_all():
+    assert server.READ_ONLY_TOOLS < server.ALL_TOOL_NAMES
+
+
+def test_read_only_mode_registers_exactly_the_listed_tools():
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import asyncio, json\n"
+        "from fastmcp import Client\n"
+        "from mailhub_mcp import server\n"
+        "async def go():\n"
+        "    async with Client(server.mcp) as c:\n"
+        "        print(json.dumps(sorted(t.name for t in await c.list_tools())))\n"
+        "asyncio.run(go())"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], env={**os.environ, "TOOLS": "read-only"},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()[-1]
+    assert json.loads(out) == sorted(server.READ_ONLY_TOOLS)
+
+
+def test_settings_tools_and_cap(monkeypatch):
+    from mailhub_mcp.config import Settings
+
+    monkeypatch.delenv("TOOLS", raising=False)
+    monkeypatch.delenv("MAX_CHANGES_PER_DAY", raising=False)
+    s = Settings.from_env()
+    assert s.tools_mode == "all" and s.max_changes_per_day == 2000
+    monkeypatch.setenv("TOOLS", "read-only")
+    monkeypatch.setenv("MAX_CHANGES_PER_DAY", "5")
+    s = Settings.from_env()
+    assert s.tools_mode == "read-only" and s.max_changes_per_day == 5
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [("TOOLS", "readonly"), ("TOOLS", "write"), ("MAX_CHANGES_PER_DAY", "lots"), ("MAX_CHANGES_PER_DAY", "-1")],
+)
+def test_settings_invalid_values_raise(monkeypatch, name, value):
+    from mailhub_mcp.config import Settings
+
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        Settings.from_env()
+
+
+def test_server_cap_refusal_message(fakes, monkeypatch):
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, max_changes_per_day=1))
+    with pytest.raises(ToolError, match=r"alice-personal: .*only 1 of 1"):
+        call("modify_emails", {"account": "alice-personal", "message_ids": ["m1", "m2"], "archive": True})
+    assert not has_write(fakes.a)

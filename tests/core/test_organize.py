@@ -363,3 +363,63 @@ def test_modify_refusal_for_unreadable_ids_does_not_claim_failure_is_temporary(f
     with pytest.raises(OrganizeError, match=r"Could not read message labels \(retry if the failure is temporary\).*m1"):
         modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     assert no_writes(fake)
+
+
+# --- daily change cap ---
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+
+def _seed(journal, account, count, age_hours=1.0, undo_of=None):
+    """Append a journal entry for `count` messages, `age_hours` old."""
+    journal.record(account, "modify_emails", ["Label_9"], [], {f"x{i}": [] for i in range(count)}, undo_of=undo_of)
+    lines = journal.path.read_text().splitlines()
+    import json
+    entry = json.loads(lines[-1])
+    entry["timestamp"] = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+    lines[-1] = json.dumps(entry)
+    journal.path.write_text("\n".join(lines) + "\n")
+
+
+def test_cap_refuses_before_any_write_and_states_remaining(fake, provider, journal):
+    _seed(journal, "a", 9)
+    before = len(fake.calls)
+    with pytest.raises(OrganizeError, match=r"only 1 of 10"):
+        modify(provider, journal, "a", ["m1", "m2"], ["Shopping"], [], False, None, None, max_per_day=10)
+    assert no_writes(fake) and not any(c[0] == "messages.batchModify" for c in fake.calls[before:])
+    assert len(journal.entries()) == 1
+
+
+def test_cap_allows_up_to_the_limit(fake, provider, journal):
+    _seed(journal, "a", 8)
+    r = modify(provider, journal, "a", ["m1", "m2"], ["Shopping"], [], False, None, None, max_per_day=10)
+    assert r["modified"] == 2
+
+
+def test_cap_window_rolls(fake, provider, journal):
+    _seed(journal, "a", 50, age_hours=25)
+    r = modify(provider, journal, "a", ["m1", "m2"], ["Shopping"], [], False, None, None, max_per_day=10)
+    assert r["modified"] == 2
+
+
+def test_cap_is_per_account(fake, provider, journal):
+    _seed(journal, "other", 50)
+    r = modify(provider, journal, "a", ["m1"], ["Shopping"], [], False, None, None, max_per_day=10)
+    assert r["modified"] == 1
+
+
+def test_undo_entries_not_counted_and_undo_not_capped(fake, provider, journal):
+    r = modify(provider, journal, "a", ["m1", "m2"], ["Shopping"], [], False, None, None, max_per_day=2)
+    undone = undo(provider, journal, "a", r["change_id"])  # cap of 2 is exhausted; undo still works
+    assert undone["modified"] == 2
+    from mailhub_mcp.core.organize import changes_in_window
+    assert changes_in_window(journal, "a") == 2  # the undo entry adds nothing
+
+
+def test_apply_query_respects_cap(fake, provider, journal):
+    fake.query_results["in:inbox"] = ["m1", "m2"]
+    _seed(journal, "a", 1)
+    with pytest.raises(OrganizeError, match="only 1 of 2"):
+        apply_query(provider, journal, "a", "in:inbox", max_per_day=2, add_labels=["Shopping"],
+                    remove_labels=[], archive=False, mark_read=None, star=None)
+    assert no_writes(fake)

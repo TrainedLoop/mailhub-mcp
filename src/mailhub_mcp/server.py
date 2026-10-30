@@ -56,22 +56,37 @@ WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": Fals
 MAX_READ_IDS = 25
 
 
-_tool_names_cache: frozenset[str] | None = None
+# Every tool name in any mode, including tools that are not registered in read-only mode (and tools
+# added later): the suspicion heuristic must flag an email naming any of them on every instance.
+ALL_TOOL_NAMES = frozenset({
+    "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
+    "list_drafts", "list_labels", "create_label", "modify_emails", "modify_by_query", "undo_change",
+    "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences",
+})
+
+# Tools registered when TOOLS=read-only. Everything else is registered only in "all" mode.
+READ_ONLY_TOOLS = frozenset({
+    "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
+    "list_drafts", "list_labels", "list_changes",
+})
 
 
-async def _tool_names() -> frozenset[str]:
-    # All tools are registered at import time, so the set is stable after first use.
-    global _tool_names_cache
-    if _tool_names_cache is None:
-        _tool_names_cache = frozenset(t.name for t in await mcp.list_tools())
-    return _tool_names_cache
+def tool(**kwargs):
+    """Register a tool unless it is a write tool and the server runs in read-only mode."""
+
+    def decorator(fn):
+        if settings.tools_mode == "all" or fn.__name__ in READ_ONLY_TOOLS:
+            return mcp.tool(**kwargs)(fn)
+        return fn
+
+    return decorator
 
 
 def _present(value, nonce: str, tool_names: frozenset[str]):
     """Delimit and assess every message inside a provider result.
 
     Suspicion is computed here, not in the provider, because only the server
-    knows the registered tool names. Runs on the raw (undumped) models so the
+    knows the tool names. Runs on the raw (undumped) models so the
     internal hidden_removed count is still available.
     """
     if isinstance(value, Message):
@@ -110,14 +125,14 @@ async def one(account: str, fn):
         raise ToolError(str(exc)) from exc
     try:
         res = await run_one(acc, lambda a: fn(a.provider))
-        return _dump(_present(res, new_nonce(), await _tool_names()))
+        return _dump(_present(res, new_nonce(), ALL_TOOL_NAMES))
     except MailhubError as exc:  # run_one already prefixes the alias
         raise ToolError(str(exc)) from exc
 
 
 async def many(aliases: list[str] | None, fn) -> dict:
     res = await fan_out(_accounts(aliases), lambda a: fn(a.provider))
-    return _dump(_present(res, new_nonce(), await _tool_names()))
+    return _dump(_present(res, new_nonce(), ALL_TOOL_NAMES))
 
 
 def _accounts(aliases: list[str] | None):
@@ -127,7 +142,7 @@ def _accounts(aliases: list[str] | None):
         raise ToolError(str(exc)) from exc
 
 
-@mcp.tool(annotations=READ_ONLY, description="List the connected mail accounts (alias, email address, provider, query syntax hint, credential status).")
+@tool(annotations=READ_ONLY, description="List the connected mail accounts (alias, email address, provider, query syntax hint, credential status).")
 async def list_accounts() -> dict:
     def info(account) -> dict:
         p = account.provider
@@ -141,7 +156,7 @@ async def list_accounts() -> dict:
     return {"accounts": [{k: v for k, v in r.items() if k != "account"} for r in res["results"]]}
 
 
-@mcp.tool(annotations=READ_ONLY, description="Search mail in all accounts or the given aliases. Query syntax depends on the provider (see query_hint in list_accounts), e.g. Gmail: 'from:x is:unread newer_than:7d'. Max 100 results per account." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Search mail in all accounts or the given aliases. Query syntax depends on the provider (see query_hint in list_accounts), e.g. Gmail: 'from:x is:unread newer_than:7d'. Max 100 results per account." + UNTRUSTED_NOTE)
 async def search_emails(query: str, accounts: list[str] | None = None, max_results: int = 20) -> dict:
     limit = max(1, min(max_results, 100))
     unreadable: dict[str, int] = {}
@@ -152,13 +167,13 @@ async def search_emails(query: str, accounts: list[str] | None = None, max_resul
             unreadable[account.alias] = res.unreadable
         return res.found
 
-    out = _dump(_present(await fan_out(_accounts(accounts), work), new_nonce(), await _tool_names()))
+    out = _dump(_present(await fan_out(_accounts(accounts), work), new_nonce(), ALL_TOOL_NAMES))
     for alias, count in unreadable.items():
         out["errors"].setdefault(alias, f"{count} message{'s' if count != 1 else ''} could not be read")
     return out
 
 
-@mcp.tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list." + UNTRUSTED_NOTE)
 async def read_email(account: str, message_id: str) -> dict:
     def work(p):
         res = p.get_messages([message_id], "full")
@@ -169,7 +184,7 @@ async def read_email(account: str, message_id: str) -> dict:
     return await one(account, work)
 
 
-@mcp.tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'." + UNTRUSTED_NOTE)
 async def read_emails(account: str, message_ids: list[str]) -> dict:
     if len(message_ids) > MAX_READ_IDS:
         raise ToolError(f"At most {MAX_READ_IDS} message IDs per call")
@@ -182,12 +197,12 @@ async def read_emails(account: str, message_ids: list[str]) -> dict:
     return await one(account, work)
 
 
-@mcp.tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first." + UNTRUSTED_NOTE)
 async def read_thread(account: str, thread_id: str) -> dict:
     return await one(account, lambda p: with_account(p.get_thread(thread_id), account))
 
 
-@mcp.tool(annotations=READ_ONLY, description="Summarize an inbox per account: totals, unread, newsletters, categories and top 30 senders. Scans up to 'limit' (max 2000) messages per account; 'failed' counts messages that could not be read. Without 'query' each provider's default inbox query is used." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Summarize an inbox per account: totals, unread, newsletters, categories and top 30 senders. Scans up to 'limit' (max 2000) messages per account; 'failed' counts messages that could not be read. Without 'query' each provider's default inbox query is used." + UNTRUSTED_NOTE)
 async def inbox_overview(accounts: list[str] | None = None, query: str | None = None, limit: int = 500) -> dict:
     def work(p) -> list[dict]:
         ids = p.list_ids(query or p.default_inbox_query, max(1, min(limit, 2000)))
@@ -198,23 +213,23 @@ async def inbox_overview(accounts: list[str] | None = None, query: str | None = 
     return await many(accounts, work)
 
 
-@mcp.tool(annotations=READ_ONLY, description="List existing drafts in all accounts or the given aliases." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="List existing drafts in all accounts or the given aliases." + UNTRUSTED_NOTE)
 async def list_drafts(accounts: list[str] | None = None, max_results: int = 20) -> dict:
     limit = max(1, min(max_results, 100))
     return await many(accounts, lambda p: p.list_drafts(limit))
 
 
-@mcp.tool(annotations=READ_ONLY, description="List the labels of one account (useful for label searches and modify_emails)." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="List the labels of one account (useful for label searches and modify_emails)." + UNTRUSTED_NOTE)
 async def list_labels(account: str) -> dict:
     return await one(account, lambda p: {"labels": p.list_labels()})
 
 
-@mcp.tool(annotations=WRITE, description="Create a Gmail label in one account (returns the existing one if the name already exists).")
+@tool(annotations=WRITE, description="Create a Gmail label in one account (returns the existing one if the name already exists).")
 async def create_label(account: str, name: str) -> dict:
     return await one(account, lambda p: p.ensure_label(name))
 
 
-@mcp.tool(
+@tool(
     annotations=WRITE,
     description=(
         "Change labels on specific emails of one account: add/remove labels (by name or ID), archive, mark read/unread, star/unstar. "
@@ -234,12 +249,13 @@ async def modify_emails(
     return await one(
         account,
         lambda p: organize.modify(
-            p, journal, account, message_ids, add_labels or [], remove_labels or [], archive, mark_read, star
+            p, journal, account, message_ids, add_labels or [], remove_labels or [], archive, mark_read, star,
+            max_per_day=settings.max_changes_per_day,
         ),
     )
 
 
-@mcp.tool(
+@tool(
     annotations=WRITE,
     description=(
         "Apply the same changes as modify_emails to every email matching a query in one account (query syntax depends on the provider, see query_hint in list_accounts). "
@@ -268,11 +284,12 @@ async def modify_by_query(
             p, journal, account, query,
             add_labels=add_labels or [], remove_labels=remove_labels or [],
             archive=archive, mark_read=mark_read, star=star,
+            max_per_day=settings.max_changes_per_day,
         ),
     )
 
 
-@mcp.tool(annotations=WRITE, description="Undo a previous modify_emails / modify_by_query change by its change_id, restoring each email's prior labels.")
+@tool(annotations=WRITE, description="Undo a previous modify_emails / modify_by_query change by its change_id, restoring each email's prior labels.")
 async def undo_change(change_id: str) -> dict:
     try:
         account = journal.get(change_id)["account"]
@@ -292,7 +309,7 @@ def _label_names(account) -> dict[str, str]:
     return {l.id: l.name for l in account.provider.list_labels()}
 
 
-@mcp.tool(
+@tool(
     annotations=READ_ONLY,
     description=(
         "List earlier changes recorded by this server (newest first) with their change_ids, so a change from a previous session can be found and undone with undo_change. "
@@ -327,7 +344,7 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
     }
 
 
-@mcp.tool(
+@tool(
     annotations=WRITE,
     description=(
         "Panic button: undo every change recorded since a time (ISO 8601 date/time, naive means UTC), newest first, optionally limited to some accounts. "
@@ -354,7 +371,7 @@ async def undo_since(since: str, accounts: list[str] | None = None, confirm: boo
     ))
 
 
-@mcp.tool(
+@tool(
     annotations=WRITE,
     description=(
         "Create a Gmail draft REPLY in one account. It is NOT sent: the user reviews and sends it from Gmail. "
@@ -379,7 +396,7 @@ async def create_draft(
 
     if "\r" in subject or "\n" in subject:
         raise ToolError("subject must be a single line (no CR/LF)")
-    names = await _tool_names()
+    names = ALL_TOOL_NAMES
 
     def work(p):
         found = p.get_messages([reply_to_message_id], "summary")

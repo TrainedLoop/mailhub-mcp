@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -18,6 +18,7 @@ MAX_QUERY_APPLY = 500
 PREVIEW_SAMPLE = 10
 MAX_UNDO_SINCE = 50
 MAX_UNDO_SINCE_ATTEMPTS = 200
+CAP_WINDOW = timedelta(hours=24)
 QUERY_HINT_ALREADY_CHANGED = "query still matches messages already changed; refine the query"
 
 log = logging.getLogger("mailhub-mcp.organize")
@@ -97,6 +98,17 @@ def _plan(provider, add_labels, remove_labels, archive, mark_read, star):
     return labels, add, remove
 
 
+def changes_in_window(journal: Journal, account: str, now: datetime | None = None) -> int:
+    """Messages changed on `account` by label entries (undo excluded) in the last 24 hours."""
+    now = now or datetime.now(timezone.utc)
+    entries = journal.entries(now - CAP_WINDOW)
+    return sum(
+        len(e.get("prior") or {})
+        for e in entries
+        if e.get("account") == account and not e.get("undo_of")
+    )
+
+
 def modify(
     provider: Any,
     journal: Journal,
@@ -109,6 +121,8 @@ def modify(
     star: bool | None,
     tool: str = "modify_emails",
     query: str | None = None,
+    max_per_day: int | None = None,
+    now: datetime | None = None,
 ) -> dict:
     ids = _dedupe(ids)
     if not ids:
@@ -121,12 +135,21 @@ def modify(
     labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
     found = _read_labels(provider, ids)
 
-    # Validation done; first write.
-    add = _dedupe(add + [provider.ensure_label(ORG_LABEL).id])
-    touched = set(add) | set(remove)
-    prior = {i: [l for l in found[i] if l in touched] for i in ids}
-    provider.modify_labels(ids, add, remove)
-    change_id = _record(journal, account, tool, add, remove, prior, query=query)
+    # The journal lock makes check -> write -> record atomic, so parallel calls cannot overshoot the cap.
+    with journal.lock:
+        if max_per_day is not None:
+            remaining = max(0, max_per_day - changes_in_window(journal, account, now))
+            if len(ids) > remaining:
+                raise OrganizeError(
+                    f"Daily change cap reached: {len(ids)} message(s) requested but only {remaining} "
+                    f"of {max_per_day} changes remain in the last 24 hours for this account; nothing was changed"
+                )
+        # Validation done; first write.
+        add = _dedupe(add + [provider.ensure_label(ORG_LABEL).id])
+        touched = set(add) | set(remove)
+        prior = {i: [l for l in found[i] if l in touched] for i in ids}
+        provider.modify_labels(ids, add, remove)
+        change_id = _record(journal, account, tool, add, remove, prior, query=query)
     return {"change_id": change_id, "modified": len(ids)}
 
 
@@ -140,7 +163,9 @@ def preview_query(provider: Any, query: str) -> dict:
     }
 
 
-def apply_query(provider: Any, journal: Journal, account: str, query: str, **changes) -> dict:
+def apply_query(
+    provider: Any, journal: Journal, account: str, query: str, max_per_day: int | None = None, **changes
+) -> dict:
     ids = provider.list_ids(query, MAX_QUERY_APPLY + 1)
     if not ids:
         return {"change_id": None, "modified": 0, "remaining": False}
@@ -159,7 +184,7 @@ def apply_query(provider: Any, journal: Journal, account: str, query: str, **cha
                 "change_id": None, "modified": 0, "remaining": len(ids) > MAX_QUERY_APPLY,
                 "hint": QUERY_HINT_ALREADY_CHANGED,
             }
-    result = modify(provider, journal, account, batch, tool="modify_by_query", query=query, **changes)
+    result = modify(provider, journal, account, batch, tool="modify_by_query", query=query, max_per_day=max_per_day, **changes)
     return {**result, "remaining": len(ids) > MAX_QUERY_APPLY}
 
 
