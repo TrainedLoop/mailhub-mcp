@@ -355,3 +355,15 @@ def test_change_marker_charges_the_limiter(gmail, fake):
     assert gmail.quota_status()["used_last_minute"] == before + 1
     gmail.changed_since(marker, {"m1"})
     assert gmail.quota_status()["used_last_minute"] == before + 3
+
+
+def test_change_detection_reraises_rate_limits(gmail, fake):
+    from mailhub_mcp.core.errors import RateLimited
+
+    marker = gmail.change_marker()
+    fake.history_errors = [http_error(429, "Too many concurrent requests for user")] * 9
+    with pytest.raises(RateLimited):
+        gmail.changed_since(marker, {"m1"})
+    fake.fail = http_error(429, "Too many concurrent requests for user")
+    with pytest.raises(RateLimited):
+        gmail.change_marker()

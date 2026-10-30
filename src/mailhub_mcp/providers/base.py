@@ -40,14 +40,6 @@ class MailProvider(Protocol):
         """Matching ids, newest first. With `label_ids`, only messages carrying every one of them
         (a cheap way to learn label state: organize relies on it for query-based changes)."""
         ...
-    def change_marker(self) -> str | None:
-        """Optional change detection: an opaque marker of the mailbox's state now, or None when
-        unknown or unsupported. Callers use getattr and treat a missing method like None."""
-        ...
-    def changed_since(self, marker: str, ids: set[str]) -> set[str] | None:
-        """Which of `ids` had labels changed, or were added or deleted, since `marker`; None when
-        unknown (unsupported, expired, failed), and the caller must then not rely on it."""
-        ...
     def get_messages(self, ids: list[str], detail: Literal["summary", "full", "labels"]) -> GetResult: ...
     def get_thread(self, thread_id: str) -> Thread: ...
     def list_labels(self) -> list[Label]: ...
@@ -58,8 +50,24 @@ class MailProvider(Protocol):
         self, to: str, subject: str, body: str, cc: str | None, reply_to_message_id: str | None
     ) -> Draft: ...
 
+    # Optional: change detection, see `ChangeDetection`. Callers use getattr and treat a provider
+    # without it like one that answers None.
     # Optional: `quota_status() -> {"used_last_minute": int, "budget_per_minute": int}` for providers
     # with a per-mailbox quota budget. Callers use getattr and skip providers without it.
+
+
+class ChangeDetection(Protocol):
+    """Optional capability, not part of MailProvider: providers may implement it."""
+
+    def change_marker(self) -> str | None:
+        """An opaque marker of the mailbox's state now, or None when unknown. Rate limits raise."""
+        ...
+
+    def changed_since(self, marker: str, ids: set[str]) -> set[str] | None:
+        """Which of `ids` had labels changed, or were added or deleted, since `marker`; None when
+        unknown (unsupported, expired, failed), and the caller must then not rely on it. Rate
+        limits raise instead of returning None."""
+        ...
 
 
 ProviderFactory = Callable[[str, Path], MailProvider]

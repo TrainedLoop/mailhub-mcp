@@ -820,3 +820,29 @@ def test_undo_since_reports_rate_limit_advice_without_double_alias(fake, provide
     fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
     out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=timezone.utc), None, True)
     assert out["failed"][r["change_id"]].startswith("a: Gmail rate limit reached for this mailbox; wait about")
+
+
+@pytest.mark.parametrize("call", ["users.getProfile", "history.list"])
+def test_apply_query_rate_limited_change_detection_fails_fast_without_reads(fake, provider, journal, call):
+    from mailhub_mcp.core.errors import RateLimited
+
+    fake.query_results["q"] = ["m1", "m2"]
+    orig = type(fake)._request
+    errors = [_rate_limit_error() for _ in range(9)]
+
+    def throttled(self, name, kwargs, fn):
+        def run():
+            if name == call and errors:
+                raise errors.pop(0)
+            return fn()
+        return orig(self, name, kwargs, run)
+
+    type(fake)._request = throttled
+    try:
+        fake.calls.clear()
+        with pytest.raises(RateLimited, match=r"^a: Gmail rate limit reached for this mailbox"):
+            apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                        archive=True, mark_read=None, star=None)
+    finally:
+        type(fake)._request = orig
+    assert _gets(fake) == [] and no_writes(fake) and journal.entries() == []
