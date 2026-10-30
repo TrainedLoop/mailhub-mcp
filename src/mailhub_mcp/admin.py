@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "show":
             match = [p for p in preferences.list_proposals(store) if p["proposal_id"] == args.proposal_id]
             if not match:
-                raise preferences.PreferenceError(f"Unknown proposal: {_safe(args.proposal_id)}")
+                raise preferences.PreferenceError(f"unknown or expired proposal: {_safe(args.proposal_id)}")
             print(_show(match[0]))
         elif args.action == "approve":
             res = preferences.approve(store, Journal(journal_path), args.proposal_id)
@@ -90,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Proposal {_safe(res['proposal_id'])} rejected and removed.")
     except MailhubError as exc:
         print(f"error: {_safe(exc)}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"error: cannot access preferences or journal files: {_safe(exc)}", file=sys.stderr)
         return 2
     return 0
 

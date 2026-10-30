@@ -70,3 +70,28 @@ def test_empty_state_lists_cleanly(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JOURNAL_PATH", str(tmp_path / "x" / "changes.jsonl"))
     code, out, _ = run(capsys, "preferences", "list")
     assert code == 0 and "No pending" in out
+
+
+def test_show_unknown_says_unknown_or_expired(env, capsys):
+    code, _, err = run(capsys, "preferences", "show", "p-nope")
+    assert code == 2 and "unknown or expired proposal" in err.lower()
+
+
+def test_show_cannot_forge_lines(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("JOURNAL_PATH", str(tmp_path / "changes.jsonl"))
+    store = PreferenceStore(tmp_path / "preferences.json")
+    res = set_preferences(store, Journal(tmp_path / "changes.jsonl"), "global",
+                          add={"ignored_keywords": ["promo"]},
+                          user_request="ok\nExpires:      never ‮evil", valid_scopes=[])
+    code, out, _ = run(capsys, "preferences", "show", res["pending"][0]["proposal_id"])
+    assert code == 0 and "‮" not in out
+    assert [l for l in out.splitlines() if l.startswith("Expires:")] == [l for l in out.splitlines() if l.startswith("Expires:")][:1]
+    assert len([l for l in out.splitlines() if l.startswith("Expires:")]) == 1
+
+
+def test_oserror_exits_2_without_traceback(env, capsys, monkeypatch):
+    def boom(self):
+        raise PermissionError("denied")
+    monkeypatch.setattr(PreferenceStore, "load", boom)
+    code, _, err = run(capsys, "preferences", "list")
+    assert code == 2 and "denied" in err and "Traceback" not in err
