@@ -118,7 +118,7 @@ A provider-agnostic `core/content.py` provides:
   - elements with the `hidden` attribute or `aria-hidden="true"`.
 
   It keeps the visible text. It does not try to compare colors.
-- `clean_text(s) -> str`. It removes zero-width and bidirectional control characters (U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF) and other C0/C1 control characters except `\n` and `\t`, and collapses runs of blank lines.
+- `clean_text(s) -> str`. It removes zero-width and bidirectional control characters (U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, plus U+00AD, U+061C, U+180E and the Unicode tag characters U+E0000–U+E007F) and other C0/C1 control characters except `\n` and `\t`, and collapses runs of blank lines.
 
 The Gmail provider uses these for the body, and `clean_text` for the subject, sender, recipients, snippet and attachment names.
 
