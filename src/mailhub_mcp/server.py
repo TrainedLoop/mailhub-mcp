@@ -302,7 +302,17 @@ async def modify_by_query(
     )
 
 
-@tool(annotations=WRITE, description="Undo a previous modify_emails / modify_by_query / set_preferences change by its change_id, restoring each email's prior labels or the preference's earlier value.")
+@tool(
+    annotations=WRITE,
+    description=(
+        "Undo a previous modify_emails / modify_by_query / set_preferences / approve_preference change by its change_id, "
+        "restoring each email's prior labels or the preference's earlier value. Undo entries themselves cannot be undone (make the change again instead). "
+        "A preference undo follows the same direction rule as set_preferences: the parts that raise attention apply immediately, "
+        "the parts that would lower it (un-marking important, ignoring again) are NOT applied but returned in 'proposed' "
+        "(proposal_id, scope, field, op, values); tell the user to approve them outside this chat with `mailhub-admin preferences approve <id>`. "
+        "change_id is null when nothing was applied."
+    ),
+)
 async def undo_change(change_id: str) -> dict:
     try:
         entry = journal.get(change_id)
@@ -380,7 +390,9 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
         "It reverts email changes and account-scope preference changes; global preference changes are included only when no 'accounts' filter is given (list_changes still shows them under a filter). "
         "By default (confirm=false) only previews the changes that would be undone. Pass confirm=true to undo them; "
         "at most 50 changes undone per call (and 200 attempted), so call again while 'remaining' is true. "
-        "Changes already undone are skipped. One that cannot be undone is listed in 'failed', the rest still proceed, "
+        "Changes already undone are skipped. A preference change whose undo would lower attention is not undone: its proposals are listed in 'proposed' "
+        "(approve them with `mailhub-admin preferences approve <id>`) and it does not count as undone. "
+        "One that cannot be undone is listed in 'failed', the rest still proceed, "
         "and older changes touching the same emails are held back (also in 'failed') so the restore stays exact. "
         "If 'failed' is not empty, fix the cause before retrying those changes, and do not loop when nothing was undone."
     ),

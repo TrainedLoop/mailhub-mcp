@@ -2,7 +2,7 @@
 
 Anything that raises attention (or removes a reduction of attention) applies immediately. Anything that
 lowers attention becomes a proposal that only `approve` (reachable from the admin CLI, never from an MCP
-tool) can apply. Preferences are plain data; there is no free-text field except the journaled
+tool) can apply; this includes undoing a change when the restore would lower attention. Preferences are plain data; there is no free-text field except the journaled
 `user_request`.
 """
 
@@ -361,6 +361,33 @@ def _proposal_view(p: dict) -> dict:
     }
 
 
+def _propose(
+    state: dict, live: list[dict], scope: str, field: str, op: str, values: list[str], request: str,
+    now: datetime,
+) -> dict:
+    """Reuse a live proposal with the same scope, field, op and values, or add one (capped)."""
+    keys = {_key(field, v) for v in values}
+    existing = next((
+        p for p in live if (p["scope"], p["field"], p["op"]) == (scope, field, op)
+        and {_key(field, v) for v in p["values"]} == keys
+    ), None)
+    if existing is None:
+        if len(live) >= MAX_PROPOSALS:
+            raise PreferenceError(
+                f"Too many pending proposals ({len(live)}; the limit is {MAX_PROPOSALS}): "
+                "review them with `mailhub-admin preferences list` before proposing more"
+            )
+        existing = {
+            "id": "p-" + secrets.token_hex(4), "scope": scope, "field": field, "op": op,
+            "values": list(values), "user_request": request, "created": now.isoformat(),
+            "expires": (now + PROPOSAL_TTL).isoformat(),
+        }
+        state["proposals"].append(existing)
+        live.append(existing)
+    return {"proposal_id": existing["id"], "scope": scope, "field": field, "op": op,
+            "values": list(existing["values"])}
+
+
 def set_preferences(
     store: PreferenceStore,
     journal: Journal,
@@ -431,26 +458,7 @@ def set_preferences(
                         _apply_op(one, OPPOSITE[field], "remove", pending_removals.get(OPPOSITE[field], []))
                     _apply_op(one, field, op, todo)
                     _check_rules(one, scope, {field})
-                    keys = {_key(field, v) for v in todo}
-                    existing = next((
-                        p for p in live if (p["scope"], p["field"], p["op"]) == (scope, field, op)
-                        and {_key(field, v) for v in p["values"]} == keys
-                    ), None)
-                    if existing is None:
-                        if len(live) >= MAX_PROPOSALS:
-                            raise PreferenceError(
-                                f"Too many pending proposals ({len(live)}; the limit is {MAX_PROPOSALS}): "
-                                "review them with `mailhub-admin preferences list` before proposing more"
-                            )
-                        existing = {
-                            "id": "p-" + secrets.token_hex(4), "scope": scope, "field": field, "op": op,
-                            "values": todo, "user_request": request, "created": now.isoformat(),
-                            "expires": (now + PROPOSAL_TTL).isoformat(),
-                        }
-                        state["proposals"].append(existing)
-                        live.append(existing)
-                    pending.append({"proposal_id": existing["id"], "scope": scope, "field": field,
-                                    "op": op, "values": list(existing["values"])})
+                    pending.append(_propose(state, live, scope, field, op, todo, request, now))
             _check_rules(rules, scope, {f for f in after if f in LIST_FIELDS})
             if triage is not None:
                 before["last_triage_at"] = rules["last_triage_at"]
@@ -597,13 +605,34 @@ def reject(store: PreferenceStore, proposal_id: str, now: datetime | None = None
             "field": proposal["field"], "op": proposal["op"], "values": list(proposal["values"])}
 
 
+def _undo_request(change_id: str, original: str | None) -> str:
+    text = f"undo of {change_id}: {original or ''}"
+    return text if len(text) <= MAX_USER_REQUEST else text[: MAX_USER_REQUEST - 1] + "\u2026"
+
+
+def _restore_ops(field: str, before: list[str], after: list[str]) -> list[tuple[str, list[str]]]:
+    """The (op, values) that turn `after` back into `before` for a list field."""
+    had = {_key(field, v) for v in before}
+    has = {_key(field, v) for v in after}
+    ops = [("add", [v for v in before if _key(field, v) not in has]),
+           ("remove", [v for v in after if _key(field, v) not in had])]
+    return [(op, vs) for op, vs in ops if vs]
+
+
 def undo_entry(
     store: PreferenceStore, journal: Journal, entry: dict, now: datetime | None = None
 ) -> dict:
-    """Restore `before` for a preference entry. Caller holds `journal.lock`.
+    """Undo a preference entry through the direction rule. Caller holds `journal.lock`.
 
-    Refused if any touched field no longer equals `after`, or if restoring would break a rule
-    (conflict, item cap). Undo never overwrites a later change.
+    The parts of the restore that raise attention (un-ignoring, re-marking important, restoring
+    last_triage_at) apply immediately as one journaled undo entry. The parts that would lower attention
+    (removing values from important_*, adding values to ignored_*) become proposals, exactly like
+    set_preferences, with user_request "undo of <change_id>: <original user_request>": an undo reached
+    from an MCP tool can never lower attention without the user's out-of-band approval. If nothing
+    applies, no undo entry is journaled and the change stays undoable (a repeat reuses the proposals).
+
+    Refused if any touched field no longer equals `after`, or if the result would break a rule
+    (conflict, item cap, proposal cap). Undo never overwrites a later change.
     """
     now = _now(now)
     change_id, scope = entry["change_id"], entry.get("scope") or entry.get("account")
@@ -613,8 +642,11 @@ def undo_entry(
     fields = list(after)
     if not fields or set(before) != set(after) or not set(fields) <= set(FIELDS):
         raise OrganizeError(f"Change {change_id} has no restorable preference fields")
+    request = _undo_request(change_id, entry.get("user_request"))
+    undo_id = None
     try:
         with store.transaction() as state:
+            _prune(state, now)
             rules = _rules(state, scope)
             stale = [f for f in fields if rules[f] != after[f]]
             if stale:
@@ -623,16 +655,47 @@ def undo_entry(
                     "nothing was undone"
                 )
             current = _snapshot(rules, fields)
+            lowering: list[tuple[str, str, list[str]]] = []
+            raised: list[str] = []
             for f in fields:
-                rules[f] = list(before[f]) if f in LIST_FIELDS else before[f]
+                if f not in LIST_FIELDS:
+                    rules[f] = before[f]  # last_triage_at: restoring it is always allowed
+                    raised.append(f)
+                    continue
+                ops = _restore_ops(f, before[f], after[f])
+                low = [(f, op, vs) for op, vs in ops if not is_raising(f, op)]
+                if not low:
+                    rules[f] = list(before[f])  # exact restore, order included
+                    raised.append(f)
+                    continue
+                lowering += low
+                for op, vs in ops:
+                    if is_raising(f, op):
+                        _apply_op(rules, f, op, vs)
+                        raised.append(f)
             try:
-                _check_rules(rules, scope, [f for f in fields if f in LIST_FIELDS])
+                _check_rules(rules, scope, [f for f in raised if f in LIST_FIELDS])
+                pending_removals = {f: vs for f, op, vs in lowering if op == "remove"}
+                live = _live(state, now)
+                proposed = []
+                for f, op, vs in lowering:
+                    one = _snapshot(rules, FIELDS)
+                    if op == "add" and f in OPPOSITE:
+                        _apply_op(one, OPPOSITE[f], "remove", pending_removals.get(OPPOSITE[f], []))
+                    _apply_op(one, f, op, vs)
+                    _check_rules(one, scope, {f})
+                    proposed.append(_propose(state, live, scope, f, op, vs, request, now))
             except PreferenceError as exc:
                 raise OrganizeError(f"Cannot undo {change_id}: {exc}") from None
-            undo_id = _record(
-                journal, scope, "undo_changes", current, _snapshot(before, fields),
-                entry.get("user_request") or "", now, undo_of=change_id,
-            )
+            changed = [f for f in dict.fromkeys(raised) if rules[f] != current[f]]
+            if changed:
+                undo_id = _record(
+                    journal, scope, "undo_changes", {f: current[f] for f in changed},
+                    _snapshot(rules, changed), entry.get("user_request") or "", now, undo_of=change_id,
+                )
     except PreferenceError as exc:
         raise OrganizeError(str(exc)) from None
-    return {"change_id": undo_id, "undone": change_id, "modified": 0, "skipped": []}
+    return {
+        "change_id": undo_id, "undone": change_id if undo_id else None, "modified": 0, "skipped": [],
+        "proposed": proposed,
+    }

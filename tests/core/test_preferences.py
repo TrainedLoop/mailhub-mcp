@@ -321,9 +321,10 @@ def test_recent_changes_status_and_undone(store, journal):
     pid = put(store, journal, add={"ignored_keywords": ["x"]})["pending"][0]["proposal_id"]
     out = approve(store, journal, pid, T0)
     r = put(store, journal, add={"important_keywords": ["k"]})
-    undo(None, journal, "a", r["change_id"], store=store, now=T0)
+    undo(None, journal, "a", out["change_id"], store=store, now=T0)
     ch = {c["change_id"]: c for c in view(store, journal, None, T0)["recent_changes"]}
-    assert ch[out["change_id"]]["status"] == "approved" and ch[r["change_id"]]["undone"] is True
+    assert ch[out["change_id"]]["status"] == "approved" and ch[out["change_id"]]["undone"] is True
+    assert ch[r["change_id"]]["status"] == "applied" and ch[r["change_id"]]["undone"] is False
     assert len(ch) == 2  # the undo entry itself is not listed
 
 
@@ -374,15 +375,16 @@ def test_concurrent_processes_serialized(store):
 
 # ----- undo / undo_since / summarize -----
 
-def test_undo_restores_before_even_if_lowering(store, journal):
+def test_raising_undo_restores_before_exactly(store, journal):
     with store.transaction() as s:
-        s["global"]["ignored_keywords"] = ["x", "y"]
-    r = put(store, journal, remove={"ignored_keywords": ["x"]})
+        s["global"]["important_keywords"] = ["x", "y"]
+    pid = put(store, journal, remove={"important_keywords": ["x"]})["pending"][0]["proposal_id"]
+    r = approve(store, journal, pid, T0)
     out = undo(None, journal, "a", r["change_id"], store=store, now=T0)
-    assert store.load()["global"]["ignored_keywords"] == ["x", "y"]
+    assert store.load()["global"]["important_keywords"] == ["x", "y"]
     e = journal.get(out["change_id"])
     assert e["undo_of"] == r["change_id"] and e["kind"] == "preferences" and e["tool"] == "undo_changes"
-    assert e["before"] == {"ignored_keywords": ["y"]} and e["after"] == {"ignored_keywords": ["x", "y"]}
+    assert e["before"] == {"important_keywords": ["y"]} and e["after"] == {"important_keywords": ["x", "y"]}
     with pytest.raises(OrganizeError, match="already undone"):
         undo(None, journal, "a", r["change_id"], store=store, now=T0)
 
@@ -423,38 +425,38 @@ def test_undo_refused_when_restore_would_conflict(store, journal):
 
 
 def test_undo_of_an_undo_entry_is_refused(store, journal):
-    r = put(store, journal, add={"important_keywords": ["a"]})
-    u = undo(None, journal, "a", r["change_id"], store=store)
+    r = _approved(store, journal, values=("a",))
+    u = undo(None, journal, "a", r, store=store)
     with pytest.raises(OrganizeError, match="this change is an undo; to redo, make the change again"):
         undo(None, journal, "a", u["change_id"], store=store)
-    assert store.load()["global"]["important_keywords"] == []
+    assert store.load()["global"]["ignored_keywords"] == []
     assert len(journal.entries()) == 2
 
 
 def test_undo_since_preferences_newest_first_and_blocking(store, journal):
-    e1 = put(store, journal, scope="a", add={"important_keywords": ["a"]}, now=T0)["change_id"]
-    e2 = put(store, journal, scope="a", add={"important_keywords": ["b"]}, now=T0 + timedelta(minutes=1))["change_id"]
-    e3 = put(store, journal, scope="b", add={"important_keywords": ["c"]}, now=T0 + timedelta(minutes=2))["change_id"]
+    e1 = _approved(store, journal, scope="a", values=("a",), now=T0)
+    e2 = _approved(store, journal, scope="a", values=("b",), now=T0 + timedelta(minutes=1))
+    e3 = _approved(store, journal, scope="b", values=("c",), now=T0 + timedelta(minutes=2))
     # Something else changed scope b's field since e3.
     with store.transaction() as s:
-        s["accounts"]["b"]["important_keywords"].append("later")
+        s["accounts"]["b"]["ignored_keywords"].append("later")
     since = T0 - timedelta(hours=1)
     preview = undo_since(lambda a: None, journal, since, None, False, store=store)
     assert preview["total"] == 3 and preview["changes"][0]["change_id"] == e3
-    assert preview["changes"][0]["scope"] == "b" and preview["changes"][0]["fields"] == ["important_keywords"]
-    res = undo_since(lambda a: None, journal, since, None, True, store=store)
+    assert preview["changes"][0]["scope"] == "b" and preview["changes"][0]["fields"] == ["ignored_keywords"]
+    res = undo_since(lambda a: None, journal, since, None, True, store=store, now=T0)
     assert [d["change_id"] for d in res["undone"]] == [e2, e1]
     assert list(res["failed"]) == [e3] and "changed since" in res["failed"][e3]
-    assert store.load()["accounts"]["a"]["important_keywords"] == []
+    assert store.load()["accounts"]["a"]["ignored_keywords"] == []
 
 
 def test_undo_since_blocks_older_same_scope_field_after_failure(store, journal):
-    older = put(store, journal, add={"important_keywords": ["a"]}, now=T0)["change_id"]
-    newer = put(store, journal, add={"important_keywords": ["b"]}, now=T0 + timedelta(minutes=1))["change_id"]
+    older = _approved(store, journal, values=("a",), now=T0)
+    newer = _approved(store, journal, values=("b",), now=T0 + timedelta(minutes=1))
     with store.transaction() as s:
-        s["global"]["important_keywords"].append("later")
-    other = put(store, journal, scope="a", add={"important_keywords": ["z"]}, now=T0 + timedelta(minutes=2))["change_id"]
-    res = undo_since(lambda a: None, journal, T0 - timedelta(hours=1), None, True, store=store)
+        s["global"]["ignored_keywords"].append("later")
+    other = _approved(store, journal, scope="a", values=("z",), now=T0 + timedelta(minutes=2))
+    res = undo_since(lambda a: None, journal, T0 - timedelta(hours=1), None, True, store=store, now=T0)
     assert [d["change_id"] for d in res["undone"]] == [other]
     assert set(res["failed"]) == {newer, older} and "blocked by failed newer change" in res["failed"][older]
 
@@ -588,10 +590,10 @@ def test_journal_recorded_while_store_lock_held(store, journal, monkeypatch):
         return real(*a, **k)
 
     monkeypatch.setattr(journal, "record", spy)
-    r = put(store, journal, add={"important_keywords": ["a"]})
+    put(store, journal, add={"important_keywords": ["a"]})
     pid = put(store, journal, add={"ignored_keywords": ["z"]})["pending"][0]["proposal_id"]
-    approve(store, journal, pid, T0)
-    undo(None, journal, "a", r["change_id"], store=store)
+    a = approve(store, journal, pid, T0)
+    undo(None, journal, "a", a["change_id"], store=store)  # raising undo: applied and journaled
     assert held == [True, True, True]
 
 
@@ -615,3 +617,91 @@ def test_sender_rejects_consecutive_dots():
     for bad in ["bob@bank..com", "@a..b.com"]:
         with pytest.raises(PreferenceError):
             normalize_sender(bad)
+
+
+# ----- undo that would lower attention becomes a proposal -----
+
+def _approved(store, journal, scope="global", field="ignored_keywords", values=("x",), now=T0):
+    """An approve_preference entry adding `values` to `field`; undoing it raises attention."""
+    pid = put(store, journal, scope=scope, add={field: list(values)}, now=now)["pending"][0]["proposal_id"]
+    return approve(store, journal, pid, now)["change_id"]
+
+
+def test_undo_of_raising_entry_creates_proposal_and_changes_nothing(store, journal):
+    cid = put(store, journal, add={"important_keywords": ["a", "b"]}, req="mark them")["change_id"]
+    out = undo(None, journal, "a", cid, store=store, now=T0)
+    assert out["change_id"] is None and out["undone"] is None
+    assert [{k: p[k] for k in ("scope", "field", "op", "values")} for p in out["proposed"]] == [
+        {"scope": "global", "field": "important_keywords", "op": "remove", "values": ["a", "b"]}
+    ]
+    assert store.load()["global"]["important_keywords"] == ["a", "b"]
+    assert len(journal.entries()) == 1 and not journal.is_undone(cid)
+    (p,) = list_proposals(store, T0)
+    assert p["proposal_id"] == out["proposed"][0]["proposal_id"]
+    assert p["user_request"] == f"undo of {cid}: mark them"
+    again = undo(None, journal, "a", cid, store=store, now=T0)  # deduplicated
+    assert again["proposed"][0]["proposal_id"] == p["proposal_id"] and len(list_proposals(store, T0)) == 1
+
+
+def test_undo_proposal_approved_out_of_band_applies(store, journal):
+    cid = put(store, journal, add={"important_keywords": ["a"]})["change_id"]
+    pid = undo(None, journal, "a", cid, store=store, now=T0)["proposed"][0]["proposal_id"]
+    res = approve(store, journal, pid, T0)
+    assert res["change_id"] and store.load()["global"]["important_keywords"] == []
+
+
+def test_undo_of_approved_ignore_applies_immediately(store, journal):
+    cid = _approved(store, journal, values=("x",))
+    out = undo(None, journal, "a", cid, store=store, now=T0)
+    assert out["proposed"] == [] and out["undone"] == cid and out["change_id"]
+    assert store.load()["global"]["ignored_keywords"] == []
+    assert journal.get(out["change_id"])["undo_of"] == cid
+
+
+def test_undo_restoring_an_ignore_is_proposed(store, journal):
+    with store.transaction() as s:
+        s["global"]["ignored_keywords"] = ["x", "y"]
+    cid = put(store, journal, remove={"ignored_keywords": ["x"]})["change_id"]
+    out = undo(None, journal, "a", cid, store=store, now=T0)
+    assert [(p["field"], p["op"], p["values"]) for p in out["proposed"]] == [("ignored_keywords", "add", ["x"])]
+    assert store.load()["global"]["ignored_keywords"] == ["y"] and out["change_id"] is None
+
+
+def test_mixed_undo_applies_raising_part_and_proposes_lowering_part(store, journal):
+    put(store, journal, triage="2026-10-30T09:00:00Z")
+    cid = put(store, journal, add={"important_keywords": ["a"]}, triage="2026-10-30T10:00:00Z")["change_id"]
+    out = undo(None, journal, "a", cid, store=store, now=T0)
+    g = store.load()["global"]
+    assert g["last_triage_at"] == "2026-10-30T09:00:00+00:00" and g["important_keywords"] == ["a"]
+    e = journal.get(out["change_id"])
+    assert e["undo_of"] == cid and set(e["after"]) == {"last_triage_at"}
+    assert [(p["field"], p["op"], p["values"]) for p in out["proposed"]] == [("important_keywords", "remove", ["a"])]
+
+
+def test_undo_proposal_respects_cap_and_changes_nothing(store, journal):
+    cid = put(store, journal, add={"important_keywords": ["keep"]}, triage="2026-10-30T10:00:00Z")["change_id"]
+    for i in range(prefs.MAX_PROPOSALS):
+        put(store, journal, add={"ignored_keywords": [f"i{i}"]})
+    with pytest.raises(OrganizeError, match="Too many pending proposals"):
+        undo(None, journal, "a", cid, store=store, now=T0)
+    g = store.load()["global"]
+    assert g["important_keywords"] == ["keep"] and g["last_triage_at"] == "2026-10-30T10:00:00+00:00"
+    assert not journal.is_undone(cid)
+
+
+def test_undo_proposal_user_request_is_truncated(store, journal):
+    cid = put(store, journal, add={"important_keywords": ["a"]}, req="w" * prefs.MAX_USER_REQUEST)["change_id"]
+    undo(None, journal, "a", cid, store=store, now=T0)
+    (p,) = list_proposals(store, T0)
+    assert p["user_request"].startswith(f"undo of {cid}: ww") and len(p["user_request"]) == prefs.MAX_USER_REQUEST
+
+
+def test_undo_since_reports_proposed_and_does_not_count_them(store, journal):
+    raising = put(store, journal, add={"important_keywords": ["a"]}, now=T0)["change_id"]
+    approved = _approved(store, journal, scope="a", values=("z",), now=T0 + timedelta(minutes=1))
+    res = undo_since(lambda a: None, journal, T0 - timedelta(hours=1), None, True, store=store, now=T0)
+    assert [d["change_id"] for d in res["undone"]] == [approved]
+    assert res["failed"] == {}
+    assert [(p["change_id"], [q["op"] for q in p["proposed"]]) for p in res["proposed"]] == [(raising, ["remove"])]
+    assert store.load()["global"]["important_keywords"] == ["a"]
+    assert store.load()["accounts"]["a"]["ignored_keywords"] == []

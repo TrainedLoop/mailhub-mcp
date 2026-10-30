@@ -95,3 +95,18 @@ def test_oserror_exits_2_without_traceback(env, capsys, monkeypatch):
     monkeypatch.setattr(PreferenceStore, "load", boom)
     code, _, err = run(capsys, "preferences", "list")
     assert code == 2 and "denied" in err and "Traceback" not in err
+
+
+def test_approve_undo_proposal(tmp_path, capsys, monkeypatch):
+    from mailhub_mcp.core.organize import undo
+    monkeypatch.setenv("JOURNAL_PATH", str(tmp_path / "changes.jsonl"))
+    store = PreferenceStore(tmp_path / "preferences.json")
+    journal = Journal(tmp_path / "changes.jsonl")
+    cid = set_preferences(store, journal, "global", add={"important_keywords": ["rent"]},
+                          user_request="rent matters", valid_scopes=[])["change_id"]
+    pid = undo(None, journal, "global", cid, store=store)["proposed"][0]["proposal_id"]
+    code, out, _ = run(capsys, "preferences", "show", pid)
+    assert code == 0 and f"undo of {cid}: rent matters" in out
+    code, out, _ = run(capsys, "preferences", "approve", pid)
+    assert code == 0 and "remove important_keywords" in out
+    assert store.load()["global"]["important_keywords"] == []

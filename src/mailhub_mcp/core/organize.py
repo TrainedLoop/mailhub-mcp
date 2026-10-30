@@ -268,7 +268,9 @@ def undo_since(
     lock is taken per change inside `undo`, never across the loop. `label_names_for(account)` optionally
     maps label ids to names for the preview. Preference entries (account = their scope, so `global` ones
     are included only without an account filter) are undone through `store`; their blocking key is
-    (scope, field) instead of (account, message id).
+    (scope, field) instead of (account, message id). A preference undo that would lower attention is
+    proposed instead (see `undo_entry`): it is reported under `proposed`, is not counted as undone, and
+    does not block older candidates (they then usually fail as "changed since", which does block).
     """
     entries = journal.entries(since)
     undone = undone_ids(entries)
@@ -291,6 +293,7 @@ def undo_since(
         return {"changes": changes, "total": len(candidates), "remaining": len(candidates) > MAX_UNDO_SINCE}
 
     done: list[dict] = []
+    proposed: list[dict] = []
     failed: dict[str, str] = {}
     blocked_by: dict[tuple[str, str], str] = {}  # (account, message id) -> failed newer change
     attempts = 0
@@ -317,13 +320,16 @@ def undo_since(
                 log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
                 blocker = change_id
             else:
-                done.append({
-                    "change_id": change_id, "undo_change_id": res["change_id"],
-                    "modified": res["modified"], "skipped": res["skipped"],
-                })
+                if res.get("proposed"):
+                    proposed.append({"change_id": change_id, "proposed": res["proposed"]})
+                if res["change_id"] is not None:
+                    done.append({
+                        "change_id": change_id, "undo_change_id": res["change_id"],
+                        "modified": res["modified"], "skipped": res["skipped"],
+                    })
                 continue
         else:
             failed[change_id] = f"{account}: blocked by failed newer change {blocker}; retry after fixing it"
         for p in pairs:
             blocked_by.setdefault(p, blocker)
-    return {"undone": done, "failed": failed, "remaining": attempts < len(candidates)}
+    return {"undone": done, "proposed": proposed, "failed": failed, "remaining": attempts < len(candidates)}

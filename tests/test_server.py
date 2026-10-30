@@ -14,6 +14,7 @@ from mailhub_mcp import server
 from mailhub_mcp.auth import AllowlistGoogleProvider
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.journal import Journal
+from mailhub_mcp.core import preferences
 from mailhub_mcp.core.preferences import PreferenceStore
 from mailhub_mcp.providers.gmail.provider import GmailProvider
 from tests.fakes.fake_gmail import FakeGmail, http_error
@@ -666,20 +667,39 @@ def test_list_changes_shows_preference_entries_and_global_with_filter(fakes):
     assert filtered == {g, s}
 
 
-def test_undo_change_and_undo_since_on_preferences(fakes):
-    c1 = _set(add={"important_keywords": ["invoice"]})["change_id"]
+def test_undo_change_of_raising_preference_change_is_proposed(fakes):
+    c1 = _set(add={"important_keywords": ["invoice"]}, user_request="invoices matter")["change_id"]
     out = call("undo_change", {"change_id": c1})
-    assert out["undone"] == c1
-    assert call("get_preferences", {})["global"]["important_keywords"] == []
+    assert out["change_id"] is None and out["undone"] is None
+    assert [(p["field"], p["op"], p["values"]) for p in out["proposed"]] == [("important_keywords", "remove", ["invoice"])]
+    got = call("get_preferences", {})
+    assert got["global"]["important_keywords"] == ["invoice"]
+    assert [p["proposal_id"] for p in got["pending"]] == [out["proposed"][0]["proposal_id"]]
+    res = call("undo_since", {"since": "2000-01-01", "confirm": True})
+    assert res["undone"] == [] and res["failed"] == {}
+    assert [p["change_id"] for p in res["proposed"]] == [c1]
+
+
+def _approve(scope="global", field="ignored_keywords", values=("promo",)):
+    """Approve a lowering change out of band (as mailhub-admin would); undoing it raises attention."""
+    pid = _set(scope=scope, add={field: list(values)}, user_request="r")["pending"][0]["proposal_id"]
+    return preferences.approve(server.store, server.journal, pid)["change_id"]
+
+
+def test_undo_change_and_undo_since_on_preferences(fakes):
+    c1 = _approve()
+    out = call("undo_change", {"change_id": c1})
+    assert out["undone"] == c1 and out["proposed"] == []
+    assert call("get_preferences", {})["global"]["ignored_keywords"] == []
     with pytest.raises(ToolError, match="already undone"):
         call("undo_change", {"change_id": c1})
-    c2 = _set(scope="alice-personal", add={"important_keywords": ["rent"]}, user_request="r")["change_id"]
-    c3 = _set(add={"important_senders": ["@x.com"]})["change_id"]
+    _approve(scope="alice-personal", values=("rent",))
+    _approve(field="ignored_senders", values=("@x.com",))
     res = call("undo_since", {"since": "2000-01-01", "confirm": True})
-    assert len(res["undone"]) == 2 and res["failed"] == {}
+    assert len(res["undone"]) == 2 and res["failed"] == {} and res["proposed"] == []
     got = call("get_preferences", {})
-    assert got["global"]["important_senders"] == []
-    assert got["accounts"]["alice-personal"]["important_keywords"] == []
+    assert got["global"]["ignored_senders"] == []
+    assert got["accounts"]["alice-personal"]["ignored_keywords"] == []
 
 
 def test_user_request_is_cleaned_and_wrapped_with_one_nonce_per_response(fakes):
