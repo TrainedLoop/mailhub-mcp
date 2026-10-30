@@ -110,3 +110,25 @@ def test_approve_undo_proposal(tmp_path, capsys, monkeypatch):
     code, out, _ = run(capsys, "preferences", "approve", pid)
     assert code == 0 and "remove important_keywords" in out
     assert store.load()["global"]["important_keywords"] == []
+    assert journal.entries()[0]["undo_of"] == cid
+
+
+def test_show_and_reject_undo_proposal(tmp_path, capsys, monkeypatch):
+    from mailhub_mcp.core.organize import undo
+    monkeypatch.setenv("JOURNAL_PATH", str(tmp_path / "changes.jsonl"))
+    store = PreferenceStore(tmp_path / "preferences.json")
+    journal = Journal(tmp_path / "changes.jsonl")
+    cid = set_preferences(store, journal, "global", add={"important_keywords": ["rent"]},
+                          user_request="rent matters", valid_scopes=[])["change_id"]
+    pid = undo(None, journal, "global", cid, store=store)["proposed"][0]["proposal_id"]
+    code, out, _ = run(capsys, "preferences", "show", pid)
+    assert code == 0 and f"Undo of:      {cid}" in out
+    assert "Undo of" not in run(capsys, "preferences", "list")[1]
+    code, out, _ = run(capsys, "preferences", "reject", pid)
+    assert code == 0 and f"The undo of {cid} will not be proposed again" in out
+    assert store.load()["rejected_undos"] == [cid]
+
+
+def test_show_plain_proposal_has_no_undo_line(env, capsys):
+    _, _, pending = env
+    assert "Undo of" not in run(capsys, "preferences", "show", pending[0]["proposal_id"])[1]

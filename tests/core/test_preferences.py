@@ -370,7 +370,7 @@ def test_atomic_save_and_corrupt_file(store, journal, tmp_path):
 
 def test_load_missing_file_defaults(store):
     s = store.load()
-    assert s == {"global": {**{f: [] for f in prefs.LIST_FIELDS}, "last_triage_at": None}, "accounts": {}, "proposals": []}
+    assert s == {"global": {**{f: [] for f in prefs.LIST_FIELDS}, "last_triage_at": None}, "accounts": {}, "proposals": [], "rejected_undos": []}
 
 
 def test_concurrent_threads_serialized(store, journal):
@@ -731,3 +731,97 @@ def test_undo_since_reports_proposed_and_does_not_count_them(store, journal):
     assert [(p["change_id"], [q["op"] for q in p["proposed"]]) for p in res["proposed"]] == [(raising, ["remove"])]
     assert store.load()["global"]["important_keywords"] == ["a"]
     assert store.load()["accounts"]["a"]["ignored_keywords"] == []
+
+
+# ----- undo proposals carry undo_of: convergence and remembered rejections -----
+
+def test_undo_since_converges_after_undo_proposal_is_approved(store, journal):
+    put(store, journal, add={"important_keywords": ["a"]}, now=T0)
+    e2 = put(store, journal, add={"important_keywords": ["b"]}, now=T0 + timedelta(minutes=1))["change_id"]
+    since = T0 + timedelta(seconds=30)
+    res = undo_since(lambda a: None, journal, since, None, True, store=store, now=T0 + timedelta(minutes=2))
+    assert res["undone"] == [] and res["failed"] == {}
+    assert [p["change_id"] for p in res["proposed"]] == [e2]
+    (p,) = list_proposals(store, T0 + timedelta(minutes=2))
+    assert p["undo_of"] == e2 and (p["field"], p["op"], p["values"]) == ("important_keywords", "remove", ["b"])
+
+    out = approve(store, journal, p["proposal_id"], T0 + timedelta(minutes=3))  # mailhub-admin
+    entry = journal.get(out["change_id"])
+    assert entry["tool"] == "approve_preference" and entry["undo_of"] == e2
+    assert journal.is_undone(e2)
+
+    later = T0 + timedelta(minutes=4)
+    assert undo_since(lambda a: None, journal, since, None, False, store=store)["total"] == 0
+    again = undo_since(lambda a: None, journal, since, None, True, store=store, now=later)
+    assert again == {"undone": [], "proposed": [], "failed": {}, "remaining": False}
+    assert store.load()["global"]["important_keywords"] == ["a"]  # the approval stands
+    assert list_proposals(store, later) == []  # e2 is not proposed again
+    third = undo_since(lambda a: None, journal, since, None, True, store=store, now=later)
+    assert third == again and store.load()["global"]["important_keywords"] == ["a"]
+    with pytest.raises(OrganizeError, match="is an undo"):
+        undo(None, journal, "a", out["change_id"], store=store, now=later)
+    with pytest.raises(OrganizeError, match="already undone"):
+        undo(None, journal, "a", e2, store=store, now=later)
+
+
+def test_plain_approval_has_no_undo_of(store, journal):
+    cid = _approved(store, journal)
+    assert journal.get(cid)["undo_of"] is None
+    assert list_proposals(store, T0) == []
+
+
+def test_undo_proposal_is_not_merged_with_a_plain_proposal(store, journal):
+    e = put(store, journal, add={"important_keywords": ["a"]})["change_id"]
+    plain = put(store, journal, remove={"important_keywords": ["a"]})["pending"][0]["proposal_id"]
+    undo_p = undo(None, journal, "a", e, store=store, now=T0)["proposed"][0]["proposal_id"]
+    assert undo_p != plain
+    by_id = {p["proposal_id"]: p for p in list_proposals(store, T0)}
+    assert by_id[plain]["undo_of"] is None and by_id[undo_p]["undo_of"] == e
+    approve(store, journal, plain, T0)  # approving the plain one does not mark e undone
+    assert not journal.is_undone(e)
+
+
+def test_proposal_with_malformed_undo_of_is_dropped(store, journal, caplog):
+    e = put(store, journal, add={"important_keywords": ["a"]})["change_id"]
+    undo(None, journal, "a", e, store=store, now=T0)
+    state = json.loads(store.path.read_text())
+    state["proposals"][0]["undo_of"] = 5
+    store.path.write_text(json.dumps(state))
+    with caplog.at_level("WARNING"):
+        assert store.load()["proposals"] == []
+    assert "malformed proposal" in caplog.text
+
+
+def test_rejected_undo_is_remembered_and_refused(store, journal):
+    e = put(store, journal, add={"important_keywords": ["a"]})["change_id"]
+    pid = undo(None, journal, "a", e, store=store, now=T0)["proposed"][0]["proposal_id"]
+    reject(store, pid, T0)
+    assert store.load()["rejected_undos"] == [e]
+    with pytest.raises(OrganizeError, match=f"the undo of {e} was rejected by the owner"):
+        undo(None, journal, "a", e, store=store, now=T0)
+    assert list_proposals(store, T0) == []
+    res = undo_since(lambda a: None, journal, T0 - timedelta(hours=1), None, True, store=store, now=T0)
+    assert res["proposed"] == [] and res["undone"] == []
+    assert "rejected by the owner" in res["failed"][e]
+    assert list_proposals(store, T0) == []
+    assert store.load()["global"]["important_keywords"] == ["a"]
+    plain = put(store, journal, add={"ignored_keywords": ["z"]})["pending"][0]["proposal_id"]
+    reject(store, plain, T0)  # a plain proposal's rejection is not remembered
+    assert store.load()["rejected_undos"] == [e]
+
+
+def test_rejected_undos_are_bounded(store, journal):
+    with store.transaction() as s:
+        s["rejected_undos"] = [f"old{i}" for i in range(prefs.MAX_REJECTED_UNDOS)]
+    e = put(store, journal, add={"important_keywords": ["a"]})["change_id"]
+    reject(store, undo(None, journal, "a", e, store=store, now=T0)["proposed"][0]["proposal_id"], T0)
+    kept = store.load()["rejected_undos"]
+    assert len(kept) == prefs.MAX_REJECTED_UNDOS == 200 and kept[-1] == e and "old0" not in kept
+
+
+def test_malformed_rejected_undos_ignored(store, caplog):
+    store.path.write_text(json.dumps({"rejected_undos": ["ok", 5, None]}))
+    with caplog.at_level("WARNING"):
+        assert store.load()["rejected_undos"] == ["ok"]
+    store.path.write_text(json.dumps({"rejected_undos": "nope"}))
+    assert store.load()["rejected_undos"] == []

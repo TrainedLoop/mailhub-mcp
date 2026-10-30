@@ -36,8 +36,10 @@ def _summary(p: dict) -> str:
 
 
 def _show(p: dict) -> str:
+    undo = [f"Undo of:      {_safe(p['undo_of'])}"] if p.get("undo_of") else []
     return "\n".join([
         f"Proposal:     {_safe(p['proposal_id'])}",
+        *undo,
         f"Scope:        {_safe(p['scope'])}",
         f"Field:        {_safe(p['field'])}",
         f"Operation:    {_safe(p['op'])}",
@@ -88,6 +90,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             res = preferences.reject(store, args.proposal_id)
             print(f"Proposal {_safe(res['proposal_id'])} rejected and removed.")
+            if res.get("undo_of"):
+                print(f"  The undo of {_safe(res['undo_of'])} will not be proposed again.")
     except MailhubError as exc:
         print(f"error: {_safe(exc)}", file=sys.stderr)
         return 2

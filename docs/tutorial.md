@@ -119,7 +119,7 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 
 The direction rule decides what applies:
 
-- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately. `undo_change` on it lowers attention again, so the undo becomes a proposal you approve like any other. Keywords may contain only letters, digits, spaces, apostrophes, dots and hyphens.
+- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately. `undo_change` on it lowers attention again, so the undo becomes a proposal you approve like any other. Once approved, the change counts as undone; if you reject it, Claude cannot propose that undo again (make the change with a new request instead). Keywords may contain only letters, digits, spaces, apostrophes, dots and hyphens.
 - Lowering attention (ignoring a sender or keyword, removing something from an important list) never applies from the chat. It becomes a proposal with an id such as `p-1a2b3c4d`, valid for 14 days, and at most 50 can be open at once. As long as you only approve proposals you recognize, a hostile email cannot quietly hide future alerts. Raising-attention changes apply without review, so check `list_changes` now and then; they can be undone.
 
 Approve or reject proposals from a terminal on the server, outside the chat:

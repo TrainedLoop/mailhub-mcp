@@ -47,6 +47,7 @@ MAX_KEYWORD_LEN = 40
 KEYWORD_PUNCTUATION = frozenset(" '.-\u2019")
 MAX_ITEMS = 200
 MAX_PROPOSALS = 50
+MAX_REJECTED_UNDOS = 200
 MAX_USER_REQUEST = 500
 PROPOSAL_TTL = timedelta(days=14)
 CLOCK_SKEW = timedelta(minutes=5)
@@ -163,7 +164,7 @@ def _empty_rules() -> dict:
 
 
 def _default_state() -> dict:
-    return {"global": _empty_rules(), "accounts": {}, "proposals": []}
+    return {"global": _empty_rules(), "accounts": {}, "proposals": [], "rejected_undos": []}
 
 
 def _clean_rules(raw: Any, where: str) -> dict:
@@ -196,6 +197,7 @@ def _valid_proposal(p: Any) -> bool:
         and all(isinstance(p.get(k), t) for k, t in _PROPOSAL_TYPES.items())
         and p["field"] in LIST_FIELDS and p["op"] in ("add", "remove")
         and all(isinstance(v, str) for v in p["values"])
+        and isinstance(p.get("undo_of"), (str, type(None)))  # set on proposals made by undo_entry
     )
     if ok:
         try:
@@ -206,6 +208,18 @@ def _valid_proposal(p: Any) -> bool:
     if not ok:
         log.warning("dropping malformed proposal %r from preferences file", p.get("id") if isinstance(p, dict) else p)
     return ok
+
+
+def _clean_rejected(raw: Any) -> list[str]:
+    """Change ids whose undo proposal the owner rejected. Losing an entry only lets the undo be proposed
+    again (the owner still decides), so bad data is dropped with a warning instead of failing the load."""
+    if raw is None:
+        return []
+    items = raw if isinstance(raw, list) else []
+    kept = [i for i in items if isinstance(i, str)]
+    if not isinstance(raw, list) or len(kept) != len(items):
+        log.warning("dropping malformed rejected_undos entries from preferences file")
+    return kept[-MAX_REJECTED_UNDOS:]
 
 
 class PreferenceStore:
@@ -234,6 +248,7 @@ class PreferenceStore:
             "global": _clean_rules(raw.get("global"), "global"),
             "accounts": {a: _clean_rules(r, f"accounts.{a}") for a, r in accounts.items()},
             "proposals": [p for p in proposals if _valid_proposal(p)],
+            "rejected_undos": _clean_rejected(raw.get("rejected_undos")),
         }
 
     @contextlib.contextmanager
@@ -398,18 +413,21 @@ def _proposal_view(p: dict) -> dict:
     return {
         "proposal_id": p["id"], "scope": p["scope"], "field": p["field"], "op": p["op"],
         "values": list(p["values"]), "user_request": p.get("user_request"),
-        "created": p["created"], "expires": p["expires"],
+        "created": p["created"], "expires": p["expires"], "undo_of": p.get("undo_of"),
     }
 
 
 def _propose(
     state: dict, live: list[dict], scope: str, field: str, op: str, values: list[str], request: str,
-    now: datetime,
+    now: datetime, undo_of: str | None = None,
 ) -> dict:
-    """Reuse a live proposal with the same scope, field, op and values, or add one (capped)."""
+    """Reuse a live proposal with the same scope, field, op, values and undo_of, or add one (capped).
+
+    `undo_of` (the change an undo proposal reverts) is kept apart from plain proposals so that approving
+    it journals the approval as an undo of that change."""
     keys = {_key(field, v) for v in values}
     existing = next((
-        p for p in live if (p["scope"], p["field"], p["op"]) == (scope, field, op)
+        p for p in live if (p["scope"], p["field"], p["op"], p.get("undo_of")) == (scope, field, op, undo_of)
         and {_key(field, v) for v in p["values"]} == keys
     ), None)
     if existing is None:
@@ -423,6 +441,8 @@ def _propose(
             "values": list(values), "user_request": request, "created": now.isoformat(),
             "expires": (now + PROPOSAL_TTL).isoformat(),
         }
+        if undo_of is not None:
+            existing["undo_of"] = undo_of
         state["proposals"].append(existing)
         live.append(existing)
     return {"proposal_id": existing["id"], "scope": scope, "field": field, "op": op,
@@ -625,9 +645,12 @@ def approve(
             state["proposals"] = [p for p in others if not _expired(p, now)]
             after = {field: list(rules[field])}
             if changed:
+                # An approved undo proposal is journaled as an undo of the original change: the original
+                # then counts as undone (undo_since will not revert it again) and this entry, like every
+                # undo entry, cannot itself be undone.
                 change_id = _record(
                     journal, scope, "approve_preference", before, after,
-                    proposal.get("user_request") or "", now,
+                    proposal.get("user_request") or "", now, undo_of=proposal.get("undo_of"),
                 )
     return {
         "proposal_id": proposal_id, "change_id": change_id,
@@ -636,14 +659,21 @@ def approve(
 
 
 def reject(store: PreferenceStore, proposal_id: str, now: datetime | None = None) -> dict:
+    """Remove a proposal. Rejecting an undo proposal is remembered (bounded), so a later undo_change or
+    undo_since of the same change is refused instead of proposing it again."""
     now = _now(now)
     with store.transaction() as state:
         proposal = _find(state, proposal_id, now)
         state["proposals"] = [
             p for p in state["proposals"] if p is not proposal and not _expired(p, now)
         ]
+        original = proposal.get("undo_of")
+        if original:
+            kept = [c for c in state["rejected_undos"] if c != original] + [original]
+            state["rejected_undos"] = kept[-MAX_REJECTED_UNDOS:]
     return {"proposal_id": proposal_id, "rejected": True, "scope": proposal["scope"],
-            "field": proposal["field"], "op": proposal["op"], "values": list(proposal["values"])}
+            "field": proposal["field"], "op": proposal["op"], "values": list(proposal["values"]),
+            "undo_of": original}
 
 
 def _undo_request(change_id: str, original: str | None) -> str:
@@ -688,6 +718,11 @@ def undo_entry(
     try:
         with store.transaction() as state:
             _prune(state, now)
+            if change_id in state["rejected_undos"]:
+                raise OrganizeError(
+                    f"the undo of {change_id} was rejected by the owner; to change these preferences, "
+                    "make the change again with set_preferences"
+                )
             rules = _rules(state, scope)
             stale = [f for f in fields if rules[f] != after[f]]
             if stale:
@@ -725,7 +760,7 @@ def undo_entry(
                         _apply_op(one, OPPOSITE[f], "remove", pending_removals.get(OPPOSITE[f], []))
                     _apply_op(one, f, op, vs)
                     _check_rules(one, scope, {f})
-                    proposed.append(_propose(state, live, scope, f, op, vs, request, now))
+                    proposed.append(_propose(state, live, scope, f, op, vs, request, now, undo_of=change_id))
             except PreferenceError as exc:
                 raise OrganizeError(f"Cannot undo {change_id}: {exc}") from None
             changed = [f for f in dict.fromkeys(raised) if rules[f] != current[f]]
