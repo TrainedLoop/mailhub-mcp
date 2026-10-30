@@ -10,6 +10,7 @@
 # unit, e.g. Environment="SUBNETS=172.31.0.0/24 172.31.1.0/24". The private
 # ranges below include those subnets, so instances cannot reach each other.
 set -eu
+set -f  # no glob expansion of $SUBNETS
 
 SUBNETS=${SUBNETS:-172.31.0.0/24}
 

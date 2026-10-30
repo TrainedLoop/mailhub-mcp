@@ -118,6 +118,19 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 - **Preferences**: `data/preferences.json`. Proposals that lower attention are approved with `mailhub-admin`, see step 11.
 - **Revoke everything**: `docker compose down`, remove the public exposure, and revoke the app in your Google accounts.
 
+### Backup and restore
+
+- Back up `data/` (journal, preferences, OAuth state), `secrets/accounts/` and `.env`. Stop the container first (`docker compose stop`) or copy the files atomically, so a write is not caught half done. The secrets are credentials: keep the backup private and encrypted.
+- To restore, put the files back, then make them owned by uid 10001: `sudo chown -R 10001:10001 data secrets/accounts`, directories `700` and files `600`. Run `docker compose up -d`.
+
+### Updating
+
+`git pull`, then `docker compose up -d --build`, then check `docker compose logs mailhub-mcp`. Reconnecting the connector in claude.ai is not needed unless `JWT_SIGNING_KEY` changed.
+
+### Journal growth
+
+`data/changes.jsonl` is append-only and each change adds a small line, so it grows slowly. To archive it: `docker compose stop`, move `data/changes.jsonl` aside (for example to `data/changes-2026.jsonl.bak`), `docker compose up -d`. Archived changes can no longer be undone or listed.
+
 ## 11. Preferences and approving proposals
 
 `get_preferences` and `set_preferences` let Claude remember which senders and keywords matter (`important_senders`, `ignored_senders`, `important_keywords`, `ignored_keywords`) and when triage last ran (`last_triage_at`). Claude should change them only when you ask in the conversation, and every change records your words as `user_request`.

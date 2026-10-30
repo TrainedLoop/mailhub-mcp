@@ -100,6 +100,8 @@ Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`,
 
 `Journal.entries(since)` returns valid entries newest first by reversed file order (append order is causal, serialized by the journal lock) and skips malformed lines; `since` only filters, inclusively, by timestamp (naive times are UTC). `organize.undo_since` takes the entries since a time, drops undo entries and changes already undone, and optionally filters by account. It undoes them newest first, so two changes to the same message restore its exact original labels. Each change goes through `undo`, so every protection still applies and the journal lock is taken per change, not across the loop. If a change fails (reported in `failed`), older candidates touching any of its messages are held back and also reported in `failed` as blocked, so retrying the failed one later still restores exactly. A call attempts candidates until 50 are undone (`MAX_UNDO_SINCE`) or 200 were attempted (`MAX_UNDO_SINCE_ATTEMPTS`), so persistent failures cannot starve healthy changes; `remaining` says whether candidates were left unattempted. Without `confirm` it only returns summaries (up to 50) and writes nothing.
 
+When an undo of a preference change is split (parts that raise attention apply at once, parts that lower it become proposals), approving any one of its proposals marks the original change undone. Approving one proposal therefore does not undo the others, and `undo_since` will not revisit the change: the remaining parts must each be approved before they expire (14 days) or be re-proposed manually with `set_preferences`.
+
 `modify_by_query` skips messages already in the target state and returns a hint when nothing is left.
 
 ## Content defenses

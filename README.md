@@ -48,6 +48,13 @@ Note on scope: Gmail's `gmail.modify` scope technically also permits sending and
 
 Run a separate instance per person: its own directory, `.env`, linked accounts, `data/`, container name, local port and Compose project name, and its own public URL. Each person adds their own custom connector in claude.ai with their instance's URL and logs in with their own Google account. See [docs/tutorial.md](docs/tutorial.md#14-more-than-one-person) for the steps and [examples/tailscale-funnel/](examples/tailscale-funnel/#more-than-one-person) for a second instance on the same host.
 
+## Privacy
+
+- Anything Claude reads through this server (message text, headers, search results) becomes part of your conversation and is sent to Anthropic. See [Anthropic's privacy policy](https://www.anthropic.com/legal/privacy).
+- The server stores locally, in `data/` and `secrets/`: OAuth tokens, the change journal (including the `query` and `user_request` of each change) and your preferences.
+- Logs include tool names and their arguments (search queries, message ids). Set log retention on the host accordingly.
+- Apart from the Google APIs, the server sends nothing anywhere else.
+
 ## Development
 
 ```bash
