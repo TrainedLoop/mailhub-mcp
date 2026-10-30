@@ -8,11 +8,11 @@ One instance serves one owner: `ALLOWED_EMAILS` holds only your own Google login
 
 ## Features
 
-The server exposes 17 tools (10 read-only, 7 that change something); see [docs/architecture.md](docs/architecture.md#tools) for the list.
+The server exposes 18 tools (11 read-only, 7 that change something); see [docs/architecture.md](docs/architecture.md#tools) for the list.
 
 - **Multi-account**: each mailbox gets an alias. Read tools take `accounts=None` to mean "all accounts" and return `{results, errors}`, with at most one error per account.
 - **Search, read and triage signals**: `search_emails`, `read_email`, `read_emails`, `read_thread`, `list_labels`, `list_drafts`. Messages carry unread, starred, importance, category and newsletter flags.
-- **Inbox overview**: `inbox_overview` gives per-account totals, unread counts, newsletters, categories and top senders.
+- **Inbox overview**: `inbox_overview` gives per-account totals, unread counts, newsletters, categories and top senders. `count_messages` counts the matches of a query per account from message ids only (about 5 quota units per 500 messages), to size a bulk change before running it.
 - **Reversible organization**: `create_label`, `modify_emails`, `modify_by_query` (labels, archive, mark read, star), each recorded in a journal, `undo_change` to revert a batch, `list_changes` to find earlier changes and their change_ids across sessions, and `undo_since` as a panic button that undoes everything since a time.
 - **Triage preferences**: `get_preferences` and `set_preferences` keep rules such as important and ignored senders or keywords, and the time of the last triage, so scheduled triage is consistent from one run to the next. Rules that raise attention apply immediately; rules that lower attention wait for your approval outside the chat (`mailhub-admin`).
 - **Change history**: every label change and every preference change is journaled with its motivating request, listed by `list_changes` and undoable.

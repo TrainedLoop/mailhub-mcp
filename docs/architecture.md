@@ -81,6 +81,7 @@ All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked re
 | `read_emails` | read-only | Up to 25 messages of one account |
 | `read_thread` | read-only | A whole thread |
 | `inbox_overview` | read-only | Per-account totals, unread, newsletters, categories, top 30 senders; scans 200 messages by default (max 2000) |
+| `count_messages` | read-only | Matches of a query per account and in total, from message ids only; stops at 10,000 per account (`capped`) |
 | `list_drafts` | read-only | Existing drafts |
 | `list_labels` | read-only | Labels of one account |
 | `create_label` | write | Create or return a label |
@@ -95,7 +96,7 @@ All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked re
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 
-**Quota in tools.** The tool descriptions tell the calling model what each call costs: about 20 units per message for `search_emails`, `inbox_overview`, `modify_emails`, `undo_change` and `undo_since` (the last three read each message first), about 60 per message for `read_email`/`read_emails` (full format), about 120 per `read_thread`, about 140 for `create_draft` (message lookup and thread read), and a few units per page plus 50 per apply for `modify_by_query`, plus 20 per message when a truncated label listing leaves some unsettled or another client changed it meanwhile. `list_accounts` states the per-mailbox budget (`GMAIL_UNITS_PER_MINUTE`), and `inbox_overview` warns against parallel or back-to-back runs.
+**Quota in tools.** The tool descriptions tell the calling model what each call costs: about 20 units per message for `search_emails`, `inbox_overview`, `modify_emails`, `undo_change` and `undo_since` (the last three read each message first), about 60 per message for `read_email`/`read_emails` (full format), about 120 per `read_thread`, about 140 for `create_draft` (message lookup and thread read), about 5 per 500 messages for `count_messages` (id listing only), and a few units per page plus 50 per apply for `modify_by_query`, plus 20 per message when a truncated label listing leaves some unsettled or another client changed it meanwhile. `list_accounts` states the per-mailbox budget (`GMAIL_UNITS_PER_MINUTE`), and `inbox_overview` warns against parallel or back-to-back runs.
 
 Every response that touched one or more mailboxes carries a top-level `quota` key: `{"<alias>": {"used_last_minute": int, "budget_per_minute": int}}`, next to the existing keys. `used_last_minute` is the units the mailbox's rate limiter booked in the last 60 seconds (`RateLimiter.used_last_minute`, a deque pruned on access), capped at the budget because slots booked ahead for waiting calls count too, and `budget_per_minute` the configured budget. Providers expose it through the optional `quota_status()`; the server skips providers without it. Only numbers are reported.
 
@@ -153,7 +154,7 @@ Every email is text written by a third party, so what reaches Claude is sanitize
 
 - **Drafts.** `create_draft` requires `reply_to_message_id`. Participants are every address in From, To, Cc and Reply-To across the thread, plus the account's own address; `to` and `cc` outside that set are refused and the error lists the allowed addresses. `to` defaults to the Reply-To of the replied message, else its From. A thread containing any message flagged suspicious is refused. Nothing is ever sent.
 - **Daily cap.** `MAX_CHANGES_PER_DAY` (default 2000) limits messages changed by `modify_emails` and `modify_by_query` per account in a rolling 24 hours, counted from the journal (undo entries excluded). The check runs under the journal lock, before any write, and the error ("would exceed the daily change cap") says how many changes remain. Undo is never capped.
-- **Read-only mode.** `TOOLS=all|read-only` (default `all`). In `read-only` only `list_accounts`, `search_emails`, `read_email`, `read_emails`, `read_thread`, `inbox_overview`, `list_drafts`, `list_labels`, `list_changes` and `get_preferences` are registered; the write tools do not exist on that instance. Any other value fails startup. Since `set_preferences` is not available either, such an instance cannot record `last_triage_at`.
+- **Read-only mode.** `TOOLS=all|read-only` (default `all`). In `read-only` only `list_accounts`, `search_emails`, `count_messages`, `read_email`, `read_emails`, `read_thread`, `inbox_overview`, `list_drafts`, `list_labels`, `list_changes` and `get_preferences` are registered; the write tools do not exist on that instance. Any other value fails startup. Since `set_preferences` is not available either, such an instance cannot record `last_triage_at`.
 
 ## Limitations
 

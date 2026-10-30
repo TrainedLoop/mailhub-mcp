@@ -103,6 +103,7 @@ warn_if_several_owners(settings.allowed_emails)
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 MAX_READ_IDS = 25
+COUNT_CAP = 10_000  # per account; count_messages reports capped=true beyond it
 
 
 # Every tool name in any mode, including tools that are not registered in read-only mode (and tools
@@ -110,13 +111,13 @@ MAX_READ_IDS = 25
 ALL_TOOL_NAMES = frozenset({
     "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
     "list_drafts", "list_labels", "create_label", "modify_emails", "modify_by_query", "undo_change",
-    "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences",
+    "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences", "count_messages",
 })
 
 # Tools registered when TOOLS=read-only. Everything else is registered only in "all" mode.
 READ_ONLY_TOOLS = frozenset({
     "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
-    "list_drafts", "list_labels", "list_changes", "get_preferences",
+    "list_drafts", "list_labels", "list_changes", "get_preferences", "count_messages",
 })
 
 
@@ -311,6 +312,26 @@ async def search_emails(query: str, accounts: list[str] | None = None, max_resul
     for alias, count in unreadable.items():
         out["errors"].setdefault(alias, f"{count} message{'s' if count != 1 else ''} could not be read")
     return with_quota(out, selected)
+
+
+@tool(annotations=READ_ONLY, description=(
+    "Count the messages matching a query in all accounts or the given aliases, from message ids only (no message is read). "
+    f"Returns counts: {{alias: {{count, capped}}}} and total; counting stops at {COUNT_CAP:,} per account (capped=true means at least that many). "
+    "Costs about 5 Gmail quota units per 500 messages counted: the cheap way to size a bulk change, or split it into steps, before modify_by_query."
+))
+async def count_messages(query: str, accounts: list[str] | None = None) -> dict:
+    selected = _accounts(accounts)
+    cap = COUNT_CAP
+
+    def work(account) -> list[dict]:
+        found = len(account.provider.list_ids(query, cap + 1))
+        return [{"count": min(found, cap), "capped": found > cap}]
+
+    res = await fan_out(selected, work)
+    counts = {r["account"]: {"count": r["count"], "capped": r["capped"]} for r in res["results"]}
+    return with_quota(
+        {"counts": counts, "total": sum(c["count"] for c in counts.values()), "errors": res["errors"]}, selected
+    )
 
 
 @tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units." + UNTRUSTED_NOTE)

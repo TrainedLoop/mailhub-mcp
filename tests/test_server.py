@@ -61,7 +61,7 @@ def test_tool_names():
     assert asyncio.run(go()) == {
         "list_accounts", "search_emails", "read_email", "read_emails", "read_thread", "inbox_overview",
         "list_drafts", "list_labels", "create_label", "modify_emails", "modify_by_query", "undo_change",
-        "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences",
+        "create_draft", "list_changes", "undo_since", "get_preferences", "set_preferences", "count_messages",
     }
 
 
@@ -560,8 +560,8 @@ def test_read_only_mode_registers_exactly_the_listed_tools():
         capture_output=True, text=True, check=True,
     ).stdout.strip().splitlines()[-1]
     spec_read_only = [  # literal copy of the spec's read-only list
-        "get_preferences", "inbox_overview", "list_accounts", "list_changes", "list_drafts", "list_labels",
-        "read_email", "read_emails", "read_thread", "search_emails",
+        "count_messages", "get_preferences", "inbox_overview", "list_accounts", "list_changes", "list_drafts",
+        "list_labels", "read_email", "read_emails", "read_thread", "search_emails",
     ]
     assert json.loads(out) == spec_read_only
 
@@ -1321,3 +1321,49 @@ def test_quota_in_list_accounts_list_changes_and_undo_since(fakes):
     _assert_quota(preview, ["alice-personal"])
     done = call("undo_since", {"since": "2000-01-01T00:00", "confirm": True})
     _assert_quota(done, ["alice-personal"])
+
+
+def test_count_messages_per_account_and_total(fakes):
+    out = call("count_messages", {"query": "in:inbox"})
+    assert out["counts"] == {
+        "alice-personal": {"count": 2, "capped": False}, "bob-work": {"count": 1, "capped": False},
+    }
+    assert out["total"] == 3 and out["errors"] == {}
+    assert set(out["quota"]) == {"alice-personal", "bob-work"}
+    # only id listings, never message reads
+    assert all(c[0] == "messages.list" for c in fakes.a.calls + fakes.b.calls)
+
+
+def test_count_messages_subset_errors_and_unknown_account(fakes):
+    fakes.b.fail = RefreshError("bad")
+    out = call("count_messages", {"query": "x"})
+    assert set(out["counts"]) == {"alice-personal"} and "bob-work" in out["errors"]
+    assert out["total"] == 2
+    out = call("count_messages", {"query": "x", "accounts": ["alice-personal"]})
+    assert set(out["counts"]) == {"alice-personal"}
+    with pytest.raises(ToolError, match="alice-personal"):
+        call("count_messages", {"query": "x", "accounts": ["zzz"]})
+
+
+def test_count_messages_caps_per_account(fakes, monkeypatch):
+    monkeypatch.setattr(server, "COUNT_CAP", 3)
+    for i in range(10):
+        fakes.a.add_message(f"c{i}", labels=["INBOX"])
+    for i in range(2, 4):
+        fakes.b.add_message(f"w{i}", labels=["INBOX"])
+    fakes.a.query_results["big"] = [f"c{i}" for i in range(10)]
+    fakes.b.query_results["big"] = ["w1", "w2", "w3"]
+    out = call("count_messages", {"query": "big"})
+    assert out["counts"]["alice-personal"] == {"count": 3, "capped": True}
+    assert out["counts"]["bob-work"] == {"count": 3, "capped": False}
+    assert out["total"] == 6
+
+
+def test_count_messages_is_read_only_and_describes_cost():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    t = asyncio.run(go())["count_messages"]
+    assert t.annotations.read_only_hint is True
+    assert "5" in t.description and "500" in t.description and "modify_by_query" in t.description
+    assert "count_messages" in server.READ_ONLY_TOOLS and "count_messages" in server.ALL_TOOL_NAMES
