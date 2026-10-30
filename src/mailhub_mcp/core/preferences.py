@@ -83,9 +83,50 @@ def normalize_sender(value: Any) -> str:
     return v
 
 
-def _keyword_char_ok(c: str) -> bool:
-    # Letters of any script (with their combining marks), decimal digits, space, apostrophe, dot, hyphen.
-    return c in KEYWORD_PUNCTUATION or unicodedata.category(c)[0] in ("L", "M") or unicodedata.category(c) == "Nd"
+# Default_Ignorable_Code_Point (Unicode DerivedCoreProperties): rendered as nothing, so they can hide text
+# or make two keywords look identical. unicodedata does not expose the property; these are its ranges.
+_DEFAULT_IGNORABLE = (
+    (0x00AD, 0x00AD), (0x034F, 0x034F), (0x061C, 0x061C), (0x115F, 0x1160), (0x17B4, 0x17B5),
+    (0x180B, 0x180F), (0x200B, 0x200F), (0x202A, 0x202E), (0x2060, 0x206F), (0x3164, 0x3164),
+    (0xFE00, 0xFE0F), (0xFEFF, 0xFEFF), (0xFFA0, 0xFFA0), (0xFFF0, 0xFFF8), (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A), (0xE0000, 0xE0FFF),
+)
+# Modifier letters (Lm) are refused (several look like a colon, apostrophe or slash) except these word
+# characters: Japanese prolonged sound and iteration marks, the CJK iteration mark and Thai mai yamok.
+_ALLOWED_LM = frozenset("\u3005\u309d\u309e\u30fc\u30fd\u30fe\uff70\u0e46")
+# Combining marks stacked on one letter beyond this are refused (real words use at most three).
+MAX_MARKS_PER_LETTER = 3
+
+
+def _default_ignorable(c: str) -> bool:
+    o = ord(c)
+    return any(lo <= o <= hi for lo, hi in _DEFAULT_IGNORABLE)
+
+
+def _keyword_chars_ok(value: str) -> bool:
+    """Letters of any script (with their combining marks), decimal digits, space, apostrophe, dot, hyphen.
+
+    A combining mark must follow a letter (or a mark on a letter), at most MAX_MARKS_PER_LETTER per letter;
+    overlay marks (which draw a slash or bar through a letter) and enclosing marks are refused, as are
+    default-ignorable code points and modifier letters outside a short allowlist."""
+    marks = None  # None: the previous character is not a letter or a mark on a letter
+    for c in value:
+        cat = unicodedata.category(c)
+        if _default_ignorable(c):
+            return False
+        if c in KEYWORD_PUNCTUATION or cat == "Nd":
+            marks = None
+        elif cat[0] == "L":
+            if cat == "Lm" and c not in _ALLOWED_LM:
+                return False
+            marks = 0
+        elif cat in ("Mn", "Mc"):
+            if marks is None or marks >= MAX_MARKS_PER_LETTER or unicodedata.combining(c) == 1:
+                return False  # combining class 1 = overlay
+            marks += 1
+        else:  # Me (enclosing marks), symbols, other punctuation, separators, controls, unassigned
+            return False
+    return True
 
 
 def normalize_keyword(value: Any) -> str:
@@ -99,7 +140,7 @@ def normalize_keyword(value: Any) -> str:
         raise PreferenceError(
             f"Invalid keyword {value!r}: 1-{MAX_KEYWORD_LEN} characters, no control characters or newlines"
         )
-    if not all(_keyword_char_ok(c) for c in v):
+    if not _keyword_chars_ok(v):
         raise PreferenceError(
             f"Invalid keyword {value!r}: only letters, digits, spaces, apostrophes, dots and hyphens are "
             "allowed (use important_senders / ignored_senders for addresses)"
