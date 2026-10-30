@@ -29,6 +29,8 @@ def _allowed_text(allowed: set[str]) -> str:
 
 
 def _check(field: str, value: str, allowed: set[str]) -> list[str]:
+    if "\r" in value or "\n" in value:
+        raise DraftRefused(f"'{field}' must be a single line; allowed addresses: {_allowed_text(allowed)}")
     addrs = _addresses(value)
     if not addrs:
         raise DraftRefused(f"'{field}' has no valid email address; allowed addresses: {_allowed_text(allowed)}")

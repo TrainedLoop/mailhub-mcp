@@ -14,13 +14,13 @@ from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
 from mailhub_mcp.core import organize
 from mailhub_mcp.core.accounts import AccountRegistry
-from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-from mailhub_mcp.core.history import summarize_entry, undone_ids
-from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound
 from mailhub_mcp.core.content import assess, new_nonce, wrap_untrusted
-from mailhub_mcp.core.models import Message, MessageSummary, Thread, with_account
+from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
+from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound
+from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal
+from mailhub_mcp.core.models import Message, MessageSummary, Thread, with_account
 from mailhub_mcp.core.overview import build_overview
 from mailhub_mcp.providers import PROVIDERS
 
@@ -362,7 +362,8 @@ async def undo_since(since: str, accounts: list[str] | None = None, confirm: boo
         "addresses already in that thread (From, To, Cc or Reply-To of any message) or the account's own address; "
         "anything else is refused and the error lists the allowed addresses. "
         "When 'to' is omitted it defaults to the Reply-To of the replied message, else its From. "
-        "Subject defaults to 'Re: ...'."
+        "Subject defaults to 'Re: ...' and must be a single line. "
+        "Drafting is disabled for a thread containing any message flagged suspicious (possible prompt injection): the user must reply manually in Gmail."
     ),
 )
 async def create_draft(
@@ -376,11 +377,22 @@ async def create_draft(
     if not reply_to_message_id or not reply_to_message_id.strip():
         raise ToolError("drafts are replies only: reply_to_message_id is required")
 
+    if "\r" in subject or "\n" in subject:
+        raise ToolError("subject must be a single line (no CR/LF)")
+    names = await _tool_names()
+
     def work(p):
         found = p.get_messages([reply_to_message_id], "summary")
         if not found.found:
             raise MessageNotFound([reply_to_message_id])
         thread = p.get_thread(found.found[0].thread_id)
+        if any(
+            assess([m.subject, m.from_, m.snippet, m.body], m.hidden_removed, names) for m in thread.messages
+        ):
+            raise MailhubError(
+                "this thread contains a message flagged as a possible prompt injection; "
+                "drafting is disabled for it — reply manually in Gmail"
+            )
         try:
             to_addr, cc_addr = resolve_recipients(thread, reply_to_message_id, p.address(), to, cc)
         except DraftRefused as exc:

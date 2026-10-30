@@ -472,3 +472,42 @@ def test_snippet_injection_flagged_in_search(fakes):
     fakes.a.query_results["q"] = ["s5"]
     out = call("search_emails", {"query": "q", "accounts": ["alice-personal"]})
     assert out["results"][0]["suspicious"]
+
+
+def test_create_draft_refused_for_suspicious_thread(fakes):
+    fakes.a.add_message("s1", thread_id="sth", labels=["INBOX"], body=INJECTION,
+                        headers={"From": "evil <evil@x.com>", "Subject": "hi"})
+    with pytest.raises(ToolError, match=r"^alice-personal: this thread contains a message flagged as a possible prompt injection; drafting is disabled for it"):
+        call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "s1"})
+    assert not fakes.a.drafts
+
+
+def test_create_draft_benign_thread_still_drafts(fakes):
+    fakes.a.add_message("b1", thread_id="bth", labels=["INBOX"], body="Lunch tomorrow?",
+                        headers={"From": "bob <bob@x.com>", "Subject": "lunch"})
+    assert call("create_draft", {"account": "alice-personal", "body": "ok", "reply_to_message_id": "b1"})["draft_id"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"to": "bob@x.com;evil@y.com"},
+        {"to": '"bob@x.com" <evil@y.com>'},
+        {"to": "evil@y.com (bob@x.com)"},
+        {"to": "bob@x.com\r\nBcc: evil@y.com"},
+        {"cc": "bob@x.com\nevil@y.com"},
+        {"subject": "hi\r\nBcc: evil@y.com"},
+    ],
+)
+def test_create_draft_all_refused(fakes, args):
+    fakes.a.add_message("p1", thread_id="pth", labels=["INBOX"], body="hello",
+                        headers={"From": "bob <bob@x.com>", "Subject": "s"})
+    with pytest.raises(ToolError):
+        call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "p1", **args})
+    assert not fakes.a.drafts
+
+
+def test_create_draft_empty_to_uses_default(fakes):
+    out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "to": ""})
+    raw = base64.urlsafe_b64decode(fakes.a.drafts[out["draft_id"]]["message"]["raw"]).decode()
+    assert "To: x@y.com" in raw

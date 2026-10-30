@@ -77,7 +77,7 @@ All 15 are defined in `server.py`.
 | `undo_change` | Revert a journaled change |
 | `list_changes` | Journal entries, newest first, with label names; filter by accounts and `since`; max 100 per call |
 | `undo_since` | Undo every change since a time, newest first; preview unless `confirm=true`; max 50 per call |
-| `create_draft` | Create an unsent reply draft (thread participants only) |
+| `create_draft` | Create an unsent reply draft (thread participants only; refused if any message in the thread is flagged suspicious) |
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 
