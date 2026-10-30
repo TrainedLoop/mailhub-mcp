@@ -9,6 +9,18 @@ def summarize_entry(entry: dict, undone: bool, label_names: dict[str, str]) -> d
     def names(ids: list[str]) -> list[str]:
         return [label_names.get(i, i) for i in ids]
 
+    if entry.get("kind") == "preferences":
+        return {
+            "change_id": entry["change_id"],
+            "timestamp": entry.get("timestamp"),
+            "tool": entry.get("tool"),
+            "kind": "preferences",
+            "scope": entry.get("scope"),
+            "fields": list(entry.get("after") or {}),
+            "user_request": entry.get("user_request"),
+            "undone": undone,
+            "undo_of": entry.get("undo_of"),
+        }
     return {
         "change_id": entry["change_id"],
         "timestamp": entry.get("timestamp"),

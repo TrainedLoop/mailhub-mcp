@@ -25,11 +25,18 @@ class Journal:
         prior: dict[str, list[str]],
         query: str | None = None,
         undo_of: str | None = None,
+        *,
+        kind: str | None = None,
+        scope: str | None = None,
+        before: dict | None = None,
+        after: dict | None = None,
+        user_request: str | None = None,
+        timestamp: datetime | None = None,
     ) -> str:
         change_id = uuid.uuid4().hex[:12]
         entry = {
             "change_id": change_id,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
             "account": account,
             "tool": tool,
             "added": added,
@@ -38,6 +45,8 @@ class Journal:
             "query": query,
             "undo_of": undo_of,
         }
+        if kind is not None:  # label entries keep their exact shape: no `kind` key
+            entry.update(kind=kind, scope=scope, before=before, after=after, user_request=user_request)
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as f:
