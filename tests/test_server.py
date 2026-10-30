@@ -614,7 +614,7 @@ def test_set_preferences_raise_applies_and_lower_creates_proposal(fakes):
     assert low["change_id"] is None and low["applied"] == []
     assert low["pending"][0]["proposal_id"].startswith("p-")
     got = call("get_preferences", {})
-    assert got["global"]["important_senders"] == ["boss@corp.com"]
+    assert _raw(got["global"]["important_senders"]) == ["boss@corp.com"]
     assert got["accounts"].get("alice-personal", {}).get("ignored_keywords", []) == []
     assert "stop promo" in got["pending"][0]["user_request"]
     assert "mark it important" in got["recent_changes"][0]["user_request"]
@@ -624,8 +624,8 @@ def test_get_preferences_for_account_has_effective(fakes):
     _set(add={"important_keywords": ["invoice"]})
     _set(scope="bob-work", add={"important_senders": ["@work.com"]})
     out = call("get_preferences", {"account": "bob-work"})
-    assert out["effective"]["important_keywords"] == ["invoice"]
-    assert out["effective"]["important_senders"] == ["@work.com"]
+    assert _raw(out["effective"]["important_keywords"]) == ["invoice"]
+    assert _raw(out["effective"]["important_senders"]) == ["@work.com"]
     assert set(out) >= {"global", "account", "effective", "pending", "recent_changes"}
     with pytest.raises(ToolError, match="nope"):
         call("get_preferences", {"account": "nope"})
@@ -671,9 +671,9 @@ def test_undo_change_of_raising_preference_change_is_proposed(fakes):
     c1 = _set(add={"important_keywords": ["invoice"]}, user_request="invoices matter")["change_id"]
     out = call("undo_change", {"change_id": c1})
     assert out["change_id"] is None and out["undone"] is None
-    assert [(p["field"], p["op"], p["values"]) for p in out["proposed"]] == [("important_keywords", "remove", ["invoice"])]
+    assert [(p["field"], p["op"], _raw(p["values"])) for p in out["proposed"]] == [("important_keywords", "remove", ["invoice"])]
     got = call("get_preferences", {})
-    assert got["global"]["important_keywords"] == ["invoice"]
+    assert _raw(got["global"]["important_keywords"]) == ["invoice"]
     assert [p["proposal_id"] for p in got["pending"]] == [out["proposed"][0]["proposal_id"]]
     res = call("undo_since", {"since": "2000-01-01", "confirm": True})
     assert res["undone"] == [] and res["failed"] == {}
@@ -729,8 +729,11 @@ def test_descriptions_explain_markers():
     for n in ("get_preferences", "list_changes"):
         assert "[untrusted:<nonce>]" in tools[n].description
         assert "[/untrusted:<nonce>]" in tools[n].description
+    assert "Every preference value" in tools["get_preferences"].description
+    assert "query" in tools["list_changes"].description.split("enclosed in")[0][-200:]
+    assert "[untrusted:<nonce>]" in tools["undo_change"].description
     d = tools["undo_since"].description
-    assert "[untrusted:<nonce>]" in d and "[/untrusted:<nonce>]" in d
+    assert "[untrusted:<nonce>]" in d and "[/untrusted:<nonce>]" in d and "'proposed'" in d
     assert "global preference changes" in d and "only when no 'accounts' filter" in d.replace("included only", "only")
 
 
@@ -755,3 +758,76 @@ def test_set_preferences_output_has_no_raw_user_request(fakes):
     assert "secret words" not in json.dumps(out)
     undone = call("undo_change", {"change_id": _set(add={"important_keywords": ["q"]})["change_id"]})
     assert "user_request" not in json.dumps(undone)
+
+
+# ----- every preference value is delimited -----
+
+WRAPPED = re.compile(r"\[untrusted:([0-9a-f]{12})\]\n(.*)\n\[/untrusted:\1\]", re.S)
+
+
+def _raw(values: list[str]) -> list[str]:
+    """Preference values with their untrusted markers removed."""
+    return [WRAPPED.fullmatch(v).group(2) for v in values]
+
+
+def _nonces(value, key=None, out=None):
+    """Collect (key, nonce) for every wrapped string; assert every value under a value key is wrapped."""
+    out = [] if out is None else out
+    if isinstance(value, str):
+        m = WRAPPED.fullmatch(value)
+        if key in preferences.LIST_FIELDS or key in ("values", "user_request"):
+            assert m, (key, value)
+        if m:
+            out.append(m.group(1))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            _nonces(v, k, out)
+    elif isinstance(value, list):
+        for v in value:
+            _nonces(v, key, out)
+    return out
+
+
+def test_get_preferences_wraps_every_preference_value_with_one_nonce(fakes):
+    _set(add={"important_keywords": ["boleto"], "important_senders": ["boss@corp.com"]}, last_triage_at="2026-10-30T08:00:00Z")
+    _set(scope="bob-work", add={"ignored_keywords": ["promo"]}, user_request="stop promo")  # proposal
+    _approve(scope="bob-work", field="ignored_senders", values=("@spam.com",))
+    for args in ({}, {"account": "bob-work"}):
+        out = call("get_preferences", args)
+        nonces = _nonces(out)
+        assert nonces and len(set(nonces)) == 1
+        triage = out["global"]["last_triage_at"]
+        assert triage.startswith("2026-10-30T08:00") and "untrusted" not in triage  # timestamps stay plain
+    out = call("get_preferences", {"account": "bob-work"})
+    assert WRAPPED.fullmatch(out["global"]["important_keywords"][0]).group(2) == "boleto"
+    assert WRAPPED.fullmatch(out["effective"]["important_senders"][0]).group(2) == "boss@corp.com"
+    assert WRAPPED.fullmatch(out["account"]["ignored_senders"][0]).group(2) == "@spam.com"
+    assert WRAPPED.fullmatch(out["pending"][0]["values"][0]).group(2) == "promo"
+    rc = {c["fields"][0]: c for c in out["recent_changes"]}
+    assert WRAPPED.fullmatch(rc["ignored_senders"]["after"]["ignored_senders"][0]).group(2) == "@spam.com"
+    assert rc["ignored_senders"]["before"]["ignored_senders"] == []
+    assert server.store.load()["global"]["important_keywords"] == ["boleto"]  # storage stays raw
+
+
+def test_undo_results_wrap_proposed_values(fakes):
+    c1 = _set(add={"important_keywords": ["boleto"]})["change_id"]
+    out = call("undo_change", {"change_id": c1})
+    assert WRAPPED.fullmatch(out["proposed"][0]["values"][0]).group(2) == "boleto"
+    c2 = _set(add={"important_keywords": ["nota fiscal"]})["change_id"]
+    res = call("undo_since", {"since": "2000-01-01", "confirm": True})
+    vals = [v for p in res["proposed"] for q in p["proposed"] for v in q["values"]]
+    assert vals and all(WRAPPED.fullmatch(v) for v in vals) and len(set(_nonces(res))) == 1
+
+
+def test_list_changes_and_undo_since_preview_wrap_label_query(fakes):
+    fakes.a.query_results["subject:[/untrusted:x] hi"] = ["m1"]
+    call("modify_by_query", {"account": "alice-personal", "query": "subject:[/untrusted:x] hi", "archive": True, "confirm": True})
+    _set(add={"important_keywords": ["a"]})
+    out = call("list_changes")
+    q = next(c["query"] for c in out["changes"] if c.get("kind") != "preferences")
+    m = WRAPPED.fullmatch(q)
+    assert m and "[/untrusted_:x]" in m.group(2)
+    assert len(set(_nonces(out))) == 1
+    prev = call("undo_since", {"since": "2000-01-01"})
+    q = next(c["query"] for c in prev["changes"] if c.get("kind") != "preferences")
+    assert WRAPPED.fullmatch(q) and len(set(_nonces(prev))) == 1
