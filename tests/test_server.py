@@ -1079,3 +1079,49 @@ def test_read_tool_descriptions_mention_unsubscribe_rule():
     tools = asyncio.run(go())
     for name in ("search_emails", "read_email", "read_emails", "read_thread", "inbox_overview"):
         assert "never visit the link" in tools[name]
+
+
+# --- /health ---
+
+def _asgi(method: str, path: str, host: str) -> tuple[int, bytes]:
+    """Drive the real HTTP app (host/origin protection and auth included) without a network."""
+    async def go():
+        app = server.mcp.http_app(host_origin_protection=True, allowed_hosts=server.allowed_hosts())
+        sent, state = [], {"body": False}
+
+        async def receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}
+
+        async def send(msg):
+            sent.append(msg)
+
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method, "path": path,
+            "raw_path": path.encode(), "query_string": b"", "scheme": "http", "root_path": "",
+            "headers": [(b"host", host.encode()), (b"content-type", b"application/json")],
+            "server": ("0.0.0.0", 8742), "client": ("127.0.0.1", 5000),
+        }
+        await app(scope, receive, send)
+        status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+        body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+        return status, body
+    return asyncio.run(go())
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1:8742", "localhost:8742", "example.test"])
+def test_health_ok_without_auth_for_allowed_hosts(host):
+    status, body = _asgi("GET", "/health", host)
+    assert status == 200 and json.loads(body) == {"status": "ok"}
+
+
+def test_health_rejects_unknown_host():
+    assert _asgi("GET", "/health", "evil.example")[0] == 421
+
+
+def test_health_reveals_nothing_else(fakes):
+    _, body = _asgi("GET", "/health", "127.0.0.1:8742")
+    assert body.replace(b" ", b"") == b'{"status":"ok"}'
+
+
+def test_mcp_endpoint_still_requires_auth():
+    assert _asgi("POST", "/mcp", "127.0.0.1:8742")[0] == 401

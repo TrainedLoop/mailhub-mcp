@@ -132,3 +132,77 @@ def test_show_and_reject_undo_proposal(tmp_path, capsys, monkeypatch):
 def test_show_plain_proposal_has_no_undo_line(env, capsys):
     _, _, pending = env
     assert "Undo of" not in run(capsys, "preferences", "show", pending[0]["proposal_id"])[1]
+
+
+# --- accounts ---
+
+class _Prov:
+    def __init__(self, address=None, error=None):
+        self._address, self._error = address, error
+
+    def address(self):
+        if self._error:
+            raise self._error
+        return self._address
+
+
+def _accounts_env(tmp_path, monkeypatch, aliases):
+    gmail = tmp_path / "accounts" / "gmail"
+    gmail.mkdir(parents=True)
+    for alias in aliases:
+        (gmail / f"{alias}.json").write_text("{}")
+    monkeypatch.setenv("ACCOUNTS_DIR", str(tmp_path / "accounts"))
+
+
+def _run_accounts(capsys, providers):
+    code = admin.main(["accounts"], providers=providers)
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_accounts_all_ok(tmp_path, monkeypatch, capsys):
+    _accounts_env(tmp_path, monkeypatch, ["alice", "bob"])
+    by = {"alice": _Prov("a@x.com"), "bob": _Prov("b@x.com")}
+    code, out, _ = _run_accounts(capsys, {"gmail": lambda alias, path: by[alias]})
+    assert code == 0
+    assert out.splitlines() == ["alice  gmail  ok  a@x.com", "bob  gmail  ok  b@x.com"]
+
+
+def test_accounts_failure_exit_1_and_message_cleaned(tmp_path, monkeypatch, capsys):
+    _accounts_env(tmp_path, monkeypatch, ["alice", "bob"])
+    by = {"alice": _Prov("a@x.com"), "bob": _Prov(error=RuntimeError("token expired\n\x1b[31mRED"))}
+    code, out, _ = _run_accounts(capsys, {"gmail": lambda alias, path: by[alias]})
+    assert code == 1
+    assert "alice  gmail  ok  a@x.com" in out
+    assert "bob  gmail  ERROR  token expired [31mRED" in out and "\x1b" not in out
+
+
+def test_accounts_factory_failure_is_an_error_row(tmp_path, monkeypatch, capsys):
+    _accounts_env(tmp_path, monkeypatch, ["alice"])
+
+    def boom(alias, path):
+        raise ValueError("bad credential file")
+
+    code, out, _ = _run_accounts(capsys, {"gmail": boom})
+    assert code == 1 and "alice  gmail  ERROR  bad credential file" in out
+
+
+def test_accounts_config_errors_exit_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ACCOUNTS_DIR", str(tmp_path / "missing"))
+    assert _run_accounts(capsys, {"gmail": lambda a, p: _Prov("x")})[0] == 2
+    (tmp_path / "empty").mkdir()
+    monkeypatch.setenv("ACCOUNTS_DIR", str(tmp_path / "empty"))
+    assert _run_accounts(capsys, {"gmail": lambda a, p: _Prov("x")})[0] == 2
+    _accounts_env(tmp_path, monkeypatch, ["alice"])
+    other = tmp_path / "accounts" / "other"
+    other.mkdir()
+    (other / "alice.json").write_text("{}")
+    code, _, err = _run_accounts(capsys, {"gmail": lambda a, p: _Prov("x"), "other": lambda a, p: _Prov("y")})
+    assert code == 2 and "alice" in err
+
+
+def test_accounts_needs_no_oauth_env(tmp_path, monkeypatch, capsys):
+    for k in ("PUBLIC_BASE_URL", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ALLOWED_EMAILS", "JWT_SIGNING_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    _accounts_env(tmp_path, monkeypatch, ["alice"])
+    assert _run_accounts(capsys, {"gmail": lambda a, p: _Prov("a@x.com")})[0] == 0

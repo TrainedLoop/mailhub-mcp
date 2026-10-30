@@ -9,6 +9,8 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware
 from pydantic import BaseModel
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
@@ -621,12 +623,22 @@ else:
     mcp.prompt(name="daily_triage", description="Read-only daily email triage across accounts: needs attention, can wait, suspicious, preferences.")(prompts.daily_triage_read_only)
 
 
+@mcp.custom_route("/health", methods=["GET"], include_in_schema=False)
+async def health(request: Request) -> JSONResponse:
+    """Liveness probe for Docker and monitors: no auth, and nothing beyond the status."""
+    return JSONResponse({"status": "ok"})
+
+
+def allowed_hosts() -> list[str]:
+    return [urlparse(settings.public_base_url).hostname, "localhost", "127.0.0.1"]
+
+
 def main() -> None:
     mcp.run(
         transport="http",
         host="0.0.0.0",
         port=settings.port,
-        allowed_hosts=[urlparse(settings.public_base_url).hostname, "localhost", "127.0.0.1"],
+        allowed_hosts=allowed_hosts(),
     )
 
 

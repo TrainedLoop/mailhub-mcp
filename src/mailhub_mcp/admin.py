@@ -1,7 +1,8 @@
-"""Out-of-band administration: mailhub-admin preferences list|show|approve|reject.
+"""Out-of-band administration: mailhub-admin preferences list|show|approve|reject, and mailhub-admin accounts.
 
 This is the only way to approve or reject a preference proposal. It is run by the user inside the
 container, reads only JOURNAL_PATH (preferences live next to the journal) and needs no OAuth settings.
+`accounts` checks that every linked mailbox still answers (run it from cron to notice expired credentials).
 """
 
 import argparse
@@ -9,6 +10,7 @@ import os
 import sys
 from pathlib import Path
 
+from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.content import clean_text
 from mailhub_mcp.core.errors import MailhubError
 from mailhub_mcp.core.journal import Journal
@@ -16,6 +18,7 @@ from mailhub_mcp.core import preferences
 from mailhub_mcp.core.preferences import PreferenceStore
 
 DEFAULT_JOURNAL = "/data/changes.jsonl"
+DEFAULT_ACCOUNTS_DIR = "/secrets/accounts"
 
 
 class _Parser(argparse.ArgumentParser):
@@ -58,14 +61,46 @@ def _parser() -> argparse.ArgumentParser:
     actions.add_parser("list", help="list pending proposals")
     for name in ("show", "approve", "reject"):
         actions.add_parser(name, help=f"{name} a proposal").add_argument("proposal_id")
+    groups.add_parser("accounts", help="check that every linked account still answers")
     return parser
 
 
-def main(argv: list[str] | None = None) -> int:
+def _check_accounts(providers=None) -> int:
+    """Print `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>` per account.
+    Exit 0 when all are ok, 1 when any failed, 2 when the accounts cannot be loaded."""
+    accounts_dir = Path(os.environ.get("ACCOUNTS_DIR", DEFAULT_ACCOUNTS_DIR))
+    if not accounts_dir.is_dir():
+        print(f"error: accounts directory not found: {_safe(accounts_dir)}", file=sys.stderr)
+        return 2
+    if providers is None:
+        from mailhub_mcp.providers import PROVIDERS as providers  # noqa: N811
+    try:
+        registry = AccountRegistry(accounts_dir, providers)
+    except MailhubError as exc:
+        print(f"error: {_safe(exc)}", file=sys.stderr)
+        return 2
+    accounts = registry.all()
+    if not accounts:
+        print(f"error: no accounts found in {_safe(accounts_dir)}", file=sys.stderr)
+        return 2
+    failed = 0
+    for account in accounts:
+        prefix = f"{_safe(account.alias)}  {_safe(account.provider_name)}"
+        try:
+            print(f"{prefix}  ok  {_safe(account.provider.address())}")
+        except Exception as exc:
+            failed += 1
+            print(f"{prefix}  ERROR  {_safe(exc) or type(exc).__name__}")
+    return 1 if failed else 0
+
+
+def main(argv: list[str] | None = None, providers=None) -> int:
     try:
         args = _parser().parse_args(argv)
     except SystemExit as exc:
         return int(exc.code or 0) if isinstance(exc.code, int) else 2
+    if args.group == "accounts":
+        return _check_accounts(providers)
     journal_path = Path(os.environ.get("JOURNAL_PATH", DEFAULT_JOURNAL))
     store = PreferenceStore(journal_path.parent / "preferences.json")
     try:

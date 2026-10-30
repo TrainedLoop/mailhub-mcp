@@ -18,4 +18,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     JOURNAL_PATH=/data/changes.jsonl
 
 EXPOSE 8742
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8742'), timeout=4)"]
 CMD ["mailhub-mcp"]
