@@ -2,19 +2,18 @@
 
 import base64
 import json
+import random
 import threading
 import time
 from email.message import EmailMessage
 
+import httplib2
 from googleapiclient.errors import HttpError
 
 from mailhub_mcp.providers.gmail.parsing import METADATA_HEADERS, _headers, full, summarize
 
 BATCH_SIZE = 50
 LIST_PAGE_SIZE = 500
-# Per-id batch attempts: a rate-limited id gets 4 (waits below), anything else 3 (1 s, 2 s).
-MAX_ATTEMPTS = 3
-MAX_RATE_LIMIT_ATTEMPTS = 4
 # Gmail's per-user limit is 6,000 quota units per minute for projects created since May 2026
 # (15,000 for older ones). Budget 80% of it by default: headroom for the moving window and for
 # other clients of the same mailbox. GMAIL_UNITS_PER_MINUTE overrides it.
@@ -38,16 +37,17 @@ DRAFT_CREATE_UNITS = 10
 
 def message_get_units(fmt: str) -> int:
     return MESSAGE_GET_FULL_UNITS if fmt in ("full", "raw") else MESSAGE_GET_UNITS
-# Waits before each retry of a rate-limited call; the moving window needs seconds to drain.
-RATE_LIMIT_BACKOFF = (5, 15, 30)
-# googleapiclient retries 429, 5xx and 403 rate-limit responses with a short jittered backoff
-# (about 5 s in all). Single requests keep that for 5xx and blips; `_execute` adds the long
-# rate-limit waits on top, so a sustained rate limit is waited out instead of surfacing.
-SINGLE_REQUEST_RETRIES = 3
-_RATE_LIMIT_REASONS = frozenset({"ratelimitexceeded", "userratelimitexceeded"})
+# The only retry layer (googleapiclient's own retries are off: num_retries=0). Waits before each
+# retry, plus up to 1 s of random jitter. A rate limit needs the moving window to drain, so it
+# backs off longer; Google recommends starting at 1 s or more, doubling, capped at 32-64 s.
+SERVER_ERROR_BACKOFF = (1, 2, 4)  # 5xx and network errors
+RATE_LIMIT_BACKOFF = (2, 4, 8, 16, 32)  # 429 and 403 rate-limit reasons
+_RATE_LIMIT_REASONS = frozenset({"ratelimitexceeded", "userratelimitexceeded", "rate_limit_exceeded"})
+_NETWORK_ERRORS = (ConnectionError, TimeoutError, httplib2.ServerNotFoundError)
 _sleep = time.sleep
 _pace_sleep = time.sleep
 _now = time.monotonic
+_random = random.random  # jitter in [0, 1)
 
 
 def status_of(exc: Exception) -> int | None:
@@ -58,16 +58,7 @@ def status_of(exc: Exception) -> int | None:
         return None
 
 
-def _reasons(exc: Exception) -> set[str]:
-    """Lower-cased `reason` of every error entry in the response, from parsed details or the JSON body."""
-    entries = getattr(exc, "error_details", None)
-    if not (isinstance(entries, list) and entries):
-        content = getattr(exc, "content", b"") or b""
-        try:
-            data = json.loads(content)
-            entries = data["error"]["errors"]
-        except (ValueError, TypeError, KeyError):
-            return set()
+def _reason_set(entries) -> set[str]:
     if not isinstance(entries, list):
         return set()
     return {
@@ -75,8 +66,27 @@ def _reasons(exc: Exception) -> set[str]:
     }
 
 
+def _reasons(exc: Exception) -> set[str]:
+    """Lower-cased `reason` of every error entry, from every source: the library's parsed
+    `error_details` (which holds `details` when the body has it, else `errors`), and the JSON body's
+    `error.errors[*]` (legacy reasons such as rateLimitExceeded) and `error.details[*]`
+    (google.rpc.ErrorInfo reasons such as RATE_LIMIT_EXCEEDED)."""
+    reasons = _reason_set(getattr(exc, "error_details", None))
+    try:
+        data = json.loads(getattr(exc, "content", b"") or b"")
+    except (ValueError, TypeError):
+        return reasons
+    if isinstance(data, list) and data:  # some endpoints wrap the error in a list
+        data = data[0]
+    error = data.get("error") if isinstance(data, dict) else None
+    if isinstance(error, dict):
+        reasons |= _reason_set(error.get("errors")) | _reason_set(error.get("details"))
+    return reasons
+
+
 def is_rate_limited(exc: Exception) -> bool:
-    """429, or 403 whose error reason is a per-user rate limit (not daily limits or permissions)."""
+    """429 (including "Too many concurrent requests for user"), or 403 whose error reason is a
+    per-user rate limit (not daily limits or permissions)."""
     status = status_of(exc)
     if status == 429:
         return True
@@ -113,23 +123,40 @@ class RateLimiter:
             (self._sleep or _pace_sleep)(start - now)
 
 
-def _execute(request, limiter: RateLimiter | None, units: int, retry: bool = True):
-    """Pace, then run one single request; wait out rate limits with the long backoff.
+def _retry_wait(exc: Exception, server_retries: int, rate_retries: int) -> tuple[str, int] | None:
+    """('rate' | 'server', base wait) for the next retry of a failed call, or None to give up."""
+    if isinstance(exc, HttpError) and is_rate_limited(exc):
+        return ("rate", RATE_LIMIT_BACKOFF[rate_retries]) if rate_retries < len(RATE_LIMIT_BACKOFF) else None
+    if isinstance(exc, _NETWORK_ERRORS) or (isinstance(exc, HttpError) and is_retryable(exc)):
+        if server_retries < len(SERVER_ERROR_BACKOFF):
+            return "server", SERVER_ERROR_BACKOFF[server_retries]
+    return None
 
-    `retry=False` (draft creation) sends exactly once: a retried create could duplicate the draft.
+
+def _backoff(wait: float) -> None:
+    _sleep(wait + _random())
+
+
+def _execute(request, limiter: RateLimiter | None, units: int, retry: bool = True):
+    """Run one single request, charging `units` to the limiter on every attempt.
+
+    5xx and network errors are retried after 1, 2, 4 s; rate limits after 2, 4, 8, 16, 32 s; each
+    wait plus jitter. `retry=False` (draft creation) sends exactly once: a retried create could
+    duplicate the draft.
     """
     limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
-    limiter.acquire(units)
-    if not retry:
-        return request.execute()
-    for wait in (*RATE_LIMIT_BACKOFF, None):
-        try:
-            return request.execute(num_retries=SINGLE_REQUEST_RETRIES)
-        except HttpError as exc:
-            if wait is None or not is_rate_limited(exc):
-                raise
-        _sleep(wait)
+    retries = {"server": 0, "rate": 0}
+    while True:
         limiter.acquire(units)
+        try:
+            return request.execute(num_retries=0)
+        except (HttpError, *_NETWORK_ERRORS) as exc:
+            step = _retry_wait(exc, retries["server"], retries["rate"]) if retry else None
+            if step is None:
+                raise
+        kind, wait = step
+        retries[kind] += 1
+        _backoff(wait)
 
 
 def _run_batches(
@@ -151,11 +178,9 @@ def _run_batches(
         else:
             found[request_id] = response
 
+    retries = {i: {"server": 0, "rate": 0} for i in ids}
     pending = ids
-    wait = 0
-    for attempt in range(MAX_RATE_LIMIT_ATTEMPTS):
-        if attempt:
-            _sleep(wait)
+    while pending:
         for start in range(0, len(pending), BATCH_SIZE):
             chunk = pending[start : start + BATCH_SIZE]
             limiter.acquire(len(chunk) * units_per_id)
@@ -163,19 +188,20 @@ def _run_batches(
             for item_id in chunk:
                 batch.add(make_request(item_id), request_id=item_id)
             batch.execute()
-        # A rate-limited id gets MAX_RATE_LIMIT_ATTEMPTS tries, any other retryable failure MAX_ATTEMPTS.
-        pending = [
-            i for i in pending
-            if i in errors and is_retryable(errors[i])
-            and attempt + 1 < (MAX_RATE_LIMIT_ATTEMPTS if is_rate_limited(errors[i]) else MAX_ATTEMPTS)
-        ]
-        if not pending:
-            break
-        wait = max(
-            RATE_LIMIT_BACKOFF[attempt] if is_rate_limited(errors[i]) else 2**attempt for i in pending
-        )
+        # Each failed id follows its own schedule (rate limit or server error); a round waits for
+        # the longest wait among the ids it retries.
+        waits = {}
         for i in pending:
-            del errors[i]
+            if i in errors:
+                step = _retry_wait(errors[i], retries[i]["server"], retries[i]["rate"])
+                if step is not None:
+                    retries[i][step[0]] += 1
+                    waits[i] = step[1]
+        pending = list(waits)
+        if pending:
+            for i in pending:
+                del errors[i]
+            _backoff(max(waits.values()))
     return found, errors
 
 

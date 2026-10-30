@@ -21,3 +21,4 @@ import pytest
 def _no_retry_sleep(monkeypatch):
     monkeypatch.setattr("mailhub_mcp.providers.gmail.api._sleep", lambda s: None)
     monkeypatch.setattr("mailhub_mcp.providers.gmail.api._pace_sleep", lambda s: None)
+    monkeypatch.setattr("mailhub_mcp.providers.gmail.api._random", lambda: 0.0)  # no jitter in tests

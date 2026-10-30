@@ -130,18 +130,18 @@ def test_batch_get_retries_429_then_succeeds(fake, _sleeps):
     fake.get_error_seq["m1"] = [http_error(429, "Rate")]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert [m["id"] for m in msgs] == ["m1"] and errors == {}
-    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [5]
+    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [2]
 
 
-def test_batch_get_gives_up_after_three_attempts_on_5xx(fake, _sleeps):
+def test_batch_get_gives_up_after_four_attempts_on_5xx(fake, _sleeps):
 
     fake.add_message("m1")
     fake.add_message("m2")
     fake.get_error_seq["m1"] = [http_error(503, "Unavailable") for _ in range(5)]
     msgs, errors = batch_get(fake, ["m1", "m2"], "minimal")
     assert [m["id"] for m in msgs] == ["m2"] and list(errors) == ["m1"]
-    assert len(_get_calls(fake, "m1")) == 3 and len(_get_calls(fake, "m2")) == 1
-    assert _sleeps == [1, 2]
+    assert len(_get_calls(fake, "m1")) == 4 and len(_get_calls(fake, "m2")) == 1
+    assert _sleeps == [1, 2, 4]
 
 
 def test_batch_get_never_retries_404(fake, _sleeps):
@@ -241,7 +241,7 @@ def test_batch_get_retries_403_rate_limit_then_succeeds(fake, _sleeps):
     fake.get_error_seq["m1"] = [_rate_limited()]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert [m["id"] for m in msgs] == ["m1"] and errors == {}
-    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [5]
+    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [2]
 
 
 def test_batch_get_paces_batches(fake, monkeypatch):
@@ -312,7 +312,7 @@ def test_single_batch_is_not_paced(fake, monkeypatch):
     assert paced == []
 
 
-def test_single_requests_use_client_retries_except_draft_create(fake):
+def test_client_library_retries_are_disabled_everywhere(fake):
     from mailhub_mcp.providers.gmail import api
 
     fake.add_message("m1", thread_id="t1")
@@ -320,10 +320,8 @@ def test_single_requests_use_client_retries_except_draft_create(fake):
     api.list_labels(fake)
     api.get_thread(fake, "t1")
     api.list_ids(fake, "", 5)
-    assert fake.execute_retries and all(n == api.SINGLE_REQUEST_RETRIES for n in fake.execute_retries)
-    fake.execute_retries.clear()
     create_draft(fake, "x@y.com", "s", "b", None, None)
-    assert fake.execute_retries[-1] == 0  # a retried create could duplicate the draft
+    assert fake.execute_retries and all(n == 0 for n in fake.execute_retries)
 
 
 # -- quota units, rate-limit backoff, exact detection -------------------------
@@ -395,19 +393,19 @@ def test_batch_get_charges_units_by_format(fake, fmt, units):
     assert spy.units == [2 * units]
 
 
-def test_batch_get_rate_limit_backoff_is_5_15_30(fake, _sleeps):
+def test_batch_get_rate_limit_backoff_is_2_4_8_16_32(fake, _sleeps):
     fake.add_message("m1")
     fake.get_error_seq["m1"] = [_rate_limited() for _ in range(9)]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert msgs == [] and list(errors) == ["m1"]
-    assert len(_get_calls(fake, "m1")) == 4 and _sleeps == [5, 15, 30]
+    assert len(_get_calls(fake, "m1")) == 6 and _sleeps == [2, 4, 8, 16, 32]
 
 
 def test_batch_get_5xx_keeps_short_backoff(fake, _sleeps):
     fake.add_message("m1")
     fake.get_error_seq["m1"] = [http_error(503, "x") for _ in range(9)]
     batch_get(fake, ["m1"], "minimal")
-    assert _sleeps == [1, 2]
+    assert _sleeps == [1, 2, 4]
 
 
 class _SpyLimiter:
@@ -463,7 +461,7 @@ def test_single_request_rate_limit_retries_with_long_backoff(fake, _sleeps):
         labels = api.list_labels(fake)
     finally:
         type(fake)._request = orig
-    assert labels and _sleeps == [5, 15]
+    assert labels and _sleeps == [2, 4]
 
 
 def test_single_request_gives_up_after_backoff_schedule(fake, _sleeps):
@@ -473,7 +471,9 @@ def test_single_request_gives_up_after_backoff_schedule(fake, _sleeps):
     fake.fail = _rate_limited()
     with pytest.raises(HttpError):
         api.list_labels(fake)
-    assert _sleeps == [5, 15, 30]
+    assert _sleeps == [2, 4, 8, 16, 32]
+    assert len([c for c in fake.calls if c[0] == "labels.list"]) == 1  # built once, executed 6 times
+    assert len(fake.execute_retries) == 6
 
 
 def test_single_request_non_rate_limit_error_is_not_retried_by_us(fake, _sleeps):
@@ -494,3 +494,144 @@ def test_draft_create_is_never_retried_even_when_rate_limited(fake, _sleeps):
     with pytest.raises(HttpError):
         create_draft(fake, "x@y.com", "s", "b", None, None)
     assert _sleeps == [] and fake.execute_retries == [0]
+
+
+# -- single retry layer, jitter, detection from every error source ---------------
+
+
+def _real_body_error(status, errors=None, details=None, message="Quota exceeded"):
+    """An HttpError built like googleapiclient builds it, so error_details is parsed by the library."""
+    import json
+
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    err = {"code": status, "message": message, "status": "RESOURCE_EXHAUSTED"}
+    if errors is not None:
+        err["errors"] = [{"message": message, "domain": "usageLimits", "reason": r} for r in errors]
+    if details is not None:
+        err["details"] = [
+            {"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": r, "domain": "googleapis.com",
+             "metadata": {"quota_limit": "QueriesPerMinutePerUser", "service": "gmail.googleapis.com"}}
+            for r in details
+        ]
+    return HttpError(httplib2.Response({"status": status}), json.dumps({"error": err}).encode())
+
+
+@pytest.mark.parametrize(
+    "exc,expected",
+    [
+        # googleapiclient puts `details` (not `errors`) into error_details when both are present
+        (_real_body_error(403, errors=["rateLimitExceeded"], details=["RATE_LIMIT_EXCEEDED"]), True),
+        (_real_body_error(403, errors=["forbidden"], details=["RATE_LIMIT_EXCEEDED"]), True),
+        (_real_body_error(403, errors=["userRateLimitExceeded"], details=["SOMETHING_ELSE"]), True),
+        (_real_body_error(403, details=["RATE_LIMIT_EXCEEDED"]), True),
+        (_real_body_error(403, errors=["USERRATELIMITEXCEEDED"]), True),
+        (_real_body_error(429, details=["SOMETHING_ELSE"]), True),
+        (_real_body_error(429, message="Too many concurrent requests for user"), True),
+        (_real_body_error(403, errors=["dailyLimitExceeded"], details=["DAILY_LIMIT_EXCEEDED"]), False),
+        (_real_body_error(403, errors=["forbidden"], details=["ACCESS_TOKEN_SCOPE_INSUFFICIENT"]), False),
+        (_real_body_error(403, errors=["forbidden"]), False),
+    ],
+)
+def test_rate_limit_detection_reads_errors_and_details(exc, expected):
+    from mailhub_mcp.providers.gmail.api import is_rate_limited
+
+    assert is_rate_limited(exc) is expected
+
+
+def test_rate_limit_detection_survives_odd_error_details():
+    from mailhub_mcp.providers.gmail.api import is_rate_limited
+
+    exc = _real_body_error(403, errors=["rateLimitExceeded"])
+    exc.error_details = "not a list"
+    assert is_rate_limited(exc)
+    exc.error_details = [None, 3, {"reason": 7}]
+    assert is_rate_limited(exc)
+
+
+def _flaky_labels_list(fake, errors):
+    orig = type(fake)._request
+
+    def flaky(self, name, kwargs, fn):
+        def run():
+            if name == "labels.list" and errors:
+                raise errors.pop(0)
+            return fn()
+        return orig(self, name, kwargs, run)
+
+    return orig, flaky
+
+
+def test_single_request_5xx_is_retried_by_us_1_2_4(fake, _sleeps):
+    from googleapiclient.errors import HttpError
+
+    from mailhub_mcp.providers.gmail import api
+
+    fake.fail = http_error(503, "unavailable")
+    with pytest.raises(HttpError):
+        api.list_labels(fake)
+    assert _sleeps == [1, 2, 4] and fake.execute_retries == [0, 0, 0, 0]
+
+
+def test_single_request_every_attempt_charges_units(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    spy = _SpyLimiter()
+    errors = [_rate_limited(), http_error(500, "x")]
+    orig, flaky = _flaky_labels_list(fake, errors)
+    type(fake)._request = flaky
+    try:
+        api.list_labels(fake, limiter=spy)
+    finally:
+        type(fake)._request = orig
+    assert spy.units == [1, 1, 1]
+
+
+def test_backoff_adds_jitter_below_one_second(fake, _sleeps, monkeypatch):
+    from mailhub_mcp.providers.gmail import api
+
+    monkeypatch.setattr(api, "_random", lambda: 0.75)
+    fake.add_message("m1")
+    fake.get_error_seq["m1"] = [_rate_limited(), http_error(503, "x")]
+    batch_get(fake, ["m1"], "minimal")
+    orig, flaky = _flaky_labels_list(fake, [http_error(429, "slow")])
+    type(fake)._request = flaky
+    try:
+        api.list_labels(fake)
+    finally:
+        type(fake)._request = orig
+    assert _sleeps == [2.75, 1.75, 2.75]
+
+
+def test_batch_rate_limited_and_server_error_ids_use_their_own_schedules(fake, _sleeps):
+    fake.add_message("r")
+    fake.add_message("s")
+    fake.get_error_seq["r"] = [_rate_limited() for _ in range(9)]
+    fake.get_error_seq["s"] = [http_error(503, "x") for _ in range(9)]
+    msgs, errors = batch_get(fake, ["r", "s"], "minimal")
+    assert msgs == [] and sorted(errors) == ["r", "s"]
+    assert len(_get_calls(fake, "r")) == 6 and len(_get_calls(fake, "s")) == 4
+    # a round waits for the longest schedule among the ids it retries
+    assert _sleeps == [2, 4, 8, 16, 32]
+
+
+def test_batch_every_attempt_charges_units(fake):
+    spy = _SpyLimiter()
+    fake.add_message("m1")
+    fake.add_message("m2")
+    fake.get_error_seq["m1"] = [_rate_limited()]
+    batch_get(fake, ["m1", "m2"], "metadata", limiter=spy)
+    assert spy.units == [40, 20]
+
+
+def test_network_errors_are_retried_on_the_server_schedule(fake, _sleeps):
+    from mailhub_mcp.providers.gmail import api
+
+    orig, flaky = _flaky_labels_list(fake, [ConnectionResetError("reset"), TimeoutError("slow")])
+    type(fake)._request = flaky
+    try:
+        assert api.list_labels(fake)
+    finally:
+        type(fake)._request = orig
+    assert _sleeps == [1, 2]
