@@ -237,22 +237,48 @@ def test_wrap_cleans_before_defang():
     assert "[untrusted:" not in inner and "[/untrusted:" not in inner
 
 
-def _fast(fn):
-    t = time.perf_counter()
-    fn()
-    assert time.perf_counter() - t < 1
+def _best(fn, arg) -> float:
+    """Fastest of three runs, so one scheduler hiccup does not count."""
+    times = []
+    for _ in range(3):
+        t = time.perf_counter()
+        fn(arg)
+        times.append(time.perf_counter() - t)
+    return min(times)
+
+
+def _linear(fn, n: int) -> None:
+    """fn(k) builds an input of size ~k and processes it. Linear work grows ~4x from n to 4n, quadratic
+    work ~16x: the ratio check catches quadratic behaviour without depending on the machine's speed.
+    A 2 ms floor on t(n) keeps timer noise on tiny runs from failing the ratio; a generous absolute
+    budget at 4n still catches anything catastrophic."""
+    small, big = _best(fn, n), _best(fn, 4 * n)
+    assert big < 5, f"{big:.2f}s at size {4 * n}"
+    assert big / max(small, 0.002) < 8, f"t(4n)/t(n) = {big:.4f}/{small:.4f}"
+
+
+def test_linear_check_catches_quadratic_work():
+    def quadratic(k):
+        n = 0
+        for i in range(k):
+            for _ in range(i):
+                n += 1
+    with pytest.raises(AssertionError, match=r"t\(4n\)/t\(n\)"):
+        _linear(quadratic, 1_000)
+    _linear(lambda k: "x" * k, 6_000)
 
 
 def test_no_quadratic_regex():
-    _fast(lambda: assess(["ignore" + " " * 100_000], 0, TOOLS))
-    _fast(lambda: assess(["ignore all " * 20_000 + " " * 100_000 + "forward" + " " * 100_000], 0, TOOLS))
-    body = ("lorem ipsum to dolor\n \n" + "a" * 50 + " ") * 10_000
-    _fast(lambda: assess([body], 0, TOOLS))
-    _fast(lambda: clean_text(body))
-    _fast(lambda: clean_text("\n" + " \t" * 250_000))
-    _fast(lambda: html_to_safe_text("<p>lorem ipsum dolor sit</p>" * 20_000))
-    _fast(lambda: html_to_safe_text("<div>" * 50_000 + "</span>" * 50_000))
-    _fast(lambda: html_to_safe_text('<span style="' + "/*" * 100_000 + '">x</span>'))
+    _linear(lambda k: assess(["ignore" + " " * k], 0, TOOLS), 25_000)
+    _linear(lambda k: assess(["ignore all " * (k // 5) + " " * k + "forward" + " " * k], 0, TOOLS), 25_000)
+    def body(k):
+        return ("lorem ipsum to dolor\n \n" + "a" * 50 + " ") * k
+    _linear(lambda k: assess([body(k)], 0, TOOLS), 2_500)
+    _linear(lambda k: clean_text(body(k)), 2_500)
+    _linear(lambda k: clean_text("\n" + " \t" * k), 62_500)
+    _linear(lambda k: html_to_safe_text("<p>lorem ipsum dolor sit</p>" * k), 5_000)
+    _linear(lambda k: html_to_safe_text("<div>" * k + "</span>" * k), 12_500)
+    _linear(lambda k: html_to_safe_text('<span style="' + "/*" * k + '">x</span>'), 25_000)
 
 
 @pytest.mark.parametrize(
@@ -393,10 +419,10 @@ def test_p_not_closed_across_table_scope():
 
 
 def test_round3_timing():
-    _fast(lambda: html_to_safe_text("<p hidden>" + "<span>" * 50_000 + "<div>x" * 50_000))
-    _fast(lambda: html_to_safe_text("<p><b>a" * 50_000))
-    _fast(lambda: html_to_safe_text('<span style="' + "\\;" * 100_000 + '">x</span>'))
-    _fast(lambda: html_to_safe_text('<span style="' + "a:b!" * 50_000 + '">x</span>'))
+    _linear(lambda k: html_to_safe_text("<p hidden>" + "<span>" * k + "<div>x" * k), 12_500)
+    _linear(lambda k: html_to_safe_text("<p><b>a" * k), 12_500)
+    _linear(lambda k: html_to_safe_text('<span style="' + "\\;" * k + '">x</span>'), 25_000)
+    _linear(lambda k: html_to_safe_text('<span style="' + "a:b!" * k + '">x</span>'), 12_500)
 
 
 # ---- fix round 4 regressions: hiding formatting elements persist ----
@@ -445,8 +471,8 @@ def test_non_hiding_formatting_unchanged():
 
 def test_round4_timing():
     chunk = '<p><b hidden><font style="display:none"><a hidden>x<div>y</p></i></span></b></div>'
-    _fast(lambda: html_to_safe_text(chunk * 20_000))
-    _fast(lambda: html_to_safe_text('<p><b hidden><em hidden>x<div>y</p></i>' * 20_000))
+    _linear(lambda k: html_to_safe_text(chunk * k), 2_500)
+    _linear(lambda k: html_to_safe_text('<p><b hidden><em hidden>x<div>y</p></i>' * k), 2_500)
 
 
 # ---- fix round 5: formatting end tags out of scope are ignored ----
@@ -474,7 +500,7 @@ def test_formatting_end_tag_in_scope_still_closes():
 
 
 def test_round5_timing():
-    _fast(lambda: html_to_safe_text("<b hidden><table><tr><td></b>" * 80_000))
+    _linear(lambda k: html_to_safe_text("<b hidden><table><tr><td></b>" * k), 10_000)
 
 
 @pytest.mark.parametrize(
