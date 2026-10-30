@@ -1,0 +1,13 @@
+[Unit]
+Description=Firewall rules isolating the mailhub-mcp container
+After=docker.service tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# Adjust the path to where you installed the project on the host.
+ExecStart=/opt/mailhub-mcp/examples/tailscale-funnel/firewall/mailhub-mcp-firewall.sh
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,36 @@
+[project]
+name = "mailhub-mcp"
+version = "0.1.0"
+description = "MCP server that exposes multiple mail accounts to Claude as a custom connector, with reversible, never-destructive organization."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = [
+    "fastmcp>=4.1.4,<5",
+    "google-api-python-client>=2.150",
+    "google-auth>=2.35",
+    "pydantic>=2.11",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mailhub_mcp"]
+
+[project.optional-dependencies]
+authorize = ["google-auth-oauthlib"]
+
+[project.scripts]
+mailhub-mcp = "mailhub_mcp.server:main"
+mailhub-authorize = "mailhub_mcp.cli:main"
+
+[tool.uv]
+package = true
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

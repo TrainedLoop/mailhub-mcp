@@ -1,0 +1,32 @@
+services:
+  mailhub-mcp:
+    build: .
+    container_name: mailhub-mcp
+    restart: unless-stopped
+    env_file: .env
+    # Loopback only: a plain "8742:8742" would expose the unencrypted server to
+    # every network the host is on. Put a TLS-terminating proxy or tunnel in
+    # front of 127.0.0.1:8742. If you set PORT in
+    # .env, change both numbers below to match: PORT is the container port.
+    ports:
+      - "127.0.0.1:8742:8742"
+    volumes:
+      # OAuth state (client registrations, encrypted tokens) and the change
+      # journal. Must survive restarts or the claude.ai connector has to
+      # reconnect.
+      - ./data:/data
+      - ./secrets/accounts:/secrets/accounts:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    oom_score_adj: 200
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

@@ -1,0 +1,14 @@
+# Adds the named network with the fixed subnet that firewall/mailhub-mcp-firewall.sh
+# targets. Use together with the root compose file:
+#   docker compose -f docker-compose.yml -f examples/tailscale-funnel/compose.override.yml up -d
+services:
+  mailhub-mcp:
+    networks:
+      - mcp
+
+networks:
+  mcp:
+    name: mailhub_mcp
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
