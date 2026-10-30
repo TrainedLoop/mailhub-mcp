@@ -53,7 +53,7 @@ Methods:
 | `get_thread(thread_id)` | Thread with messages oldest first |
 | `list_labels()` / `ensure_label(name)` | Labels; create-or-return by name, case-insensitive |
 | `modify_labels(ids, add, remove)` | Apply label IDs |
-| `list_drafts(limit)` / `create_draft(...)` | Drafts; creation never sends |
+| `list_drafts(limit)` / `create_draft(...)` | Drafts; replies only, to thread participants; creation never sends |
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 
@@ -77,7 +77,7 @@ All 15 are defined in `server.py`.
 | `undo_change` | Revert a journaled change |
 | `list_changes` | Journal entries, newest first, with label names; filter by accounts and `since`; max 100 per call |
 | `undo_since` | Undo every change since a time, newest first; preview unless `confirm=true`; max 50 per call |
-| `create_draft` | Create an unsent draft, optionally a reply |
+| `create_draft` | Create an unsent reply draft (thread participants only) |
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 

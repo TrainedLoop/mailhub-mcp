@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import re
 from types import SimpleNamespace
@@ -172,8 +173,35 @@ def test_undo_unknown_change_id(fakes):
 
 def test_create_draft_requires_account(fakes):
     with pytest.raises(ToolError):
-        call("create_draft", {"to": "x@y.com", "body": "hi"})
-    out = call("create_draft", {"account": "alice-personal", "to": "x@y.com", "body": "hi", "subject": "s"})
+        call("create_draft", {"body": "hi", "reply_to_message_id": "m1"})
+    out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1"})
+    assert out["draft_id"]
+
+
+def test_create_draft_requires_reply(fakes):
+    with pytest.raises(ToolError, match="reply_to_message_id"):
+        call("create_draft", {"account": "alice-personal", "to": "x@y.com", "body": "hi", "subject": "s"})
+    with pytest.raises(ToolError, match="replies only"):
+        call("create_draft", {"account": "alice-personal", "to": "x@y.com", "body": "hi", "reply_to_message_id": " "})
+
+
+def test_create_draft_defaults_to_sender(fakes):
+    out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1"})
+    stored = fakes.a.drafts[out["draft_id"]]
+    raw = base64.urlsafe_b64decode(stored["message"]["raw"]).decode()
+    assert "To: x@y.com" in raw
+
+
+def test_create_draft_outsider_refused(fakes):
+    with pytest.raises(ToolError, match=r"evil@attacker\.com.*x@y\.com"):
+        call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "to": "evil@attacker.com"})
+    with pytest.raises(ToolError, match="attacker.com"):
+        call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "cc": "Evil <EVIL@attacker.com>"})
+    assert not fakes.a.drafts
+
+
+def test_create_draft_allows_participant_variants(fakes):
+    out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "to": "X Y <X@Y.com>"})
     assert out["draft_id"]
 
 
@@ -398,7 +426,7 @@ def test_search_and_threads_and_drafts_wrap(fakes):
     assert _nonces(th["messages"][0]["body"]) and _nonces(th["messages"][0]["snippet"])
     many = call("read_emails", {"account": "alice-personal", "message_ids": ["t1", "m1"]})
     assert len({tuple(_nonces(m["body"])) for m in many["messages"]}) == 1
-    call("create_draft", {"account": "alice-personal", "to": "x@y.com", "body": "hi", "subject": "s"})
+    call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1"})
     drafts = call("list_drafts", {"accounts": ["alice-personal"]})
     assert drafts["results"] and all(_nonces(d["snippet"]) for d in drafts["results"])
     preview = call("modify_by_query", {"account": "alice-personal", "query": "in:inbox"})

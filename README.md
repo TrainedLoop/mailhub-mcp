@@ -10,7 +10,7 @@ It is built for inbox triage: Claude can search, read and summarize mail across 
 - **Search, read and triage signals**: `search_emails`, `read_email`, `read_emails`, `read_thread`, `list_labels`, `list_drafts`. Messages carry unread, starred, importance, category and newsletter flags.
 - **Inbox overview**: `inbox_overview` gives per-account totals, unread counts, newsletters, categories and top senders.
 - **Reversible organization**: `create_label`, `modify_emails`, `modify_by_query` (labels, archive, mark read, star), each recorded in a journal, `undo_change` to revert a batch, `list_changes` to find earlier changes and their change_ids across sessions, and `undo_since` as a panic button that undoes everything since a time.
-- **Drafts**: `create_draft` leaves a draft in the mailbox for you to review and send yourself.
+- **Drafts**: `create_draft` leaves a reply draft in the mailbox for you to review and send yourself. Replies only, addressed to people already in the thread.
 
 ## Safety model
 

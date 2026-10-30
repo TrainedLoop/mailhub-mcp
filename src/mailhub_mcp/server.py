@@ -14,6 +14,7 @@ from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
 from mailhub_mcp.core import organize
 from mailhub_mcp.core.accounts import AccountRegistry
+from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound
@@ -356,19 +357,37 @@ async def undo_since(since: str, accounts: list[str] | None = None, confirm: boo
 @mcp.tool(
     annotations=WRITE,
     description=(
-        "Create a Gmail draft in one account. It is NOT sent: the user reviews and sends it from Gmail. "
-        "Pass reply_to_message_id to draft a reply in the same thread (subject defaults to 'Re: ...')."
+        "Create a Gmail draft REPLY in one account. It is NOT sent: the user reviews and sends it from Gmail. "
+        "Policy: replies only. reply_to_message_id is required (new threads are refused), and 'to' and 'cc' may only contain "
+        "addresses already in that thread (From, To, Cc or Reply-To of any message) or the account's own address; "
+        "anything else is refused and the error lists the allowed addresses. "
+        "When 'to' is omitted it defaults to the Reply-To of the replied message, else its From. "
+        "Subject defaults to 'Re: ...'."
     ),
 )
 async def create_draft(
     account: str,
-    to: str,
     body: str,
+    reply_to_message_id: str,
+    to: str | None = None,
     subject: str = "",
     cc: str | None = None,
-    reply_to_message_id: str | None = None,
 ) -> dict:
-    return await one(account, lambda p: p.create_draft(to, subject, body, cc, reply_to_message_id))
+    if not reply_to_message_id or not reply_to_message_id.strip():
+        raise ToolError("drafts are replies only: reply_to_message_id is required")
+
+    def work(p):
+        found = p.get_messages([reply_to_message_id], "summary")
+        if not found.found:
+            raise MessageNotFound([reply_to_message_id])
+        thread = p.get_thread(found.found[0].thread_id)
+        try:
+            to_addr, cc_addr = resolve_recipients(thread, reply_to_message_id, p.address(), to, cc)
+        except DraftRefused as exc:
+            raise MailhubError(str(exc)) from None
+        return p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
+
+    return await one(account, work)
 
 
 def main() -> None:
