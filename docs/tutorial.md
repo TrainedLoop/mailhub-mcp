@@ -119,7 +119,7 @@ Then in a claude.ai chat with the connector enabled, ask Claude to call `list_ac
 
 The direction rule decides what applies:
 
-- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately and can be undone with `undo_change`.
+- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately. `undo_change` on it lowers attention again, so the undo becomes a proposal you approve like any other. Keywords may contain only letters, digits, spaces, apostrophes, dots and hyphens.
 - Lowering attention (ignoring a sender or keyword, removing something from an important list) never applies from the chat. It becomes a proposal with an id such as `p-1a2b3c4d`, valid for 14 days, and at most 50 can be open at once. As long as you only approve proposals you recognize, a hostile email cannot quietly hide future alerts. Raising-attention changes apply without review, so check `list_changes` now and then; they can be undone.
 
 Approve or reject proposals from a terminal on the server, outside the chat:
@@ -172,7 +172,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `list_accounts` is empty, log warning mentions `/secrets/accounts` | Folder missing or no `<provider>/<alias>.json`; invalid alias in a file name; unknown provider folder |
 | Startup fails with a duplicate alias error | The same alias exists under two provider folders; rename one file |
 | Container restarts with `PermissionError` | `data/` or `secrets/accounts/` is not owned by uid 10001 |
-| `would exceed the daily change cap` | `MAX_CHANGES_PER_DAY` messages were already changed on that account in the last 24 hours; raise it in `.env` and restart, or wait. Undo still works |
+| `would exceed the daily change cap` | The request plus the messages already changed on that account in the last 24 hours would go over `MAX_CHANGES_PER_DAY`; raise it in `.env` and restart, or wait. Undo still works |
 | `create_draft` says drafts are replies only, or lists allowed addresses | The draft needs `reply_to_message_id`, and `to` and `cc` must be people already in that thread |
 | `create_draft` says the thread is flagged as a possible prompt injection | A message in the thread matched the injection heuristics; reply manually in Gmail |
 | A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |

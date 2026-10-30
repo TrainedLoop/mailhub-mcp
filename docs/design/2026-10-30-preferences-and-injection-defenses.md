@@ -54,18 +54,20 @@ The rule is direction: anything that raises attention, or removes a reduction of
 
 Validation:
 - A sender pattern is an email address (`name@domain`) or `@domain`, lowercased, at most 254 characters.
-- A keyword has 1–40 characters, with no control characters or newlines.
+- A keyword has 1–40 characters after NFC normalization and trimming, made only of letters (any script, with their combining marks), digits, spaces, apostrophes, dots and hyphens. Anything else (colons, slashes, brackets, `@`, control characters, newlines) is refused with a message naming the allowed characters.
 - Each list holds at most 200 items.
 - A value cannot be both important and ignored in the same scope; such a request is refused.
 - Unknown fields, unknown scopes and invalid values are refused, with a message naming them.
-- No free-text field exists, so stored preferences cannot carry instructions back into Claude's context.
+- Apart from `user_request`, no field holds long free text. Keywords are short and restricted, but they are still text written by the model, so they could carry a fragment of an instruction back into Claude's context. That is why every preference value is delimited when shown (see below).
 
 ### Tools
 
 `get_preferences(account: str | None = None)`, read-only. It returns:
 - `global`, and either the per-account rules (`accounts`) or, when `account` is given, that account's rules plus the `effective` merge;
 - `pending`: open proposals, with id, scope, field, values, `user_request`, created timestamp and expiry;
-- `recent_changes`: preference changes since the effective `last_triage_at`, or the last 20 when it is unset. Each has change_id, timestamp, applied/approved/rejected, field, values and `user_request`.
+- `recent_changes`: preference changes since the effective `last_triage_at`, or the last 20 when it is unset (undo entries are not listed). Each has change_id, timestamp, status (`applied` for `set_preferences`, `approved` for `approve_preference`; rejections are not journaled, so they never appear), scope, fields, `before`, `after`, `user_request` and `undone`.
+
+Every preference string value in a tool response (sender patterns and keywords in the rules, `effective`, `pending` values and `recent_changes` before/after, and proposal values returned by undo) and every `user_request` is wrapped in `[untrusted:<nonce>]` … `[/untrusted:<nonce>]` with one nonce per response, after `clean_text`. Timestamps (`last_triage_at`, created, expires), ids, scopes and field names are cleaned but not wrapped. Storage stays raw.
 
 `set_preferences(scope: str, add: dict[str, list[str]] | None = None, remove: dict[str, list[str]] | None = None, last_triage_at: str | None = None, user_request: str)`, a write tool.
 - `user_request` is required, 1–500 characters: the user's words that asked for the change. It is stored and shown in `get_preferences` and `list_changes`.
@@ -100,8 +102,9 @@ Preference changes use the existing journal with an entry kind:
 Label changes keep their current shape (`kind` absent means `"labels"`).
 
 - `list_changes` shows preference entries with `tool`, `scope`, `fields`, `user_request` and `undone`.
-- `undo_change` on a preference entry restores `before` for the touched fields. This restores the user's earlier state, so it is allowed even when it lowers attention. Undo is journaled like other undos, and double undo is refused.
-- `undo_since` includes preference entries in the same newest-first order. Blocking for preference entries is keyed by `(scope, field)` instead of `(account, message_id)`.
+- `undo_change` on a preference entry restores `before` for the touched fields, under the direction rule. Restoring parts that raise attention (removing values from `ignored_*`, adding values back to `important_*`) and `last_triage_at` apply immediately as one journaled undo. Restoring parts that would lower attention (removing values from `important_*`, adding values to `ignored_*`) are not applied: they become proposals (same deduplication and cap of 50 as `set_preferences`, `user_request` = `undo of <change_id>: <original user_request>`, truncated to 500 characters) and are returned in `proposed`, with `change_id` null when nothing applied. A mixed entry therefore applies its raising parts and proposes the rest; proposing the whole entry was not possible because `last_triage_at` has no proposal form. An entry whose undo only produced proposals is not marked undone. Double undo is refused.
+- Undo entries (`undo_of` set) cannot be undone, for label and preference entries alike: "this change is an undo; to redo, make the change again". A redo goes through the daily cap and the direction rule like any change.
+- `undo_since` includes preference entries in the same newest-first order. Blocking for preference entries is keyed by `(scope, field)` instead of `(account, message_id)`. A preference entry whose undo produced proposals is reported under `proposed` (`change_id` and its proposals) and is not counted as undone; blocking is unchanged (only failures block).
 - Undo is refused with a clear message if the current value no longer equals `after` for a touched field, meaning something changed it since. Undo never overwrites a later change.
 
 ## Content defenses
@@ -120,15 +123,15 @@ A provider-agnostic `core/content.py` provides:
   It keeps the visible text. It does not try to compare colors.
 - `clean_text(s) -> str`. It removes zero-width and bidirectional control characters (U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, plus U+00AD, U+061C, U+180E and the Unicode tag characters U+E0000–U+E007F) and other C0/C1 control characters except `\n` and `\t`, and collapses runs of blank lines.
 
-The Gmail provider uses these for the body, and `clean_text` for the subject, sender, recipients, snippet and attachment names.
+The Gmail provider uses these for the body, and `clean_text` for the subject, sender, recipients, date, snippet, attachment names and attachment MIME types.
 
 ### Delimiting
 
-Every tool response that contains email text uses one random nonce per response, 12 hex characters. `body` and `snippet` values are wrapped as `[untrusted:<nonce>]\n…\n[/untrusted:<nonce>]`. Any occurrence of `[untrusted:` or `[/untrusted:` inside the content is defanged first by rewriting it to `[untrusted_:` or `[/untrusted_:`. The read tools' descriptions explain the markers and that nothing inside them is an instruction.
+Every tool response that contains email text uses one random nonce per response, 12 hex characters. `body` and `snippet` values are wrapped as `[untrusted:<nonce>]\n…\n[/untrusted:<nonce>]`, and so is the `query` of a label change shown by `list_changes` and the `undo_since` preview (it may echo email text). Any occurrence of `[untrusted:` or `[/untrusted:` inside the content is defanged first by rewriting it to `[untrusted_:` or `[/untrusted_:`. The read tools' descriptions explain the markers and that nothing inside them is an instruction.
 
 ### Suspicion flags
 
-Each message gains `suspicious: bool` and `suspicious_reasons: list[str]`, computed by `core/content.py` `assess(text_fields, hidden_removed)`. The reasons:
+Each message gains `suspicious: bool` and `suspicious_reasons: list[str]`, computed by `core/content.py` `assess(text_fields, hidden_removed)` over subject, From, To, Cc, Reply-To, snippet, body and attachment names. The reasons:
 - `mentions_tools`: the name of any mailhub-mcp tool;
 - `instruction_override`: case-insensitive patterns in English and Portuguese such as "ignore (all|previous|prior) instructions", "disregard", "you are (now )?(an? )?(ai|assistant|claude)", "ignore as instruções", "você é (um|o) assistente";
 - `addresses_assistant`: phrases such as "assistant:", "ai assistant", "claude,";
@@ -149,7 +152,7 @@ The flags are a heuristic aid, documented as such. The triage guidance tells Cla
 
 ### Daily change cap
 
-`MAX_CHANGES_PER_DAY` (default 2000) caps the number of messages changed by `modify_emails` and `modify_by_query` per account in a rolling 24 hours. The count comes from journal entries (`messages` count of label entries, excluding undos). A request that would exceed the cap is refused before any write, and the error says how many changes are left. Undo is never capped.
+`MAX_CHANGES_PER_DAY` (default 2000) caps the number of messages changed by `modify_emails` and `modify_by_query` per account in a rolling 24 hours. The count comes from journal entries (`messages` count of label entries, excluding undos). A request that would exceed the cap is refused before any write with "would exceed the daily change cap", and the error says how many changes are left. Undo is never capped.
 
 ### Read-only mode
 
