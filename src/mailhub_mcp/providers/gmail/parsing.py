@@ -2,10 +2,10 @@
 
 import base64
 
-from mailhub_mcp.core.content import clean_text, html_to_safe_text
+from mailhub_mcp.core.content import clean_text, html_to_safe_text, parse_unsubscribe
 
 MAX_BODY_CHARS = 20_000
-METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe", "Reply-To"]
+METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe", "List-Unsubscribe-Post", "Reply-To"]
 CATEGORIES = {
     "CATEGORY_PERSONAL": "primary",
     "CATEGORY_PROMOTIONS": "promotions",
@@ -72,6 +72,7 @@ def summarize(msg: dict) -> dict:
         "is_important": "IMPORTANT" in labels,
         "category": next((CATEGORIES[l] for l in labels if l in CATEGORIES), None),
         "is_newsletter": "list-unsubscribe" in h,
+        "unsubscribe": parse_unsubscribe(h.get("list-unsubscribe", ""), h.get("list-unsubscribe-post", "")),
     }
 
 

@@ -15,6 +15,14 @@ class _Accounted(_Base):
     account: str = ""
 
 
+class Unsubscribe(_Base):
+    """Sender-controlled unsubscribe options; shown to the user, never visited."""
+
+    url: str | None = None
+    mailto: str | None = None
+    one_click: bool = False
+
+
 class MessageSummary(_Accounted):
     id: str
     thread_id: str
@@ -31,6 +39,7 @@ class MessageSummary(_Accounted):
     category: str | None
     is_newsletter: bool
     reply_to: str = ""
+    unsubscribe: Unsubscribe | None = None
     suspicious: bool = False
     suspicious_reasons: list[str] = []
 

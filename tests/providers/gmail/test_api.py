@@ -50,7 +50,7 @@ def test_search_returns_summaries_via_batch(fake):
     assert [r["id"] for r in results] == ["m2", "m1"]
     assert results[0]["subject"] == "two"
     assert ("messages.get", {"userId": "me", "id": "m2", "format": "metadata",
-                    "metadataHeaders": ["From", "To", "Subject", "Date", "List-Unsubscribe", "Reply-To"]}) in fake.calls
+                    "metadataHeaders": ["From", "To", "Subject", "Date", "List-Unsubscribe", "List-Unsubscribe-Post", "Reply-To"]}) in fake.calls
 
 
 @pytest.fixture(autouse=True)

@@ -333,6 +333,49 @@ def html_to_safe_text(html: str) -> tuple[str, int]:
     return clean_text(text).strip(), parser.hidden_removed
 
 
+MAX_UNSUBSCRIBE_CHARS = 500
+_LIST_ENTRY = re.compile(r"<([^<>]*)>")
+_UNSAFE_CHAR = re.compile(r"\s|[\x00-\x1f\x7f-\x9f]")
+
+
+def _unsubscribe_entry(raw: str) -> str | None:
+    value = clean_text(raw).strip()
+    if not value or len(value) > MAX_UNSUBSCRIBE_CHARS or _UNSAFE_CHAR.search(value):
+        return None
+    lowered = value.lower()
+    if lowered.startswith("https://") and len(value) > len("https://"):
+        return value
+    if lowered.startswith("mailto:") and len(value) > len("mailto:"):
+        return value
+    return None
+
+
+def parse_unsubscribe(list_unsubscribe: str, list_unsubscribe_post: str = "") -> dict | None:
+    """Sender-controlled List-Unsubscribe / List-Unsubscribe-Post headers as
+    {"url": str|None, "mailto": str|None, "one_click": bool}, or None when nothing usable.
+
+    Only https:// URLs and mailto: URIs are accepted (the first of each); entries with whitespace, control
+    characters or more than 500 characters are dropped. one_click needs the exact RFC 8058 post value and an
+    https URL. The result is still untrusted text: the server wraps it in untrusted markers.
+    """
+    if not list_unsubscribe:
+        return None
+    entries = _LIST_ENTRY.findall(list_unsubscribe) or list_unsubscribe.split(",")
+    url = mailto = None
+    for raw in entries:
+        entry = _unsubscribe_entry(raw)
+        if entry is None:
+            continue
+        if entry.lower().startswith("https://"):
+            url = url or entry
+        else:
+            mailto = mailto or entry
+    if url is None and mailto is None:
+        return None
+    one_click = url is not None and list_unsubscribe_post.strip().lower() == "list-unsubscribe=one-click"
+    return {"url": url, "mailto": mailto, "one_click": one_click}
+
+
 def new_nonce() -> str:
     return secrets.token_hex(6)
 

@@ -528,3 +528,46 @@ def test_stale_stack_index_does_not_leak(html):
 )
 def test_implied_p_close_inside_scope(html):
     assert html_to_safe_text(html)[0] == "VISIBLE"
+
+
+# --- parse_unsubscribe ---
+
+from mailhub_mcp.core.content import parse_unsubscribe  # noqa: E402
+
+
+def test_unsubscribe_angle_brackets_first_of_each_kind():
+    h = "<mailto:u@x.com?subject=unsub>, <https://x.com/u?id=1>, <https://x.com/second>, <mailto:other@x.com>"
+    assert parse_unsubscribe(h) == {"url": "https://x.com/u?id=1", "mailto": "mailto:u@x.com?subject=unsub", "one_click": False}
+
+
+def test_unsubscribe_bare_entries_and_absent():
+    assert parse_unsubscribe("https://x.com/u") == {"url": "https://x.com/u", "mailto": None, "one_click": False}
+    assert parse_unsubscribe("") is None
+
+
+@pytest.mark.parametrize("h", [
+    "<http://x.com/u>", "<javascript:alert(1)>", "<data:text/html,hi>", "<ftp://x.com>", "<https://>",
+    "<https://x.com/a b>", "<https://x.com/a\tb>", "<https://" + "a" * 500 + ">", "garbage",
+])
+def test_unsubscribe_rejects_unsafe(h):
+    assert parse_unsubscribe(h) is None
+
+
+def test_unsubscribe_http_rejected_but_mailto_kept_and_cleaned():
+    got = parse_unsubscribe("<http://x.com/u>, <mailto:u@x​.com>")
+    assert got == {"url": None, "mailto": "mailto:u@x.com", "one_click": False}
+
+
+def test_unsubscribe_length_limit_boundary():
+    ok = "https://x.com/" + "a" * (500 - len("https://x.com/"))
+    assert parse_unsubscribe(f"<{ok}>")["url"] == ok
+    assert parse_unsubscribe(f"<{ok}a>") is None
+
+
+def test_unsubscribe_one_click_logic():
+    post = "List-Unsubscribe=One-Click"
+    assert parse_unsubscribe("<https://x.com/u>", post)["one_click"] is True
+    assert parse_unsubscribe("<https://x.com/u>", " list-unsubscribe=one-click ")["one_click"] is True
+    assert parse_unsubscribe("<https://x.com/u>", "List-Unsubscribe=One-Click; x")["one_click"] is False
+    assert parse_unsubscribe("<https://x.com/u>", "")["one_click"] is False
+    assert parse_unsubscribe("<mailto:u@x.com>", post)["one_click"] is False
