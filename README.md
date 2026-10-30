@@ -14,7 +14,7 @@ The server exposes 17 tools (10 read-only, 7 that change something); see [docs/a
 - **Reversible organization**: `create_label`, `modify_emails`, `modify_by_query` (labels, archive, mark read, star), each recorded in a journal, `undo_change` to revert a batch, `list_changes` to find earlier changes and their change_ids across sessions, and `undo_since` as a panic button that undoes everything since a time.
 - **Triage preferences**: `get_preferences` and `set_preferences` keep rules such as important and ignored senders or keywords, and the time of the last triage, so scheduled triage is consistent from one run to the next. Rules that raise attention apply immediately; rules that lower attention wait for your approval outside the chat (`mailhub-admin`).
 - **Change history**: every label change and every preference change is journaled with its motivating request, listed by `list_changes` and undoable.
-- **Content defenses**: hidden text and invisible characters are removed from emails, email text is delimited as untrusted, and likely injection attempts are flagged (see the safety model).
+- **Content defenses**: hidden text is removed from HTML bodies, invisible characters are removed from all text fields, email text is delimited as untrusted, and likely injection attempts are flagged (see the safety model).
 - **Drafts**: `create_draft` leaves a reply draft in the mailbox for you to review and send yourself. Replies only, addressed to people already in the thread.
 
 ## Safety model
@@ -30,7 +30,8 @@ The server exposes 17 tools (10 read-only, 7 that change something); see [docs/a
 - Drafts are replies only: `create_draft` requires a message to reply to, and `to` and `cc` may only contain people already in that thread (plus your own address). Drafting is refused for a thread that contains a suspicious message.
 - A daily cap (`MAX_CHANGES_PER_DAY`, default 2000) limits how many messages `modify_emails` and `modify_by_query` can change per account in a rolling 24 hours. Undo is never capped.
 - `TOOLS=read-only` starts an instance that registers only the read tools, for routines that should report but never change anything.
-- Preferences follow a direction rule: anything that raises attention (marking a sender important, un-ignoring) applies immediately, anything that lowers attention (ignoring a sender, un-marking important) becomes a proposal that no MCP tool can approve. You approve it with `mailhub-admin preferences approve <id>` inside the container. This keeps injected text from silently hiding future alerts. Proposals expire after 14 days.
+- Preferences follow a direction rule: anything that raises attention (marking a sender important, un-ignoring) applies immediately, anything that lowers attention (ignoring a sender, un-marking important) becomes a proposal that no MCP tool can approve. You approve it with `mailhub-admin preferences approve <id>` inside the container. As long as you only approve proposals you recognize, injected text cannot silently hide future alerts. Raising-attention changes apply without review, but are visible in `list_changes` and can be undone. Proposals expire after 14 days.
+- These defenses have limits (heuristics can be evaded, the server cannot verify who motivated a call); see [Limitations](docs/architecture.md#limitations).
 - Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only Claude's own OAuth redirect URIs can register as clients.
 
 Note on scope: Gmail's `gmail.modify` scope technically also permits sending and trashing, and it is the minimum that covers label changes and drafts. The protections above are in this code, not in the token. Review `src/` if that distinction matters to you.

@@ -100,7 +100,7 @@ Each entry in `changes.jsonl` holds `change_id`, `timestamp`, `account`, `tool`,
 
 ## Content defenses
 
-Every email is text written by a third party, so what reaches Claude is sanitized, delimited and assessed. `core/content.py` is provider-agnostic; the Gmail provider does the sanitizing and the server (`server.py`) does the delimiting and the assessment, for every tool that returns messages (search, read, thread, drafts, overview).
+Every email is text written by a third party, so what reaches Claude is sanitized, delimited and assessed. `core/content.py` is provider-agnostic; the Gmail provider does the sanitizing and the server (`server.py`) does the delimiting and the assessment, for every tool that returns messages (search, read, thread and drafts).
 
 **What is removed.** `html_to_safe_text(html)` returns the visible text and a count of removed hidden characters. It drops `<head>`, `<script>`, `<style>`, `<template>`, `<noscript>`, comments, elements hidden by inline style (`display:none`, `visibility:hidden`, `opacity:0`, a font size of zero or tiny, `max-height:0` with `overflow:hidden`) and elements with the `hidden` attribute or `aria-hidden="true"`. It does not compare colors. `clean_text(s)` removes zero-width and bidirectional control characters, Unicode tag characters, other control characters except newline and tab, and collapses runs of blank lines. The Gmail provider applies `html_to_safe_text` and `clean_text` to the body and `clean_text` to subject, sender, recipients, snippet and attachment names.
 
@@ -125,6 +125,13 @@ Every email is text written by a third party, so what reaches Claude is sanitize
 - **Drafts.** `create_draft` requires `reply_to_message_id`. Participants are every address in From, To, Cc and Reply-To across the thread, plus the account's own address; `to` and `cc` outside that set are refused and the error lists the allowed addresses. `to` defaults to the Reply-To of the replied message, else its From. A thread containing any message flagged suspicious is refused. Nothing is ever sent.
 - **Daily cap.** `MAX_CHANGES_PER_DAY` (default 2000) limits messages changed by `modify_emails` and `modify_by_query` per account in a rolling 24 hours, counted from the journal (undo entries excluded). The check runs under the journal lock, before any write, and the error says how many changes remain. Undo is never capped.
 - **Read-only mode.** `TOOLS=all|read-only` (default `all`). In `read-only` only `list_accounts`, `search_emails`, `read_email`, `read_emails`, `read_thread`, `inbox_overview`, `list_drafts`, `list_labels`, `list_changes` and `get_preferences` are registered; the write tools do not exist on that instance. Any other value fails startup. Since `set_preferences` is not available either, such an instance cannot record `last_triage_at`.
+
+## Limitations
+
+- **The server cannot verify who motivated a call.** `user_request` is text the model supplies, and a manipulated model can write a plausible one. The real check is you reviewing proposals with `mailhub-admin preferences show` before approving.
+- **Heuristics can miss attacks.** Suspicion flags are regex-based and can be evaded by paraphrase, other languages or crafted text. The suspicious-thread refusal in `create_draft` inherits that blind spot. Hidden-text removal covers explicit hiding styles, not color tricks.
+- **Preferences never hide mail.** Search, read and overview ignore preferences. Rules only guide how Claude ranks and reports, so an approved or injected "ignore" can at worst lower a message in a triage report; it can never make the message unfindable.
+- **Raising-attention changes apply immediately and unreviewed.** Injected text can mark an attacker's sender important (noise or priority). This is visible in `list_changes` and undoable.
 
 ## Adding a provider
 
