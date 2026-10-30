@@ -423,3 +423,22 @@ def test_apply_query_respects_cap(fake, provider, journal):
         apply_query(provider, journal, "a", "in:inbox", max_per_day=2, add_labels=["Shopping"],
                     remove_labels=[], archive=False, mark_read=None, star=None)
     assert no_writes(fake)
+
+
+def test_labels_are_read_under_the_journal_lock(fake, provider, journal):
+    """`prior` must be read inside the lock that serializes writes, or it can go stale."""
+    seen = []
+    real = provider.get_messages
+
+    def spy(ids, fmt):
+        seen.append(journal.lock.locked())
+        return real(ids, fmt)
+
+    provider.get_messages = spy
+    modify(provider, journal, "a", ["m1"], [], [], archive=True, mark_read=None, star=None)
+    assert seen == [True]
+
+
+def test_label_journal_entries_have_no_preference_keys(fake, provider, journal):
+    modify(provider, journal, "a", ["m1"], [], [], archive=True, mark_read=None, star=None)
+    assert "kind" not in journal.entries()[0] and "scope" not in journal.entries()[0]

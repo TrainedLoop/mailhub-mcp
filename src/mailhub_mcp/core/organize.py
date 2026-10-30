@@ -11,6 +11,7 @@ from mailhub_mcp.core.aggregate import describe_error
 from mailhub_mcp.core.errors import OrganizeError
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
+from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, undo_entry
 
 ORG_LABEL = "claude/organized"
 MAX_IDS = 1000
@@ -133,10 +134,11 @@ def modify(
         raise OrganizeError("No change requested")
 
     labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
-    found = _read_labels(provider, ids)
 
-    # The journal lock makes check -> write -> record atomic, so parallel calls cannot overshoot the cap.
+    # The journal lock makes check -> read -> write -> record atomic, so parallel calls cannot overshoot
+    # the cap and `prior` cannot go stale between the read and the write.
     with journal.lock:
+        found = _read_labels(provider, ids)
         if max_per_day is not None:
             remaining = max(0, max_per_day - changes_in_window(journal, account, now))
             if len(ids) > remaining:
@@ -188,16 +190,32 @@ def apply_query(
     return {**result, "remaining": len(ids) > MAX_QUERY_APPLY}
 
 
-def undo(provider: Any, journal: Journal, account: str, change_id: str) -> dict:
+def undo(
+    provider: Any, journal: Journal, account: str, change_id: str,
+    store: PreferenceStore | None = None, now: datetime | None = None,
+) -> dict:
     with journal.lock:  # check-is_undone -> apply -> record must not interleave per journal
-        return _undo(provider, journal, account, change_id)
+        return _undo(provider, journal, account, change_id, store, now)
 
 
-def _undo(provider: Any, journal: Journal, account: str, change_id: str) -> dict:
+def _undo_preferences(journal: Journal, entry: dict, store: PreferenceStore | None, now) -> dict:
+    if store is None:
+        raise OrganizeError("Preferences are not available; cannot undo a preference change")
+    return undo_entry(store, journal, entry, now)
+
+
+def _undo(
+    provider: Any, journal: Journal, account: str, change_id: str,
+    store: PreferenceStore | None = None, now: datetime | None = None,
+) -> dict:
     try:
         entry = journal.get(change_id)
     except KeyError:
         raise OrganizeError(f"Unknown change_id: {change_id}") from None
+    if entry.get("kind") == "preferences":
+        if entry.get("scope") not in (GLOBAL, account):
+            raise OrganizeError(f"Change {change_id} belongs to another account")
+        return _undo_preferences(journal, entry, store, now)
     if entry["account"] != account:
         raise OrganizeError(f"Change {change_id} belongs to another account")
     if journal.is_undone(change_id):
@@ -235,6 +253,8 @@ def undo_since(
     accounts: list[str] | None,
     confirm: bool,
     label_names_for: Callable[[str], dict[str, str]] | None = None,
+    store: PreferenceStore | None = None,
+    now: datetime | None = None,
 ) -> dict:
     """Undo every not-yet-undone change since `since`, newest first.
 
@@ -244,7 +264,9 @@ def undo_since(
     candidates until MAX_UNDO_SINCE are undone or MAX_UNDO_SINCE_ATTEMPTS were tried (failures and
     blocked changes count as attempts); `remaining` means candidates were left unattempted. The journal
     lock is taken per change inside `undo`, never across the loop. `label_names_for(account)` optionally
-    maps label ids to names for the preview.
+    maps label ids to names for the preview. Preference entries (account = their scope, so `global` ones
+    are included only without an account filter) are undone through `store`; their blocking key is
+    (scope, field) instead of (account, message id).
     """
     entries = journal.entries(since)
     undone = undone_ids(entries)
@@ -258,7 +280,7 @@ def undo_since(
         names: dict[str, dict[str, str]] = {}
         changes = []
         for e in candidates[:MAX_UNDO_SINCE]:
-            if label_names_for and e["account"] not in names:
+            if label_names_for and e.get("kind") != "preferences" and e["account"] not in names:
                 try:
                     names[e["account"]] = label_names_for(e["account"])
                 except Exception:
@@ -275,11 +297,19 @@ def undo_since(
             break
         attempts += 1
         change_id, account = entry["change_id"], entry["account"]
-        pairs = [(account, mid) for mid in entry.get("prior") or {}]
+        is_pref = entry.get("kind") == "preferences"
+        if is_pref:
+            pairs = [(entry.get("scope") or account, f) for f in entry.get("after") or {}]
+        else:
+            pairs = [(account, mid) for mid in entry.get("prior") or {}]
         blocker = next((blocked_by[p] for p in pairs if p in blocked_by), None)
         if blocker is None:
             try:
-                res = undo(provider_for(account), journal, account, change_id)
+                if is_pref:
+                    with journal.lock:
+                        res = _undo_preferences(journal, entry, store, now)
+                else:
+                    res = undo(provider_for(account), journal, account, change_id)
             except Exception as exc:
                 failed[change_id] = f"{account}: {describe_error(exc, account)}"
                 log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
