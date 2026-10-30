@@ -585,3 +585,37 @@ def test_apply_query_validation_errors_write_nothing(fake, provider, journal):
         apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
                     archive=False, mark_read=None, star=None)
     assert no_writes(fake)
+
+
+def _rate_limit_error():
+    return http_error(429, "Too many concurrent requests for user")
+
+
+def test_modify_rate_limited_read_gives_advice_and_writes_nothing(fake, provider, journal):
+    from mailhub_mcp.core.errors import RateLimited
+
+    fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    with pytest.raises(RateLimited, match=r"^a: Gmail rate limit reached for this mailbox; wait about 30 seconds"):
+        modify(provider, journal, "a", ["m1", "m2"], [], [], True, None, None)
+    assert no_writes(fake) and journal.entries() == []
+
+
+def test_undo_rate_limited_read_gives_advice_and_stays_undoable(fake, provider, journal):
+    from mailhub_mcp.core.errors import RateLimited
+
+    r = modify(provider, journal, "a", ["m1"], [], [], True, None, None)
+    fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    with pytest.raises(RateLimited):
+        undo(provider, journal, "a", r["change_id"])
+    assert undo(provider, journal, "a", r["change_id"])["modified"] == 1
+
+
+def test_undo_since_reports_rate_limit_advice_without_double_alias(fake, provider, journal):
+    from datetime import datetime, timezone
+
+    from mailhub_mcp.core.organize import undo_since
+
+    r = modify(provider, journal, "a", ["m1"], [], [], True, None, None)
+    fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=timezone.utc), None, True)
+    assert out["failed"][r["change_id"]].startswith("a: Gmail rate limit reached for this mailbox; wait about")

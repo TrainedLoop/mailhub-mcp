@@ -1,5 +1,6 @@
 """Gmail implementation of MailProvider on top of `api` and `parsing`."""
 
+import math
 import threading
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -12,7 +13,9 @@ from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from mailhub_mcp.core.errors import AuthExpired, MailhubError, MessageNotFound, TransientError
+from mailhub_mcp.core.errors import (
+    AuthExpired, MailhubError, MessageNotFound, RateLimited, TransientError,
+)
 from mailhub_mcp.core.models import (
     Draft, DraftSummary, Label, LabelState, Message, MessageSummary, Thread,
 )
@@ -55,7 +58,19 @@ class GmailProvider:
         self._address: str | None = None
         self._lock = threading.Lock()
         # Gmail's quota is per mailbox: every call on this account shares one pace.
+        self._units_per_minute = units_per_minute
         self._limiter = api.RateLimiter(units_per_minute / 60)
+
+    def quota_status(self) -> dict[str, int]:
+        return {
+            "used_last_minute": int(self._limiter.used_last_minute()),
+            "budget_per_minute": int(self._units_per_minute),
+        }
+
+    def _rate_limited(self) -> RateLimited:
+        """Advice after the backoff gave up: wait until the budget frees up, 30 to 60 s."""
+        wait = math.ceil(self._limiter.seconds_until_free())
+        return RateLimited.advice(self.alias, "Gmail", min(60, max(30, wait)))
 
     def _service(self) -> Any:
         # httplib2 is not thread-safe: build a fresh client per call, share only credentials.
@@ -84,6 +99,8 @@ class GmailProvider:
             status = api.status_of(exc)
             if status == 404 and not_found:
                 raise MessageNotFound(not_found) from None
+            if api.is_rate_limited(exc):
+                raise self._rate_limited() from None
             if api.is_retryable(exc):
                 raise TransientError(f"{status} {exc.reason}") from None
             raise MailhubError(f"{status} {exc.reason}") from None
@@ -97,8 +114,11 @@ class GmailProvider:
 
     def search_report(self, query: str, limit: int) -> SearchResult:
         with self._translate():
-            found, unreadable = api.search_report(self._service(), query, limit, self._limiter)
-        return SearchResult(found=[MessageSummary(**m) for m in found], unreadable=unreadable)
+            found, unreadable, rate_limited = api.search_report(self._service(), query, limit, self._limiter)
+        return SearchResult(
+            found=[MessageSummary(**m) for m in found], unreadable=unreadable,
+            rate_limited=str(self._rate_limited()) if rate_limited else None,
+        )
 
     def search(self, query: str, limit: int) -> list[MessageSummary]:
         return self.search_report(query, limit).found
@@ -120,6 +140,9 @@ class GmailProvider:
         for message_id, exc in errors.items():
             if api.status_of(exc) == 404:
                 result.missing.append(message_id)
+            elif api.is_rate_limited(exc):
+                result.rate_limited = result.rate_limited or str(self._rate_limited())
+                result.failed[message_id] = result.rate_limited
             elif api.is_retryable(exc):
                 result.failed[message_id] = "temporary failure, retry"
             else:

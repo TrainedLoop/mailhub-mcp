@@ -5,6 +5,7 @@ import json
 import random
 import threading
 import time
+from collections import deque
 from email.message import EmailMessage
 
 import httplib2
@@ -102,8 +103,11 @@ class RateLimiter:
     """Thread-safe pacing for one mailbox, shared by every call on it.
 
     The budget is in Gmail quota units. Each acquire books its slot after the previous ones, so
-    concurrent tool calls on the same account add up to at most `units_per_second`.
+    concurrent tool calls on the same account add up to at most `units_per_second`. It also keeps
+    the units of the last 60 seconds, by booked time, for `used_last_minute`.
     """
+
+    WINDOW = 60.0
 
     def __init__(self, units_per_second: float, now=None, sleep=None):
         self.units_per_second = units_per_second
@@ -112,15 +116,37 @@ class RateLimiter:
         self._sleep = sleep
         self._lock = threading.Lock()
         self.next_free = 0.0
+        self._recent: deque[tuple[float, float]] = deque()  # (booked time, units), in time order
+        self._recent_units = 0.0
+
+    def _clock(self) -> float:
+        return (self._now or _now)()
+
+    def _prune(self, now: float) -> None:
+        while self._recent and self._recent[0][0] <= now - self.WINDOW:
+            self._recent_units -= self._recent.popleft()[1]
 
     def acquire(self, units: float) -> None:
-        now_fn = self._now or _now
         with self._lock:
-            now = now_fn()
+            now = self._clock()
             start = max(now, self.next_free)
             self.next_free = start + units * self._interval
+            self._recent.append((start, units))
+            self._recent_units += units
+            self._prune(now)
         if start > now:
             (self._sleep or _pace_sleep)(start - now)
+
+    def used_last_minute(self) -> int:
+        """Units booked in the last 60 s (including slots booked for calls still waiting)."""
+        with self._lock:
+            self._prune(self._clock())
+            return round(self._recent_units)
+
+    def seconds_until_free(self) -> float:
+        """Seconds until the budget has no booked calls ahead."""
+        with self._lock:
+            return max(0.0, self.next_free - self._clock())
 
 
 def _retry_wait(exc: Exception, server_retries: int, rate_retries: int) -> tuple[str, int] | None:
@@ -243,14 +269,16 @@ def list_ids(
 
 def search_report(
     svc, query: str, max_results: int, limiter: RateLimiter | None = None
-) -> tuple[list[dict], int]:
-    """Summaries of the readable matches, and how many matches could not be read."""
+) -> tuple[list[dict], int, bool]:
+    """Summaries of the readable matches, how many matches could not be read, and whether any of
+    those failed because of a rate limit."""
     limiter = limiter or RateLimiter(DEFAULT_UNITS_PER_SECOND)
     ids = list_ids(svc, query, max_results, limiter)
     msgs, errors = batch_get(svc, ids, "metadata", limiter=limiter)
     # A 404 means the message vanished between list and fetch: not a read failure.
     unreadable = sum(1 for exc in errors.values() if status_of(exc) != 404)
-    return [summarize(m) for m in msgs], unreadable
+    rate_limited = any(is_rate_limited(exc) for exc in errors.values())
+    return [summarize(m) for m in msgs], unreadable, rate_limited
 
 
 def search(svc, query: str, max_results: int, limiter: RateLimiter | None = None) -> list[dict]:

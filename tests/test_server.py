@@ -1211,3 +1211,110 @@ def test_unsubscribe_text_feeds_suspicion(fakes):
     assert out["suspicious"] is True and "mentions_tools" in out["suspicious_reasons"]
     fakes.a.add_message("s2", labels=["INBOX"], headers={"From": "x@y.com", "List-Unsubscribe": "<mailto:u@x.com>"})
     assert call("read_email", {"account": "alice-personal", "message_id": "s2"})["suspicious"] is False
+
+
+# -- quota guidance, rate-limit advice, quota state ----------------------------
+
+
+def _tools():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    return asyncio.run(go())
+
+
+def test_tool_descriptions_state_quota_costs():
+    tools = _tools()
+    assert "20 Gmail quota units per message" in tools["search_emails"].description
+    assert "60 Gmail quota units per message" in tools["read_emails"].description
+    assert "50 per apply" in tools["modify_by_query"].description
+    for name in ("modify_emails", "undo_change", "undo_since"):
+        assert "20 Gmail quota units per message" in tools[name].description, name
+    desc = tools["list_accounts"].description
+    assert f"{server.settings.gmail_units_per_minute} units per minute" in desc and "per mailbox" in desc
+
+
+def _rate_limit_error():
+    return http_error(429, "Too many concurrent requests for user")
+
+
+ADVICE = (
+    "alice-personal: Gmail rate limit reached for this mailbox; wait about 30 seconds and retry; "
+    "avoid parallel calls on the same mailbox"
+)
+
+
+def test_rate_limited_tool_error_is_actionable(fakes):
+    fakes.a.fail = _rate_limit_error()
+    with pytest.raises(ToolError) as e:
+        call("read_thread", {"account": "alice-personal", "thread_id": "m1"})
+    assert str(e.value) == ADVICE
+
+
+def test_rate_limited_fan_out_error_is_actionable(fakes):
+    fakes.a.fail = _rate_limit_error()
+    out = call("list_drafts")
+    assert out["errors"]["alice-personal"] == ADVICE
+
+
+def test_rate_limited_reads_are_actionable(fakes):
+    fakes.a.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    out = call("search_emails", {"query": "in:inbox", "accounts": ["alice-personal"]})
+    assert out["errors"]["alice-personal"] == ADVICE
+    fakes.a.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    out = call("read_emails", {"account": "alice-personal", "message_ids": ["m1", "m2"]})
+    assert out["errors"] == {"m1": ADVICE}
+    fakes.a.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    with pytest.raises(ToolError) as e:
+        call("read_email", {"account": "alice-personal", "message_id": "m1"})
+    assert str(e.value) == ADVICE
+    fakes.a.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    out = call("inbox_overview", {"accounts": ["alice-personal"]})
+    assert out["errors"]["alice-personal"] == ADVICE and out["results"][0]["failed"] == 1
+
+
+def test_rate_limited_organize_is_actionable(fakes):
+    fakes.a.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    with pytest.raises(ToolError) as e:
+        call("modify_emails", {"account": "alice-personal", "message_ids": ["m1"], "archive": True})
+    assert str(e.value) == ADVICE and not has_write(fakes.a)
+
+
+def _assert_quota(out, aliases):
+    assert set(out["quota"]) == set(aliases)
+    for q in out["quota"].values():
+        assert set(q) == {"used_last_minute", "budget_per_minute"}
+        assert all(type(v) is int for v in q.values())
+        assert q["budget_per_minute"] == server.settings.gmail_units_per_minute
+
+
+def test_quota_in_fan_out_responses_grows_after_reads(fakes):
+    out = call("search_emails", {"query": "in:inbox"})
+    _assert_quota(out, ["alice-personal", "bob-work"])
+    first = out["quota"]["alice-personal"]["used_last_minute"]
+    assert first > 0
+    again = call("inbox_overview", {"accounts": ["alice-personal"]})
+    _assert_quota(again, ["alice-personal"])
+    assert again["quota"]["alice-personal"]["used_last_minute"] > first
+    assert "results" in again and "errors" in again
+
+
+def test_quota_in_single_account_responses(fakes):
+    out = call("read_email", {"account": "alice-personal", "message_id": "m1"})
+    _assert_quota(out, ["alice-personal"])
+    assert out["id"] == "m1"
+    out = call("modify_emails", {"account": "alice-personal", "message_ids": ["m1"], "archive": True})
+    _assert_quota(out, ["alice-personal"])
+    assert out["modified"] == 1 and out["change_id"]
+    undone = call("undo_change", {"change_id": out["change_id"]})
+    _assert_quota(undone, ["alice-personal"])
+
+
+def test_quota_in_list_accounts_list_changes_and_undo_since(fakes):
+    _assert_quota(call("list_accounts"), ["alice-personal", "bob-work"])
+    call("modify_emails", {"account": "alice-personal", "message_ids": ["m1"], "archive": True})
+    _assert_quota(call("list_changes"), ["alice-personal"])
+    preview = call("undo_since", {"since": "2000-01-01T00:00"})
+    _assert_quota(preview, ["alice-personal"])
+    done = call("undo_since", {"since": "2000-01-01T00:00", "confirm": True})
+    _assert_quota(done, ["alice-personal"])

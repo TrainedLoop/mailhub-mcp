@@ -95,6 +95,12 @@ All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked re
 
 Each call is logged as `tool=<name> args=<...>` by the `AuditLog` middleware.
 
+**Quota in tools.** The tool descriptions tell the calling model what each call costs: about 20 units per message for `search_emails`, `inbox_overview`, `modify_emails`, `undo_change` and `undo_since` (the last three read each message first), about 60 per message for `read_email`/`read_emails` (full format), and a few units per page plus 50 per apply for `modify_by_query`. `list_accounts` states the per-mailbox budget (`GMAIL_UNITS_PER_MINUTE`), and `inbox_overview` warns against parallel or back-to-back runs.
+
+Every response that touched one or more mailboxes carries a top-level `quota` key: `{"<alias>": {"used_last_minute": int, "budget_per_minute": int}}`, next to the existing keys. `used_last_minute` is the units the mailbox's rate limiter booked in the last 60 seconds (`RateLimiter.used_last_minute`, a deque pruned on access), and `budget_per_minute` the configured budget. Providers expose it through the optional `quota_status()`; the server skips providers without it. Only numbers are reported.
+
+When the backoff gives up on a rate limit, the error is actionable instead of "temporary failure": `"<alias>: Gmail rate limit reached for this mailbox; wait about <N> seconds and retry; avoid parallel calls on the same mailbox"`, where N is the time until the limiter's booked budget frees up, clamped to 30-60 seconds (`core.errors.RateLimited`). It appears as the `ToolError` of single-account tools (including `modify_emails`, `modify_by_query` and `undo_change`, which then write nothing), as the account's entry in `errors` for multi-account tools and `search_emails`/`inbox_overview` reads, as the per-message reason in `read_emails`, and in `failed` for `undo_since`.
+
 ## Protections, journal and undo
 
 `organize.modify` validates everything before the first write: protected labels are refused, label names resolve to IDs, `claude/organized` cannot be removed by a change (only an undo drops it), and a label cannot be both added and removed. It reads each message's current labels, then adds `claude/organized`, applies the change and appends a journal entry.

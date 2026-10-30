@@ -130,3 +130,13 @@ class ProviderContract:
         m = seed["messages"][0]
         draft = provider.create_draft(m["from"], "", "reply", None, m["id"])
         assert isinstance(draft, Draft) and draft.thread_id == m["thread_id"]
+
+    def test_quota_status_when_provided(self, provider):
+        status = getattr(provider, "quota_status", None)
+        if status is None:  # optional: providers without a quota budget omit it
+            return
+        before = status()
+        assert set(before) == {"used_last_minute", "budget_per_minute"}
+        assert all(type(v) is int and v >= 0 for v in before.values())
+        provider.get_messages(["m1"], "labels")
+        assert status()["used_last_minute"] > before["used_last_minute"]

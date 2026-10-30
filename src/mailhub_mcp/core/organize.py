@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from mailhub_mcp.core.aggregate import describe_error
-from mailhub_mcp.core.errors import OrganizeError
+from mailhub_mcp.core.errors import OrganizeError, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
 from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, UndoRejectedError, undo_entry
@@ -62,6 +62,8 @@ def _read_labels(provider: Any, ids: list[str]) -> dict[str, list[str]]:
     res = provider.get_messages(ids, "labels")
     if res.missing:
         raise OrganizeError(f"Message IDs not found in this account: {res.missing}")
+    if getattr(res, "rate_limited", None):
+        raise RateLimited(res.rate_limited)
     current = {m.id: m.labels for m in res.found}
     unreadable = set(res.failed) | (set(ids) - set(current) - set(res.missing))
     if unreadable:
@@ -295,6 +297,8 @@ def _undo(
     ops = inverse_ops(entry)
     all_ids = _dedupe([i for op in ops for i in op["ids"]])
     res = provider.get_messages(all_ids, "labels") if all_ids else SimpleNamespace(found=[], missing=[], failed={})
+    if getattr(res, "rate_limited", None):
+        raise RateLimited(res.rate_limited)
     current = {m.id: m.labels for m in res.found}
     unreadable = set(res.failed) | (set(all_ids) - set(current) - set(res.missing))
     if unreadable:
@@ -386,7 +390,8 @@ def undo_since(
                 else:
                     res = undo(provider_for(account), journal, account, change_id)
             except Exception as exc:
-                failed[change_id] = f"{account}: {describe_error(exc, account)}"
+                # A rate-limit message already names the account.
+                failed[change_id] = str(exc) if isinstance(exc, RateLimited) else f"{account}: {describe_error(exc, account)}"
                 log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
                 blocker = change_id
                 if isinstance(exc, UndoRejectedError):

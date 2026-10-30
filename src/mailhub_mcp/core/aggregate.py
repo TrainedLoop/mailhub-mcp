@@ -7,7 +7,7 @@ import anyio
 from anyio import to_thread
 
 from mailhub_mcp.core.accounts import Account, AccountRegistry
-from mailhub_mcp.core.errors import MailhubError
+from mailhub_mcp.core.errors import MailhubError, RateLimited
 from mailhub_mcp.core.models import with_account
 
 
@@ -51,5 +51,7 @@ async def fan_out(accounts: list[Account], fn: Callable[[Account], list]) -> dic
 async def run_one(account: Account, fn: Callable[[Account], Any]) -> Any:
     try:
         return await to_thread.run_sync(fn, account)
+    except RateLimited as exc:  # already names the account
+        raise MailhubError(str(exc)) from exc
     except Exception as exc:
         raise MailhubError(f"{account.alias}: {describe_error(exc, account.alias)}") from exc

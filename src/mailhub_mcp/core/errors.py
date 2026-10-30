@@ -44,3 +44,15 @@ class TransientError(MailhubError):
 
 class OrganizeError(MailhubError, ValueError):
     pass
+
+
+class RateLimited(TransientError):
+    """The mailbox's provider quota is exhausted. The message already names the account and says
+    how long to wait, so it is shown as is (not prefixed with the alias again)."""
+
+    @classmethod
+    def advice(cls, alias: str, provider_label: str, wait_seconds: int) -> "RateLimited":
+        return cls(
+            f"{alias}: {provider_label} rate limit reached for this mailbox; wait about {wait_seconds} "
+            f"seconds and retry; avoid parallel calls on the same mailbox"
+        )

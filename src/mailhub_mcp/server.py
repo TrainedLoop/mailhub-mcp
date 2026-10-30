@@ -20,7 +20,7 @@ from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.content import assess, clean_text, new_nonce, wrap_untrusted
 from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
-from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound
+from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal
 from mailhub_mcp.core.models import Message, MessageSummary, Thread, with_account
@@ -217,6 +217,26 @@ def _dump(value):
     return value
 
 
+def quota_of(accounts) -> dict[str, dict[str, int]]:
+    """Per alias, the quota its provider reports (numbers only); providers without one are left out."""
+    out: dict[str, dict[str, int]] = {}
+    for account in accounts:
+        status = getattr(account.provider, "quota_status", None)
+        if status is None:
+            continue
+        try:
+            q = status()
+            out[account.alias] = {k: int(q[k]) for k in ("used_last_minute", "budget_per_minute")}
+        except Exception as exc:  # quota is informational: never fail a response over it
+            log.warning("quota status failed for %s: %s", account.alias, describe_error(exc, account.alias))
+    return out
+
+
+def with_quota(res, accounts):
+    """Add the top-level 'quota' key to a dict response that touched `accounts`."""
+    return {**res, "quota": quota_of(accounts)} if isinstance(res, dict) else res
+
+
 async def one(account: str, fn):
     """Run fn(provider) on a single account, turning core errors into ToolError."""
     try:
@@ -225,14 +245,21 @@ async def one(account: str, fn):
         raise ToolError(str(exc)) from exc
     try:
         res = await run_one(acc, lambda a: fn(a.provider))
-        return _dump(_present(res, new_nonce(), ALL_TOOL_NAMES))
+        return with_quota(_dump(_present(res, new_nonce(), ALL_TOOL_NAMES)), [acc])
     except MailhubError as exc:  # run_one already prefixes the alias
         raise ToolError(str(exc)) from exc
 
 
 async def many(aliases: list[str] | None, fn) -> dict:
-    res = await fan_out(_accounts(aliases), lambda a: fn(a.provider))
-    return _dump(_present(res, new_nonce(), ALL_TOOL_NAMES))
+    accounts = _accounts(aliases)
+    res = await fan_out(accounts, lambda a: fn(a.provider))
+    return with_quota(_dump(_present(res, new_nonce(), ALL_TOOL_NAMES)), accounts)
+
+
+def raise_if_rate_limited(res) -> None:
+    """A read that failed on a rate limit: surface the provider's advice instead of 'not found'."""
+    if getattr(res, "rate_limited", None):
+        raise RateLimited(res.rate_limited)
 
 
 def _accounts(aliases: list[str] | None):
@@ -242,7 +269,11 @@ def _accounts(aliases: list[str] | None):
         raise ToolError(str(exc)) from exc
 
 
-@tool(annotations=READ_ONLY, description="List the connected mail accounts (alias, email address, provider, query syntax hint, credential status).")
+@tool(annotations=READ_ONLY, description=(
+    "List the connected mail accounts (alias, email address, provider, query syntax hint, credential status). "
+    f"Gmail quota is per mailbox: this server spends at most {settings.gmail_units_per_minute} units per minute on each. "
+    "Every response that touched a mailbox has 'quota': {alias: {used_last_minute, budget_per_minute}}."
+))
 async def list_accounts() -> dict:
     def info(account) -> dict:
         p = account.provider
@@ -252,31 +283,41 @@ async def list_accounts() -> dict:
         except Exception as exc:
             return {**item, "email": None, "status": describe_error(exc, account.alias)}
 
-    res = await fan_out(registry.all(), lambda a: [info(a)])
-    return {"accounts": [{k: v for k, v in r.items() if k != "account"} for r in res["results"]]}
+    accounts = registry.all()
+    res = await fan_out(accounts, lambda a: [info(a)])
+    return with_quota(
+        {"accounts": [{k: v for k, v in r.items() if k != "account"} for r in res["results"]]}, accounts
+    )
 
 
-@tool(annotations=READ_ONLY, description="Search mail in all accounts or the given aliases. Query syntax depends on the provider (see query_hint in list_accounts), e.g. Gmail: 'from:x is:unread newer_than:7d'. Max 100 results per account." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Search mail in all accounts or the given aliases. Query syntax depends on the provider (see query_hint in list_accounts), e.g. Gmail: 'from:x is:unread newer_than:7d'. Max 100 results per account. Costs about 20 Gmail quota units per message returned." + UNTRUSTED_NOTE)
 async def search_emails(query: str, accounts: list[str] | None = None, max_results: int = 20) -> dict:
     limit = max(1, min(max_results, 100))
     unreadable: dict[str, int] = {}
+    rate_limited: dict[str, str] = {}
+    selected = _accounts(accounts)
 
     def work(account) -> list:
         res = account.provider.search_report(query, limit)
         if res.unreadable:
             unreadable[account.alias] = res.unreadable
+        if getattr(res, "rate_limited", None):
+            rate_limited[account.alias] = res.rate_limited
         return res.found
 
-    out = _dump(_present(await fan_out(_accounts(accounts), work), new_nonce(), ALL_TOOL_NAMES))
+    out = _dump(_present(await fan_out(selected, work), new_nonce(), ALL_TOOL_NAMES))
+    for alias, advice in rate_limited.items():
+        out["errors"].setdefault(alias, advice)
     for alias, count in unreadable.items():
         out["errors"].setdefault(alias, f"{count} message{'s' if count != 1 else ''} could not be read")
-    return out
+    return with_quota(out, selected)
 
 
-@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units." + UNTRUSTED_NOTE)
 async def read_email(account: str, message_id: str) -> dict:
     def work(p):
         res = p.get_messages([message_id], "full")
+        raise_if_rate_limited(res)
         if not res.found:
             raise MessageNotFound([message_id])
         return with_account(res.found[0], account)
@@ -284,7 +325,7 @@ async def read_email(account: str, message_id: str) -> dict:
     return await one(account, work)
 
 
-@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'." + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'. Costs about 60 Gmail quota units per message (full format)." + UNTRUSTED_NOTE)
 async def read_emails(account: str, message_ids: list[str]) -> dict:
     if len(message_ids) > MAX_READ_IDS:
         raise ToolError(f"At most {MAX_READ_IDS} message IDs per call")
@@ -307,13 +348,22 @@ async def read_thread(account: str, thread_id: str) -> dict:
     "Cost: each scanned message costs about 20 Gmail quota units, so 200 messages use about 50 s of the mailbox's per-minute budget and 500 about 2 minutes; do not run several in parallel or back to back."
 ) + UNTRUSTED_NOTE)
 async def inbox_overview(accounts: list[str] | None = None, query: str | None = None, limit: int = 200) -> dict:
-    def work(p) -> list[dict]:
+    rate_limited: dict[str, str] = {}
+    selected = _accounts(accounts)
+
+    def work(account) -> list[dict]:
+        p = account.provider
         ids = p.list_ids(query or p.default_inbox_query, max(1, min(limit, 2000)))
         res = p.get_messages(ids, "summary")
+        if getattr(res, "rate_limited", None):
+            rate_limited[account.alias] = res.rate_limited
         overview = build_overview([m.model_dump() for m in res.found], top_n=30)
         return [{**overview, "failed": len(res.missing) + len(res.failed)}]
 
-    return await many(accounts, work)
+    out = _dump(_present(await fan_out(selected, work), new_nonce(), ALL_TOOL_NAMES))
+    for alias, advice in rate_limited.items():
+        out["errors"].setdefault(alias, advice)
+    return with_quota(out, selected)
 
 
 @tool(annotations=READ_ONLY, description="List existing drafts in all accounts or the given aliases." + UNTRUSTED_NOTE)
@@ -337,7 +387,8 @@ async def create_label(account: str, name: str) -> dict:
     description=(
         "Change labels on specific emails of one account: add/remove labels (by name or ID), archive, mark read/unread, star/unstar. "
         "Never deletes, trashes or sends; TRASH, SPAM, DRAFT, SENT and CHAT cannot be changed. Max 1000 IDs. "
-        "Every change gets the 'claude/organized' label and returns a change_id for undo_change."
+        "Every change gets the 'claude/organized' label and returns a change_id for undo_change. "
+        "Costs about 20 Gmail quota units per message, because each message is read first; prefer modify_by_query for large sets."
     ),
 )
 async def modify_emails(
@@ -365,7 +416,8 @@ async def modify_emails(
         "By default (confirm=false) only previews: match count and a sample of 10. Pass confirm=true to apply; "
         "at most 500 emails per call ('remaining' says whether more match). "
         "The query should exclude emails already changed (e.g. add in:inbox when archiving, -label:X when adding X); "
-        "messages already in the target state are skipped, and a hint is returned if nothing is left to change."
+        "messages already in the target state are skipped, and a hint is returned if nothing is left to change. "
+        "Cheap on quota: it lists by label (a few units per page of 500) plus 50 per apply; the preview reads a 10-message sample."
         + UNTRUSTED_NOTE
     ),
 )
@@ -401,7 +453,8 @@ async def modify_by_query(
         "the parts that would lower it (un-marking important, ignoring again) are NOT applied but returned in 'proposed' "
         "(proposal_id, scope, field, op, values; each value enclosed in [untrusted:<nonce>] ... [/untrusted:<nonce>] markers); tell the user to approve them outside this chat with `mailhub-admin preferences approve <id>`. "
         "change_id is null when nothing was applied. Once the user approves an undo proposal, the change counts as undone; "
-        "if the user rejected it, undoing that change again is refused."
+        "if the user rejected it, undoing that change again is refused. "
+        "An email change costs about 20 Gmail quota units per message, because each message is read first."
     ),
 )
 async def undo_change(change_id: str) -> dict:
@@ -466,13 +519,14 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
         return []
 
     shown = {e.get("account") for e in page}
-    await fan_out([a for a in registry.all() if a.alias in shown], lookup)  # a failing account falls back to ids
+    looked_up = [a for a in registry.all() if a.alias in shown]
+    await fan_out(looked_up, lookup)  # a failing account falls back to ids
     nonce = new_nonce()
     changes = [summarize_entry(e, e["change_id"] in undone, names.get(e.get("account"), {})) for e in page]
-    return {
+    return with_quota({
         "changes": [_guard_change(c, nonce) for c in changes],
         "total": len(matching),
-    }
+    }, looked_up)
 
 
 @tool(
@@ -489,7 +543,8 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
         "once approved it counts as undone, and if the user rejected them the change is listed in 'failed' and not proposed again. "
         "One that cannot be undone is listed in 'failed', the rest still proceed, "
         "and older changes touching the same emails are held back (also in 'failed') so the restore stays exact. "
-        "If 'failed' is not empty, fix the cause before retrying those changes, and do not loop when nothing was undone."
+        "If 'failed' is not empty, fix the cause before retrying those changes, and do not loop when nothing was undone. "
+        "Costs about 20 Gmail quota units per message undone, because each message is read first."
     ),
 )
 async def undo_since(since: str, accounts: list[str] | None = None, confirm: bool = False) -> dict:
@@ -497,11 +552,15 @@ async def undo_since(since: str, accounts: list[str] | None = None, confirm: boo
     selected = _accounts(accounts)
     aliases = [a.alias for a in selected] if accounts else None
 
+    touched: dict[str, object] = {}
+
     def provider_for(alias: str):
-        return registry.get(alias).provider
+        touched[alias] = registry.get(alias)
+        return touched[alias].provider
 
     def label_names_for(alias: str) -> dict[str, str]:
-        return _label_names(registry.get(alias))
+        touched[alias] = registry.get(alias)
+        return _label_names(touched[alias])
 
     out = _dump(await to_thread.run_sync(
         lambda: organize.undo_since(provider_for, journal, floor, aliases, confirm, label_names_for, store=store)
@@ -511,7 +570,7 @@ async def undo_since(since: str, accounts: list[str] | None = None, confirm: boo
         out["changes"] = [_guard_change(c, nonce) for c in out["changes"]]
     if isinstance(out.get("proposed"), list):
         out["proposed"] = _guard_prefs(out["proposed"], nonce)
-    return out
+    return with_quota(out, list(touched.values()))
 
 
 def _pref_error(scope: str, exc: MailhubError) -> ToolError:
@@ -603,6 +662,7 @@ async def create_draft(
 
     def work(p):
         found = p.get_messages([reply_to_message_id], "summary")
+        raise_if_rate_limited(found)
         if not found.found:
             raise MessageNotFound([reply_to_message_id])
         thread = p.get_thread(found.found[0].thread_id)

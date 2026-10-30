@@ -13,12 +13,14 @@ class GetResult:
     found: list = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     failed: dict[str, str] = field(default_factory=dict)  # id -> readable reason
+    rate_limited: str | None = None  # advice message when any read failed on a rate limit
 
 
 @dataclass
 class SearchResult:
     found: list[MessageSummary] = field(default_factory=list)
     unreadable: int = 0
+    rate_limited: str | None = None  # advice message when any read failed on a rate limit
 
 
 class MailProvider(Protocol):
@@ -47,6 +49,9 @@ class MailProvider(Protocol):
     def create_draft(
         self, to: str, subject: str, body: str, cc: str | None, reply_to_message_id: str | None
     ) -> Draft: ...
+
+    # Optional: `quota_status() -> {"used_last_minute": int, "budget_per_minute": int}` for providers
+    # with a per-mailbox quota budget. Callers use getattr and skip providers without it.
 
 
 ProviderFactory = Callable[[str, Path], MailProvider]

@@ -644,3 +644,60 @@ def test_network_errors_are_retried_on_the_server_schedule(fake, _sleeps):
     finally:
         type(fake)._request = orig
     assert _sleeps == [1, 2]
+
+
+# -- quota state for responses and rate-limit advice ------------------------------
+
+
+def test_limiter_counts_units_acquired_in_the_last_minute():
+    from mailhub_mcp.providers.gmail import api
+
+    clock = {"t": 0.0}
+    limiter = api.RateLimiter(1000, now=lambda: clock["t"], sleep=lambda s: None)
+    assert limiter.used_last_minute() == 0
+    limiter.acquire(100)
+    clock["t"] = 30.0
+    limiter.acquire(50)
+    assert limiter.used_last_minute() == 150
+    clock["t"] = 60.5
+    assert limiter.used_last_minute() == 50
+    clock["t"] = 91.0
+    assert limiter.used_last_minute() == 0
+
+
+def test_limiter_used_last_minute_is_thread_safe():
+    import threading
+
+    from mailhub_mcp.providers.gmail import api
+
+    limiter = api.RateLimiter(1e9, now=lambda: 0.0, sleep=lambda s: None)
+    threads = [threading.Thread(target=lambda: [limiter.acquire(3) for _ in range(500)]) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert limiter.used_last_minute() == 8 * 500 * 3
+
+
+def test_limiter_seconds_until_free():
+    from mailhub_mcp.providers.gmail import api
+
+    clock = {"t": 10.0}
+    limiter = api.RateLimiter(10, now=lambda: clock["t"], sleep=lambda s: None)
+    assert limiter.seconds_until_free() == 0
+    limiter.acquire(450)  # booked: the budget is free again 45 s from now
+    assert limiter.seconds_until_free() == pytest.approx(45)
+    clock["t"] = 50.0
+    assert limiter.seconds_until_free() == pytest.approx(5)
+
+
+def test_search_report_flags_rate_limited_reads(fake):
+    from mailhub_mcp.providers.gmail import api
+
+    fake.add_message("m1")
+    fake.add_message("m2")
+    fake.get_error_seq["m1"] = [_rate_limited() for _ in range(9)]
+    found, unreadable, rate_limited = api.search_report(fake, "", 10)
+    assert [m["id"] for m in found] == ["m2"] and unreadable == 1 and rate_limited is True
+    fake.get_error_seq.clear()
+    assert api.search_report(fake, "", 10)[2] is False

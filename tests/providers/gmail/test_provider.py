@@ -208,7 +208,7 @@ def test_get_messages_classifies_failures(gmail, fake):
     assert r.failed == {
         "m1": "could not be read",
         "m2": "temporary failure, retry",
-        "m3": "temporary failure, retry",
+        "m3": RATE_LIMIT_ADVICE.format(n=30),
     }
     assert r.missing == ["nope"]
 
@@ -263,3 +263,64 @@ def test_provider_factories_pass_the_configured_budget(tmp_path):
     provider = factories["gmail"]("a", tmp_path / "a.json")
     assert isinstance(provider, GmailProvider) and provider.alias == "a"
     assert provider._limiter.units_per_second == pytest.approx(10)
+
+
+RATE_LIMIT_ADVICE = (
+    "a: Gmail rate limit reached for this mailbox; wait about {n} seconds and retry; "
+    "avoid parallel calls on the same mailbox"
+)
+
+
+def _rate_limit_error():
+    import httplib2
+    from googleapiclient.errors import HttpError
+
+    body = {"error": {"code": 429, "message": "Too many concurrent requests for user"}}
+    return HttpError(httplib2.Response({"status": 429}), json.dumps(body).encode())
+
+
+def test_rate_limit_error_tells_how_long_to_wait(gmail, fake):
+    from mailhub_mcp.core.errors import RateLimited
+
+    fake.fail = _rate_limit_error()
+    with pytest.raises(RateLimited) as e:
+        gmail.list_labels()
+    assert str(e.value) == RATE_LIMIT_ADVICE.format(n=30)  # never less than 30
+    assert isinstance(e.value, TransientError)
+
+
+def test_rate_limit_wait_follows_the_limiter_up_to_60(gmail, fake, monkeypatch):
+    from mailhub_mcp.core.errors import RateLimited
+
+    monkeypatch.setattr(gmail._limiter, "seconds_until_free", lambda: 44.2)
+    fake.fail = _rate_limit_error()
+    with pytest.raises(RateLimited, match="wait about 45 seconds"):
+        gmail.list_labels()
+    monkeypatch.setattr(gmail._limiter, "seconds_until_free", lambda: 500.0)
+    with pytest.raises(RateLimited, match="wait about 60 seconds"):
+        gmail.list_labels()
+
+
+def test_rate_limited_reads_carry_the_advice(gmail, fake):
+    fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    fake.get_errors["m2"] = http_error(503, "x")
+    res = gmail.get_messages(["m1", "m2", "m3"], "labels")
+    assert res.failed == {"m1": RATE_LIMIT_ADVICE.format(n=30), "m2": "temporary failure, retry"}
+    assert res.rate_limited == RATE_LIMIT_ADVICE.format(n=30)
+    assert gmail.get_messages(["m3"], "labels").rate_limited is None
+
+
+def test_search_report_carries_rate_limit_advice(gmail, fake):
+    fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
+    report = gmail.search_report("in:inbox", 10)
+    assert report.unreadable >= 1 and report.rate_limited == RATE_LIMIT_ADVICE.format(n=30)
+
+
+def test_quota_status_is_numbers_and_grows_after_reads(fake, token_file):
+    gmail = GmailProvider("a", token_file, build_service=lambda c: fake, units_per_minute=1200)
+    before = gmail.quota_status()
+    assert before == {"used_last_minute": 0, "budget_per_minute": 1200}
+    gmail.get_messages(["m1", "m2"], "summary")
+    after = gmail.quota_status()
+    assert after["used_last_minute"] == 40 and after["budget_per_minute"] == 1200
+    assert all(type(v) is int for v in after.values())
