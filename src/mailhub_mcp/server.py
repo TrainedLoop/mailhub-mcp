@@ -53,6 +53,20 @@ store = PreferenceStore(settings.journal_path.parent / "preferences.json")
 if not registry.all():
     log.warning("no accounts found in %s", settings.accounts_dir)
 
+
+def warn_if_several_owners(allowed_emails: frozenset[str]) -> None:
+    """One owner per instance: every allowed login sees every linked mailbox, so a second address in
+    ALLOWED_EMAILS is almost always a person who should run their own instance."""
+    if len(allowed_emails) > 1:
+        log.warning(
+            "ALLOWED_EMAILS has %d addresses; every allowed login sees every linked mailbox. mailhub-mcp is "
+            "designed for one owner per instance — run a separate instance per person.",
+            len(allowed_emails),
+        )
+
+
+warn_if_several_owners(settings.allowed_emails)
+
 READ_ONLY = {"readOnlyHint": True, "openWorldHint": True}
 WRITE = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": False}
 MAX_READ_IDS = 25

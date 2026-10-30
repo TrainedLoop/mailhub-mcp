@@ -876,3 +876,30 @@ def test_set_preferences_wraps_applied_and_pending_values_with_one_nonce(fakes):
     assert out["applied"][0]["field"] == "important_keywords"
     other = _set(add={"important_keywords": ["nota"]})
     assert set(_nonces(other)) != set(nonces)
+
+
+# ----- one owner per instance -----
+
+def test_warns_when_allowed_emails_has_several_addresses(caplog):
+    with caplog.at_level("WARNING", logger="mailhub-mcp"):
+        server.warn_if_several_owners(frozenset({"me@gmail.com", "other@gmail.com"}))
+    assert (
+        "ALLOWED_EMAILS has 2 addresses; every allowed login sees every linked mailbox. mailhub-mcp is "
+        "designed for one owner per instance — run a separate instance per person."
+    ) in caplog.text
+    caplog.clear()
+    with caplog.at_level("WARNING", logger="mailhub-mcp"):
+        server.warn_if_several_owners(frozenset({"me@gmail.com"}))
+    assert "ALLOWED_EMAILS" not in caplog.text
+
+
+def test_startup_warns_about_several_owners(tmp_path):
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "ALLOWED_EMAILS": "me@gmail.com, other@gmail.com", "FASTMCP_HOME": str(tmp_path),
+           "ACCOUNTS_DIR": str(tmp_path / "accounts"), "JOURNAL_PATH": str(tmp_path / "c.jsonl")}
+    out = subprocess.run([sys.executable, "-c", "import mailhub_mcp.server"], env=env, capture_output=True,
+                         text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    assert "ALLOWED_EMAILS has 2 addresses" in out.stderr
