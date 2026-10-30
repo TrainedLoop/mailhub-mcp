@@ -124,7 +124,11 @@ def modify(
     query: str | None = None,
     max_per_day: int | None = None,
     now: datetime | None = None,
+    skip_unchanged: bool = False,
 ) -> dict:
+    """Apply the change to `ids`. With `skip_unchanged`, ids already in the target state (per the
+    labels read under the lock) are dropped first; if none are left nothing is written and the
+    result is `{"change_id": None, "modified": 0, "unchanged": True}`."""
     ids = _dedupe(ids)
     if not ids:
         raise OrganizeError("No message IDs given")
@@ -139,6 +143,10 @@ def modify(
     # the cap and `prior` cannot go stale between the read and the write.
     with journal.lock:
         found = _read_labels(provider, ids)
+        if skip_unchanged:
+            ids = [i for i in ids if not (set(add) <= set(found[i]) and not set(remove) & set(found[i]))]
+            if not ids:
+                return {"change_id": None, "modified": 0, "unchanged": True}
         if max_per_day is not None:
             remaining = max(0, max_per_day - changes_in_window(journal, account, now))
             if len(ids) > remaining:
@@ -172,21 +180,15 @@ def apply_query(
     if not ids:
         return {"change_id": None, "modified": 0, "remaining": False}
     batch = ids[:MAX_QUERY_APPLY]
-    if any(changes.get(k) for k in ("add_labels", "remove_labels", "archive")) or any(
-        changes.get(k) is not None for k in ("mark_read", "star")
-    ):
-        _, add, remove = _plan(provider, **changes)
-        current = _read_labels(provider, batch)
-        batch = [
-            i for i in batch
-            if not (set(add) <= set(current[i]) and not set(remove) & set(current[i]))
-        ]
-        if not batch:
-            return {
-                "change_id": None, "modified": 0, "remaining": len(ids) > MAX_QUERY_APPLY,
-                "hint": QUERY_HINT_ALREADY_CHANGED,
-            }
-    result = modify(provider, journal, account, batch, tool="modify_by_query", query=query, max_per_day=max_per_day, **changes)
+    result = modify(
+        provider, journal, account, batch, tool="modify_by_query", query=query,
+        max_per_day=max_per_day, skip_unchanged=True, **changes,
+    )
+    if result.get("unchanged"):
+        return {
+            "change_id": None, "modified": 0, "remaining": len(ids) > MAX_QUERY_APPLY,
+            "hint": QUERY_HINT_ALREADY_CHANGED,
+        }
     return {**result, "remaining": len(ids) > MAX_QUERY_APPLY}
 
 

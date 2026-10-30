@@ -453,3 +453,28 @@ def test_labels_are_read_under_the_journal_lock(fake, provider, journal):
 def test_label_journal_entries_have_no_preference_keys(fake, provider, journal):
     modify(provider, journal, "a", ["m1"], [], [], archive=True, mark_read=None, star=None)
     assert "kind" not in journal.entries()[0] and "scope" not in journal.entries()[0]
+
+
+def _minimal_reads(fake):
+    return [c for c in fake.calls if c[0] == "messages.get" and c[1].get("format") == "minimal"]
+
+
+def test_apply_query_reads_labels_once_per_message(fake, provider, journal):
+    fake.add_message("m3", labels=[])
+    fake.query_results["q"] = ["m1", "m2", "m3"]
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert r["modified"] == 2
+    assert len(_minimal_reads(fake)) == 3  # one read of every matched id, not two
+
+
+def test_apply_query_all_already_changed_reads_once_and_writes_nothing(fake, provider, journal):
+    fake.query_results["q"] = ["m1", "m2"]
+    apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                archive=True, mark_read=None, star=None)
+    fake.calls.clear()
+    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
+                    archive=True, mark_read=None, star=None)
+    assert r["modified"] == 0 and "hint" in r
+    assert len(_minimal_reads(fake)) == 2 and no_writes(fake)
