@@ -67,7 +67,7 @@ Methods:
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 
-Gmail limits each user to 250 quota units per second (a message read costs 5). The Gmail provider paces batch reads to about 40 messages per second per mailbox, with one rate limiter shared by every concurrent call on that account, instead of bursting; retries 429, 5xx and 403 `rateLimitExceeded`/`userRateLimitExceeded` responses with backoff (batch reads per message; single requests through the client's built-in retries), and never retries draft creation, which could duplicate a draft.
+Gmail limits each user to 250 quota units per second over a moving window (a message read costs 5, a thread read 10, a `batchModify` 50). The Gmail provider budgets half of that, 125 units per second per mailbox, with one rate limiter shared by every call on that account (reads, listings, label and draft calls, writes), so large cleanups are paced (about 25 messages per second for reads) instead of bursting. Rate-limit responses (429, or 403 with the `rateLimitExceeded`/`userRateLimitExceeded` reason, read from the error body) are retried after 5, 15 and 30 seconds; 5xx responses keep a short backoff (batch reads per message; single requests through the client's built-in retries plus the long rate-limit waits). Draft creation is never retried, because a retry could duplicate a draft.
 
 ## Tools
 
