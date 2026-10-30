@@ -45,8 +45,8 @@ _BLOCK = frozenset(
 )
 _ALWAYS_DROPPED = frozenset({"head", "script", "style", "template", "noscript"})
 _NUM = re.compile(r"^([+-]?(?:[0-9]*\.?[0-9]+)(?:e[+-]?[0-9]+)?)([a-z%]*)$")
-_IMPORTANT = re.compile(r"!\s*important")
-_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-f]{1,6})[ \t\n\r\f]?|(.))", re.DOTALL)
+_IMPORTANT_WORD = re.compile(r"important")
+_CSS_ESCAPE = re.compile(r"\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|(.))", re.DOTALL)
 _PX_PER = {
     "px": 1.0,
     "pt": 4 / 3,
@@ -86,21 +86,54 @@ def _strip_css_comments(s: str) -> str:
         pos = end + 2
 
 
+def _find_unescaped(s: str, ch: str, start: int = 0) -> int:
+    i = start
+    while i < len(s):
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == ch:
+            return i
+        i += 1
+    return -1
+
+
+def _split_unescaped(s: str, ch: str) -> list[str]:
+    parts: list[str] = []
+    pos = 0
+    while True:
+        i = _find_unescaped(s, ch, pos)
+        if i < 0:
+            parts.append(s[pos:])
+            return parts
+        parts.append(s[pos:i])
+        pos = i + 1
+
+
+def _norm(s: str) -> str:
+    return _css_unescape(s).lower().strip()
+
+
 def _style_hides(style: str) -> bool:
-    style = _css_unescape(_strip_css_comments(style.lower()))
     props: dict[str, str] = {}
     important: set[str] = set()
-    for part in style.split(";"):
-        key, sep, value = part.partition(":")
-        if not sep:
+    for part in _split_unescaped(_strip_css_comments(style), ";"):
+        colon = _find_unescaped(part, ":")
+        if colon < 0:
             continue
-        key = key.strip()
-        is_important = bool(_IMPORTANT.search(value))
+        key = _norm(part[:colon])
+        value = part[colon + 1 :]
+        bang = _find_unescaped(value, "!")
+        is_important = False
+        if bang >= 0 and _IMPORTANT_WORD.match(_norm(value[bang + 1 :])):
+            is_important = True
+            value = value[:bang]
         if key in important and not is_important:
             continue
         if is_important:
             important.add(key)
-        props[key] = _IMPORTANT.sub("", value).strip()
+        props[key] = _norm(value)
     if props.get("display") == "none" or props.get("visibility") == "hidden":
         return True
     m = _NUM.match(props.get("opacity", ""))
@@ -109,10 +142,10 @@ def _style_hides(style: str) -> bool:
     m = _NUM.match(props.get("font-size", ""))
     if m:
         size, unit = float(m.group(1)), m.group(2)
-        if size == 0 or (unit in _PX_PER and size * _PX_PER[unit] <= 1):
+        if size == 0 or (size > 0 and unit in _PX_PER and size * _PX_PER[unit] <= 1):
             return True
     m = _NUM.match(props.get("max-height", ""))
-    if m and float(m.group(1)) <= 0 and props.get("overflow") == "hidden":
+    if m and float(m.group(1)) == 0 and props.get("overflow") == "hidden":
         return True
     return False
 
@@ -144,6 +177,11 @@ _CLOSES_P = frozenset(
 )
 
 
+_SCOPE_STOP = frozenset(
+    "applet caption html table td th marquee object template button".split()
+)
+
+
 class _Extractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -154,6 +192,7 @@ class _Extractor(HTMLParser):
         self.positions: defaultdict[str, list[int]] = defaultdict(list)
         # stack indices of block or hiding elements (inline end tags stop at these)
         self.barriers: list[int] = []
+        self.stoppers: list[int] = []  # stack indices of button-scope boundaries
         self.dropped = 0  # open elements currently hiding content
         self.in_style = 0  # style content is dropped but not counted
 
@@ -168,6 +207,8 @@ class _Extractor(HTMLParser):
         self.positions[tag].append(idx)
         if barrier:
             self.barriers.append(idx)
+        if tag in _SCOPE_STOP:
+            self.stoppers.append(idx)
         if hides:
             self.dropped += 1
         if tag == "style":
@@ -178,6 +219,8 @@ class _Extractor(HTMLParser):
         self.positions[name].pop()
         if barrier:
             self.barriers.pop()
+        if name in _SCOPE_STOP:
+            self.stoppers.pop()
         if hides:
             self.dropped -= 1
         if name == "style":
@@ -187,8 +230,15 @@ class _Extractor(HTMLParser):
         # Minimal HTML implied end tags; everything else fails closed.
         if not self.stack:
             return
-        top = self.stack[-1][0]
-        if (top == "p" and tag in _CLOSES_P) or top in _SAME_KIND_CLOSES.get(tag, ()):
+        if tag in _CLOSES_P and self.positions["p"]:
+            # Close the nearest open <p> in button scope, even through inline
+            # elements opened above it.
+            p_idx = self.positions["p"][-1]
+            if not self.stoppers or self.stoppers[-1] < p_idx:
+                while len(self.stack) > p_idx:
+                    self._pop()
+                return
+        if self.stack[-1][0] in _SAME_KIND_CLOSES.get(tag, ()):
             self._pop()
 
     def handle_starttag(self, tag, attrs):

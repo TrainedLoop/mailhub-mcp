@@ -346,3 +346,54 @@ def test_round2_style_probes_hidden(style):
 def test_round2_visible_styles_kept(style):
     text, _ = html_to_safe_text(f'<span style="{style}">shown</span>')
     assert text == "shown"
+
+
+# ---- fix round 3 regressions ----
+
+
+@pytest.mark.parametrize(
+    "style",
+    ["display:\\4e one", "display:\\4E ONE", "visibility:\\48idden", "d\\49splay:none", "DISPLAY:\\4eone".replace("\\4eone", "\\4e one")],
+)
+def test_round3_uppercase_escapes_hidden(style):
+    text, removed = html_to_safe_text(f'<p>Hello</p><span style="{style}">SECRET</span>')
+    assert "SECRET" not in text and removed > 0
+
+
+@pytest.mark.parametrize(
+    "style",
+    [
+        "color:red\;display:none",
+        "display\\3a none",
+        "display:none\\!important;display:block",
+        "font-size:-1px",
+        "max-height:-1px;overflow:hidden",
+    ],
+)
+def test_round3_visible(style):
+    text, removed = html_to_safe_text(f'<span style="{style}">shown</span>')
+    assert text == "shown" and removed == 0
+
+
+def test_round3_negative_opacity_still_hidden():
+    text, _ = html_to_safe_text('<span style="opacity:-0.5">SECRET</span>x')
+    assert "SECRET" not in text
+
+
+def test_p_closed_through_inline_elements():
+    text, _ = html_to_safe_text("<p hidden><span>a<div>visible")
+    assert text == "visible"
+    text, _ = html_to_safe_text("<p hidden><b><i>a<ul><li>visible")
+    assert text == "visible"
+
+
+def test_p_not_closed_across_table_scope():
+    text, _ = html_to_safe_text("<p hidden>a<table><tr><td>b<div>X")
+    assert "X" not in text and "b" not in text
+
+
+def test_round3_timing():
+    _fast(lambda: html_to_safe_text("<p hidden>" + "<span>" * 50_000 + "<div>x" * 50_000))
+    _fast(lambda: html_to_safe_text("<p><b>a" * 50_000))
+    _fast(lambda: html_to_safe_text('<span style="' + "\;" * 100_000 + '">x</span>'))
+    _fast(lambda: html_to_safe_text('<span style="' + "a:b!" * 50_000 + '">x</span>'))
