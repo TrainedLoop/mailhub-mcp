@@ -59,6 +59,15 @@ def test_authorization_url():
     assert q["prompt"] == "select_account"
     assert q["claims"] == '{"id_token":{"auth_time":{"essential":true}}}'
     assert json.loads(q["claims"]) == {"id_token": {"auth_time": {"essential": True}}}
+    assert "max_age" not in q
+
+
+def test_authorization_url_with_max_age():
+    ident, _ = make()
+    url = ident.authorization_url("https://x/cb", "st", "no", "chal", max_age=300)
+    q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+    assert q["max_age"] == "300"
+    assert q["prompt"] == "select_account"
 
 
 def test_happy_path_and_post_args():

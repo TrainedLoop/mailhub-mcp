@@ -25,6 +25,7 @@ from mailhub_mcp.admin_web.session import (
     Signer,
     csrf_token,
     decode_session,
+    is_fresh,
 )
 from mailhub_mcp.core.errors import AuthExpired
 from tests.admin_web.conftest import (
@@ -269,6 +270,35 @@ def test_reauth_cookie_lifetime_counts_from_first_login(env):
     _, flow, query = start_login(env.client)
     resp = callback(env.client, flow, query["state"][0], code="other")
     assert _attrs(cookie_header(resp, SESSION_COOKIE))["max-age"] == str(SESSION_SECONDS - 3600)
+
+
+def test_first_login_does_not_ask_for_max_age(env):
+    _, _, query = start_login(env.client)
+    assert "max_age" not in query
+
+
+def test_reauth_login_asks_for_max_age(env):
+    login(env.client)
+    _, _, query = start_login(env.client)
+    assert query["max_age"] == [str(REAUTH_SECONDS)]
+
+
+def test_reauth_with_stale_auth_time_ends_fresh_and_warns(env, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    login(env.client, auth_time=env.clock())
+    env.clock.t += 7200
+    s = _session(env, login(env.client, auth_time=env.clock() - 3600))
+    assert is_fresh(s, env.clock())
+    assert s.auth_at == env.clock() and s.has_auth_time is True
+    warns = [r for r in caplog.records if r.getMessage() == "admin reauth: google returned a stale auth_time"]
+    assert len(warns) == 1 and warns[0].levelno == logging.WARNING
+
+
+def test_first_login_keeps_old_auth_time(env, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    s = _session(env, login(env.client, auth_time=env.clock() - 3600))
+    assert s.auth_at == env.clock() - 3600
+    assert not any("stale auth_time" in r.getMessage() for r in caplog.records)
 
 
 def test_login_as_another_owner_starts_a_new_session(env):

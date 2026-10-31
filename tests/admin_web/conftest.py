@@ -35,9 +35,12 @@ class FakeIdentity:
         self.calls: list[dict] = []
         self._used: set[str] = set()
 
-    def authorization_url(self, redirect_uri, state, nonce, code_challenge):
-        q = urlencode({"redirect_uri": redirect_uri, "state": state, "nonce": nonce,
-                       "code_challenge": code_challenge})
+    def authorization_url(self, redirect_uri, state, nonce, code_challenge, *, max_age=None):
+        params = {"redirect_uri": redirect_uri, "state": state, "nonce": nonce,
+                  "code_challenge": code_challenge}
+        if max_age is not None:
+            params["max_age"] = str(max_age)
+        q = urlencode(params)
         return f"{GOOGLE_AUTH}?{q}"
 
     def complete(self, code, redirect_uri, code_verifier, nonce):

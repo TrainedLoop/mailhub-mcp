@@ -30,6 +30,7 @@ from mailhub_mcp.admin_web.identity import LoginError
 from mailhub_mcp.admin_web.session import (
     FLOW_COOKIE,
     FLOW_SECONDS,
+    REAUTH_SECONDS,
     SESSION_COOKIE,
     SESSION_SECONDS,
     Flow,
@@ -251,7 +252,8 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             login_at=current.login_at if current else None,
         )
         url = ctx.identity.authorization_url(
-            _redirect_uri(ctx), flow.state, flow.nonce, challenge
+            _redirect_uri(ctx), flow.state, flow.nonce, challenge,
+            max_age=REAUTH_SECONDS if current else None,
         )
         resp = RedirectResponse(url, status_code=303)
         resp.set_cookie(
@@ -298,12 +300,6 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             log.warning("admin login refused email=%s", email)
             return _html(pages.message_page("Not allowed", pages.NOT_ALLOWED_TEXT), 403)
 
-        auth_time = owner.auth_time
-        has_auth_time = auth_time is not None
-        if isinstance(auth_time, (int, float)) and math.isfinite(auth_time):
-            auth_at = min(float(auth_time), now)
-        else:
-            auth_at = now
         reauth = (
             flow.sid is not None
             and flow.email is not None
@@ -311,6 +307,17 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             and flow.login_at is not None
             and 0 <= now - flow.login_at < SESSION_SECONDS
         )
+        auth_time = owner.auth_time
+        has_auth_time = auth_time is not None
+        if isinstance(auth_time, (int, float)) and math.isfinite(auth_time):
+            auth_at = min(float(auth_time), now)
+        else:
+            auth_at = now
+        if reauth and now - auth_at >= REAUTH_SECONDS:
+            # Google ignored max_age; the completed round trip is the fallback proof (as when the
+            # claim is absent), so the action does not send the owner around again forever.
+            log.warning("admin reauth: google returned a stale auth_time")
+            auth_at = now
         session = Session(
             email=email,
             sid=flow.sid if reauth else random_token(),

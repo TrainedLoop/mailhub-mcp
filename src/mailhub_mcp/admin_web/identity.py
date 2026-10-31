@@ -30,7 +30,8 @@ class OwnerLogin:
 
 class OwnerIdentity(Protocol):
     def authorization_url(
-        self, redirect_uri: str, state: str, nonce: str, code_challenge: str
+        self, redirect_uri: str, state: str, nonce: str, code_challenge: str,
+        *, max_age: int | None = None,
     ) -> str: ...
 
     def complete(
@@ -53,9 +54,10 @@ class GoogleIdentity:
         self._verify = verify
 
     def authorization_url(
-        self, redirect_uri: str, state: str, nonce: str, code_challenge: str
+        self, redirect_uri: str, state: str, nonce: str, code_challenge: str,
+        *, max_age: int | None = None,
     ) -> str:
-        params = {
+        params: dict[str, str] = {
             "response_type": "code",
             "client_id": self._client_id,
             "redirect_uri": redirect_uri,
@@ -67,6 +69,8 @@ class GoogleIdentity:
             "prompt": "select_account",
             "claims": _CLAIMS,
         }
+        if max_age is not None:
+            params["max_age"] = str(max_age)  # OIDC: ask for a sign-in at most this old
         return f"{AUTH_URL}?{urlencode(params)}"
 
     def complete(
