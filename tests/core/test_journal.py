@@ -137,3 +137,13 @@ def test_entries_order_is_reversed_file_order_not_wall_clock(tmp_path):
     assert [e["change_id"] for e in j.entries()] == ["third", "second", "first"]
     from datetime import datetime
     assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2))] == ["third", "first"]
+
+
+def test_undoable_count_ignores_undone_undo_entries_prefs_and_other_accounts(tmp_path):
+    j = Journal(tmp_path / "j.jsonl")
+    a = j.record("work", "modify_emails", ["L"], [], {"m": []})
+    j.record("work", "modify_emails", ["L"], [], {"n": []})
+    j.record("work", "undo_change", [], ["L"], {"m": []}, undo_of=a)
+    j.record("other", "modify_emails", ["L"], [], {"x": []})
+    j.record("work", "set_preferences", [], [], {}, kind="preferences", scope="work", before={}, after={})
+    assert j.undoable_count("work") == 1

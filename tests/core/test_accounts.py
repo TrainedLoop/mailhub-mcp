@@ -113,3 +113,39 @@ def test_reserved_alias_global_is_ignored_with_warning(tmp_path, caplog):
     touch(tmp_path / "gmail", "global.json", "a.json")
     reg = AccountRegistry(tmp_path, providers("gmail"))
     assert reg.aliases() == ["a"] and "global" in caplog.text
+
+
+def test_upsert_adds_and_replaces_with_fresh_account(tmp_path):
+    reg = AccountRegistry(tmp_path / "none", providers("gmail"))
+    first = reg.upsert("work", "gmail", tmp_path / "work.json")
+    assert reg.aliases() == ["work"] and reg.get("work") is first
+    second = reg.upsert("work", "gmail", tmp_path / "work.json")
+    assert second is not first and reg.get("work") is second
+
+
+def test_upsert_unknown_provider_raises(tmp_path):
+    reg = AccountRegistry(tmp_path / "none", providers("gmail"))
+    with pytest.raises(KeyError):
+        reg.upsert("work", "nope", tmp_path / "work.json")
+    assert reg.aliases() == []
+
+
+def test_remove_then_get_raises_account_not_found(tmp_path):
+    reg = AccountRegistry(tmp_path / "none", providers("gmail"))
+    reg.upsert("work", "gmail", tmp_path / "work.json")
+    reg.remove("work")
+    with pytest.raises(AccountNotFound):
+        reg.get("work")
+
+
+def test_remove_missing_raises_account_not_found(tmp_path):
+    reg = AccountRegistry(tmp_path / "none", providers("gmail"))
+    with pytest.raises(AccountNotFound):
+        reg.remove("work")
+
+
+def test_account_held_before_remove_keeps_working(tmp_path):
+    reg = AccountRegistry(tmp_path / "none", providers("gmail"))
+    acc = reg.upsert("work", "gmail", tmp_path / "work.json")
+    reg.remove("work")
+    assert acc.provider is not None  # an in-flight tool call finishes
