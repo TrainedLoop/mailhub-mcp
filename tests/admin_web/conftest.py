@@ -32,6 +32,7 @@ class FakeIdentity:
         self.email = "me@gmail.com"
         self.auth_time: float | None = None
         self.fail: str | None = None
+        self.fail_reason = "token-exchange"
         self.calls: list[dict] = []
         self._used: set[str] = set()
 
@@ -47,9 +48,9 @@ class FakeIdentity:
         self.calls.append({"code": code, "redirect_uri": redirect_uri,
                            "code_verifier": code_verifier, "nonce": nonce})
         if self.fail:
-            raise LoginError(self.fail)
+            raise LoginError(self.fail, self.fail_reason)
         if code in self._used:
-            raise LoginError("Google sign-in failed")
+            raise LoginError("Google sign-in failed", "token-exchange")
         self._used.add(code)
         return OwnerLogin(self.email, self.auth_time)
 

@@ -166,3 +166,31 @@ def test_verify_transport_error():
     ident, _ = make(verify_exc=TransportError("certs fetch failed"))
     with pytest.raises(LoginError, match="Google sign-in failed"):
         complete(ident)
+
+
+# --- reason codes: logged by the routes; never part of the text shown to the user ----------------
+
+
+class _NotJson(FakeResponse):
+    def json(self):
+        raise ValueError("not json")
+
+
+@pytest.mark.parametrize(("kwargs", "reason"), [
+    ({"post_exc": requests.ConnectionError("x")}, "token-exchange"),
+    ({"response": FakeResponse(400, {"error": "x"})}, "token-exchange"),
+    ({"response": _NotJson()}, "token-exchange"),
+    ({"response": FakeResponse(200, {})}, "token-exchange"),
+    ({"verify_exc": ValueError("bad")}, "verify"),
+    ({"verify_exc": TransportError("certs")}, "verify"),
+    ({"claims": {**GOOD, "nonce": "other"}}, "nonce"),
+    ({"claims": {**GOOD, "email_verified": False}}, "unverified-email"),
+    ({"claims": {k: v for k, v in GOOD.items() if k != "email"}}, "no-email"),
+    ({"claims": {**GOOD, "email": ""}}, "no-email"),
+])
+def test_login_error_carries_a_reason_code_and_the_generic_text(kwargs, reason):
+    ident, _ = make(**({"claims": GOOD} | kwargs))
+    with pytest.raises(LoginError) as e:
+        complete(ident)
+    assert e.value.reason == reason
+    assert str(e.value) == "Google sign-in failed"

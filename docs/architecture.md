@@ -67,7 +67,7 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 - **Writable credentials.** At startup `credentials_writable` creates and removes a probe file in each provider folder. If that fails, the server logs a warning and `/admin` shows status only ("credentials are read-only: linking is disabled"); the command-line flow keeps working.
 - **Status.** `GET /admin` lists each account with its alias, provider, address and state (`ok`, `credential expired`, `error`) from one cheap check per account (Gmail `users.getProfile`, 10 seconds at most), plus removed aliases.
 - **Browser hardening.** Server-rendered HTML, a small stylesheet at `/admin/style.css`, no JavaScript, every value HTML-escaped. Every response under `/admin`, including unknown paths (404), unlisted methods (405) and errors (no stack traces), carries `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. `same-origin` rather than `no-referrer`, because under `no-referrer` browsers send `Origin: null` on the page's own form POSTs and the same-origin check refuses it.
-- **Audit log.** Sign-ins (accepted and refused), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
+- **Audit log.** Sign-ins (accepted, refused, failed with a fixed reason code such as `unverified-email`, and cancelled), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
 
 ## The MailProvider interface
 

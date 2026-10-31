@@ -383,6 +383,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         if not login_states.claim(flow.state, now):
             return _expired()
         if request.query_params.get("error"):
+            log.info("admin login cancelled")  # Google's error value is not logged: it is caller input
             return _html(pages.message_page(
                 "Sign-in cancelled", "Google sign-in was cancelled.", "Sign in", "/admin/login"
             ), 400)
@@ -394,6 +395,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
                 ctx.identity.complete, code, _redirect_uri(ctx), flow.code_verifier, flow.nonce
             )
         except LoginError as exc:
+            log.warning("admin login failed reason=%s", exc.reason)  # a fixed code; never the code or token
             return _html(pages.message_page("Sign-in failed", str(exc), "Sign in", "/admin/login"), 400)
         email = owner.email.lower()
         if email not in ctx.allowed_emails:

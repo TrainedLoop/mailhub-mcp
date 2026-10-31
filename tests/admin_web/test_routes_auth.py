@@ -234,6 +234,27 @@ def test_callback_login_error_shows_safe_message(env):
     assert cookie_header(resp, SESSION_COOKIE) is None
 
 
+def test_failed_sign_in_is_logged_with_its_reason_only(env, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    env.identity.fail = "Google sign-in failed"
+    env.identity.fail_reason = "unverified-email"
+    _, flow, query = start_login(env.client)
+    callback(env.client, flow, query["state"][0], code="secret-code")
+    failed = [r for r in caplog.records if r.getMessage() == "admin login failed reason=unverified-email"]
+    assert failed and failed[0].levelno == logging.WARNING
+    assert not any("secret-code" in r.getMessage() for r in caplog.records)
+
+
+def test_cancelled_sign_in_is_logged(env, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    _, flow, query = start_login(env.client)
+    env.client.cookies.set(FLOW_COOKIE, flow)
+    env.client.get(f"/admin/auth/callback?state={query['state'][0]}&error=access_denied",
+                   follow_redirects=False)
+    assert any(r.getMessage() == "admin login cancelled" and r.levelno == logging.INFO
+               for r in caplog.records)
+
+
 def test_callback_refuses_owner_not_allowlisted(env, caplog):
     caplog.set_level(logging.INFO, logger="mailhub-mcp")
     env.identity.email = "stranger@gmail.com"

@@ -19,7 +19,12 @@ _CLAIMS = json.dumps({"id_token": {"auth_time": {"essential": True}}}, separator
 
 
 class LoginError(Exception):
-    """Sign-in failed. The message is safe to show to the user."""
+    """Sign-in failed. The message is safe to show to the user; `reason` is a fixed code for the log
+    ("token-exchange", "verify", "nonce", "unverified-email", "no-email"), never shown or user data."""
+
+    def __init__(self, message: str, reason: str = "unknown") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -90,29 +95,29 @@ class GoogleIdentity:
                 timeout=10,
             )
         except requests.RequestException:
-            raise LoginError(_FAILED) from None
+            raise LoginError(_FAILED, "token-exchange") from None
         if resp.status_code != 200:
-            raise LoginError(_FAILED)
+            raise LoginError(_FAILED, "token-exchange")
         try:
             raw = resp.json().get("id_token")
         except (ValueError, AttributeError):
-            raise LoginError(_FAILED) from None
+            raise LoginError(_FAILED, "token-exchange") from None
         if not raw or not isinstance(raw, str):
-            raise LoginError(_FAILED)
+            raise LoginError(_FAILED, "token-exchange")
         try:
             # 10 s of clock skew, as in the Gmail linker: a host clock slightly behind Google's
             # would otherwise reject a token issued "in the future".
             claims = self._verify(raw, google_requests.Request(), self._client_id, clock_skew_in_seconds=10)
         except (ValueError, GoogleAuthError):
-            raise LoginError(_FAILED) from None
+            raise LoginError(_FAILED, "verify") from None
         if claims.get("nonce") != nonce:
-            raise LoginError(_FAILED)
+            raise LoginError(_FAILED, "nonce")
         verified = claims.get("email_verified")
         if not (verified is True or verified == "true"):
-            raise LoginError(_FAILED)
+            raise LoginError(_FAILED, "unverified-email")
         email = claims.get("email")
         if not isinstance(email, str) or not email:
-            raise LoginError(_FAILED)
+            raise LoginError(_FAILED, "no-email")
         auth_time = claims.get("auth_time")
         if isinstance(auth_time, bool) or not isinstance(auth_time, (int, float)):
             auth_time = None

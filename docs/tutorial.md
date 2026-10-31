@@ -151,7 +151,7 @@ Optionally evaluate FastMCP host/origin protection for your reverse proxy. It is
 
 ## 10. Operate
 
-- **Audit**: `docker compose logs mailhub-mcp | grep tool=` shows every tool call with its arguments. Rejected logins appear as `rejected token for email=...`. `grep admin` shows admin sign-ins (accepted and refused), re-authentications, links, re-links and removals, with the owner email, alias, provider and mailbox address; tokens, codes and cookies are never logged.
+- **Audit**: `docker compose logs mailhub-mcp | grep tool=` shows every tool call with its arguments. Rejected logins appear as `rejected token for email=...`. `grep admin` shows admin sign-ins (accepted, refused, failed and cancelled), re-authentications, links, re-links and removals, with the owner email, alias, provider and mailbox address; tokens, codes and cookies are never logged.
 - **Add an account**: on `/admin`, **Link a mailbox** (step 3). No restart.
 - **Re-link an account** (state `credential expired` or `error`, or `invalid_grant` in the logs): click **Re-link** next to it and sign in to the same mailbox. A re-link only accepts the mailbox already recorded for that alias; a different one is refused and the existing credential is left as it was. A mailbox linked before the admin page has no address on record yet: its first re-link accepts any mailbox once and records it, and the status page says so next to it.
 - **Remove an account**: click **Remove**, check the mailbox and the number of changes you will not be able to undo while it is removed, and type the alias to confirm. The server revokes the token at Google, deletes the credential file and drops the account from the tools at once. If revocation fails (network, already revoked), the account is still removed and the page links to https://myaccount.google.com/permissions to revoke it by hand. The alias stays on record under **Removed** with its address, so it can only come back through **Re-link** with the same mailbox, which makes its past changes undoable again; a new link cannot reuse it.
@@ -254,7 +254,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `/admin` says "credentials are read-only: linking is disabled" | `secrets/accounts` is mounted with `:ro` or not owned by uid 10001 (step 6); fix it and restart, or link with the command line |
 | `/admin` answers 404 | The server runs with `ADMIN=off` |
 | Startup fails with `ADMIN must be 'on' or 'off'` | Invalid `ADMIN` value in `.env` |
-| `/admin` refuses your sign-in | The Google login is not in `ALLOWED_EMAILS`, or its email is not verified (look for `admin login refused` in the logs) |
+| `/admin` refuses your sign-in | The Google login is not in `ALLOWED_EMAILS` (look for `admin login refused email=...` in the logs), or Google's answer was not accepted, for example an unverified email (look for `admin login failed reason=...`: `unverified-email`, `no-email`, `nonce`, `verify` or `token-exchange`) |
 | `/admin` recommends the session age claim | Google does not send when you last entered your password; enable the claim (step 2.5) |
 | A re-link is refused as a different mailbox | You signed in to another Google account than the one recorded for that alias; sign in to the original mailbox, or link the new one under a new alias |
 | Connector fails to connect, or every call returns 401 | The Google account is not in `ALLOWED_EMAILS` (look for `rejected token` in the logs) |
