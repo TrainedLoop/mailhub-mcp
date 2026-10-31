@@ -13,7 +13,7 @@ from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
 from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, UndoRejectedError, undo_entry
 
-ORG_LABEL = "claude/organized"
+DEFAULT_ORG_LABEL = "mailhub/organized"  # label added to every change; server.py passes the configured ORG_LABEL
 MAX_IDS = 1000
 MAX_QUERY_APPLY = 500
 # Smallest limit of a label-filtered listing in modify_by_query (4 pages, 20 Gmail quota units):
@@ -78,7 +78,7 @@ def _dedupe(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
-def _plan(provider, add_labels, remove_labels, archive, mark_read, star):
+def _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_label):
     labels = provider.list_labels()
     protected = provider.protected_labels
     add = [_resolve(labels, protected, v) for v in add_labels]
@@ -95,9 +95,9 @@ def _plan(provider, add_labels, remove_labels, archive, mark_read, star):
         remove.append(provider.starred_label)
     add, remove = _dedupe(add), _dedupe(remove)
 
-    org = next((l for l in labels if l.name.lower() == ORG_LABEL.lower()), None)
+    org = next((l for l in labels if l.name.lower() == org_label.lower()), None)
     if org and org.id in remove:
-        raise OrganizeError(f"Label {ORG_LABEL!r} cannot be removed")
+        raise OrganizeError(f"Label {org_label!r} cannot be removed")
     both = set(add) & set(remove)
     if both:
         raise OrganizeError(f"Label(s) both added and removed: {sorted(both)}")
@@ -134,8 +134,9 @@ def modify(
     query: str | None = None,
     max_per_day: int | None = None,
     now: datetime | None = None,
+    org_label: str = DEFAULT_ORG_LABEL,
 ) -> dict:
-    """Apply the change to explicit `ids`.
+    """Apply the change to explicit `ids`, adding `org_label` to every changed message.
 
     Reads every id's labels first (about 20 Gmail quota units per message): the read proves each id
     exists in this account and gives the exact `prior` for undo.
@@ -147,23 +148,23 @@ def modify(
         raise OrganizeError(f"At most {MAX_IDS} message IDs per call")
     _validate_change(add_labels, remove_labels, archive, mark_read, star)
 
-    labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
+    labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_label)
 
     # The journal lock makes check -> read -> write -> record atomic, so parallel calls cannot overshoot
     # the cap and `prior` cannot go stale between the read and the write.
     with journal.lock:
         found = _read_labels(provider, ids)
-        return _write(provider, journal, account, ids, found, add, remove, tool, query, max_per_day, now)
+        return _write(provider, journal, account, ids, found, add, remove, tool, query, max_per_day, now, org_label=org_label)
 
 
 def _write(
     provider: Any, journal: Journal, account: str, ids: list[str], found: dict[str, list[str]],
     add: list[str], remove: list[str], tool: str, query: str | None, max_per_day: int | None,
-    now: datetime | None, skip_unchanged: bool = False,
+    now: datetime | None, skip_unchanged: bool = False, *, org_label: str = DEFAULT_ORG_LABEL,
 ) -> dict:
     """Cap check, then the first write. Call under journal.lock with `found` read under it.
 
-    `found[i]` must hold every label of `add + remove + [ORG_LABEL]` that message i carries. With
+    `found[i]` must hold every label of `add + remove + [org_label]` that message i carries. With
     `skip_unchanged`, ids already in the target state are dropped first; if none are left nothing is
     written and the result is `{"change_id": None, "modified": 0, "unchanged": True}`.
     """
@@ -179,7 +180,7 @@ def _write(
                 f"of {max_per_day} changes remain in the last 24 hours for this account; nothing was changed"
             )
     # Validation done; first write.
-    add = _dedupe(add + [provider.ensure_label(ORG_LABEL).id])
+    add = _dedupe(add + [provider.ensure_label(org_label).id])
     touched = set(add) | set(remove)
     prior = {i: [l for l in found[i] if l in touched] for i in ids}
     provider.modify_labels(ids, add, remove)
@@ -260,7 +261,7 @@ def _listed_label_state(
 def apply_query(
     provider: Any, journal: Journal, account: str, query: str, max_per_day: int | None = None,
     *, add_labels: list[str], remove_labels: list[str], archive: bool, mark_read: bool | None,
-    star: bool | None,
+    star: bool | None, org_label: str = DEFAULT_ORG_LABEL,
 ) -> dict:
     """Apply the change to up to MAX_QUERY_APPLY messages matching `query`.
 
@@ -272,20 +273,20 @@ def apply_query(
     """
     _validate_change(add_labels, remove_labels, archive, mark_read, star)
     with journal.lock:
-        labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star)
+        labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_label)
         marker = _change_marker(provider)
         ids = _dedupe(provider.list_ids(query, MAX_QUERY_APPLY + 1))
         if not ids:
             return {"change_id": None, "modified": 0, "remaining": False}
         more = len(ids) > MAX_QUERY_APPLY
         batch = ids[:MAX_QUERY_APPLY]
-        org = next((l for l in labels if l.name.lower() == ORG_LABEL.lower()), None)
+        org = next((l for l in labels if l.name.lower() == org_label.lower()), None)
         touched = _dedupe(add + remove + ([org.id] if org else []))
         state = _listed_label_state(provider, query, ids, batch, touched, marker)
         found = state if state is not None else _read_labels(provider, batch)
         result = _write(
             provider, journal, account, batch, found, add, remove, "modify_by_query", query,
-            max_per_day, None, skip_unchanged=True,
+            max_per_day, None, skip_unchanged=True, org_label=org_label,
         )
     if result.get("unchanged"):
         return {"change_id": None, "modified": 0, "remaining": more, "hint": QUERY_HINT_ALREADY_CHANGED}

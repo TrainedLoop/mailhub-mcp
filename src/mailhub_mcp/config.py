@@ -7,11 +7,19 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from mailhub_mcp.core.content import MAX_BODY_CHARS
+from mailhub_mcp.core.organize import DEFAULT_ORG_LABEL
 
 # Callbacks of claude.ai custom connectors; the default allowlist when ALLOWED_REDIRECT_URIS is unset.
 DEFAULT_REDIRECT_URIS: tuple[str, ...] = (
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+)
+
+MAX_ORG_LABEL_CHARS = 100
+# Labels that exist in every mailbox or that the server refuses to change; none may be the organized label.
+_RESERVED_LABELS = frozenset(
+    {"INBOX", "SENT", "DRAFT", "DRAFTS", "SPAM", "TRASH", "CHAT", "UNREAD", "STARRED", "IMPORTANT",
+     "CATEGORY_PERSONAL", "CATEGORY_SOCIAL", "CATEGORY_PROMOTIONS", "CATEGORY_UPDATES", "CATEGORY_FORUMS"}
 )
 
 
@@ -23,6 +31,7 @@ class Settings:
     allowed_emails: frozenset[str]
     jwt_signing_key: str
     allowed_redirect_uris: tuple[str, ...]
+    org_label: str
     accounts_dir: Path
     journal_path: Path
     port: int
@@ -44,6 +53,7 @@ class Settings:
             ),
             jwt_signing_key=os.environ["JWT_SIGNING_KEY"],
             allowed_redirect_uris=_redirect_uris_env("ALLOWED_REDIRECT_URIS"),
+            org_label=_org_label_env("ORG_LABEL"),
             accounts_dir=Path(os.environ.get("ACCOUNTS_DIR", "/secrets/accounts")),
             journal_path=Path(os.environ.get("JOURNAL_PATH", "/data/changes.jsonl")),
             port=int(os.environ.get("PORT", "8742")),
@@ -142,3 +152,19 @@ def _redirect_uris_env(name: str) -> tuple[str, ...]:
     for entry in entries:
         _check_redirect_uri(name, entry)
     return entries
+
+
+def _org_label_env(name: str) -> str:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return DEFAULT_ORG_LABEL
+    value = raw.strip()
+    if len(value) > MAX_ORG_LABEL_CHARS:
+        raise ValueError(f"{name} must be at most {MAX_ORG_LABEL_CHARS} characters, got {len(value)}")
+    if any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError(f"{name} must not contain control characters, got {value!r}")
+    if value.upper() in _RESERVED_LABELS:
+        raise ValueError(f"{name} must not be a system label name, got {value!r}")
+    if value.startswith("/") or value.endswith("/") or "//" in value:
+        raise ValueError(f"{name} must not start or end with '/' or contain '//', got {value!r}")
+    return value

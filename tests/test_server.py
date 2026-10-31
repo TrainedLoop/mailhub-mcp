@@ -384,7 +384,7 @@ def test_list_changes_order_limit_total_and_label_names(fakes):
     assert [c["change_id"] for c in out["changes"]] == [c3, c2, c1] and out["total"] == 3
     top = out["changes"][0]
     assert top["account"] == "alice-personal" and top["messages"] == 1 and top["undone"] is False
-    assert "claude/organized" in top["added"] and top["removed"] == ["INBOX"]
+    assert "mailhub/organized" in top["added"] and top["removed"] == ["INBOX"]
     out = call("list_changes", {"limit": 1})
     assert [c["change_id"] for c in out["changes"]] == [c3] and out["total"] == 3
     out = call("list_changes", {"limit": 0})
@@ -420,7 +420,7 @@ def test_undo_since_preview_then_confirm(fakes):
     fakes.a.calls.clear(); fakes.b.calls.clear()
     out = call("undo_since", {"since": "2000-01-01"})
     assert out["total"] == 2 and not has_write(fakes.a) and not has_write(fakes.b)
-    assert "claude/organized" in out["changes"][0]["added"]
+    assert "mailhub/organized" in out["changes"][0]["added"]
     out = call("undo_since", {"since": "2000-01-01T00:00:00+00:00", "accounts": ["alice-personal"], "confirm": True})
     assert len(out["undone"]) == 1 and out["failed"] == {} and out["remaining"] is False
     assert "INBOX" in fakes.a.messages["m1"]["labelIds"] and "INBOX" not in fakes.b.messages["w1"]["labelIds"]
@@ -1524,3 +1524,47 @@ def test_read_tool_descriptions_mention_max_body_chars():
     tools = asyncio.run(go())
     for name in ("read_email", "read_emails", "read_thread"):
         assert "max_body_chars" in tools[name].description
+
+
+def test_org_label_default_and_description(fakes):
+    assert server.settings.org_label == "mailhub/organized"
+    desc = asyncio.run(server.mcp.get_tool("modify_emails")).description
+    assert "'mailhub/organized'" in desc and "claude" not in desc.lower()
+
+
+def test_changes_use_the_configured_org_label(fakes, monkeypatch):
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, org_label="triage/done"))
+    out = call("modify_emails", {"account": "alice-personal", "message_ids": ["m1"], "archive": True})
+    names = {l["id"]: l["name"] for l in fakes.a.labels}
+    assert "triage/done" in names.values() and "mailhub/organized" not in names.values()
+    assert out["change_id"]
+
+
+@pytest.mark.parametrize(
+    "bad", ["INBOX", "trash", "Unread", "CATEGORY_SOCIAL", "x" * 101, "a\nb", "/lead", "trail/", "a//b"]
+)
+def test_org_label_invalid_values_raise(monkeypatch, bad):
+    from mailhub_mcp.config import Settings
+
+    monkeypatch.setenv("ORG_LABEL", bad)
+    with pytest.raises(ValueError, match="ORG_LABEL"):
+        Settings.from_env()
+
+
+def test_org_label_env_default_custom_and_blank(monkeypatch):
+    from mailhub_mcp.config import Settings
+
+    monkeypatch.delenv("ORG_LABEL", raising=False)
+    assert Settings.from_env().org_label == "mailhub/organized"
+    monkeypatch.setenv("ORG_LABEL", " claude/organized ")
+    assert Settings.from_env().org_label == "claude/organized"
+    monkeypatch.setenv("ORG_LABEL", "  ")
+    assert Settings.from_env().org_label == "mailhub/organized"
+
+
+def test_modify_by_query_uses_the_configured_org_label(fakes, monkeypatch):
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, org_label="triage/done"))
+    fakes.a.query_results["in:inbox"] = ["m1", "m2"]
+    out = call("modify_by_query", {"account": "alice-personal", "query": "in:inbox", "archive": True, "confirm": True})
+    assert out["modified"] == 2
+    assert "triage/done" in {l["name"] for l in fakes.a.labels}

@@ -17,11 +17,11 @@ def test_summarize_entry_names_fallback_counts_and_flags():
         "tool": "modify_by_query", "added": ["L1", "STARRED"], "removed": ["INBOX", "L9"],
         "prior": {"m1": [], "m2": ["INBOX"]}, "query": "in:inbox", "undo_of": None,
     }
-    out = summarize_entry(entry, False, {"L1": "claude/organized", "INBOX": "INBOX"})
+    out = summarize_entry(entry, False, {"L1": "mailhub/organized", "INBOX": "INBOX"})
     assert out == {
         "change_id": "c1", "timestamp": "2026-01-01T00:00:00+00:00", "account": "a",
         "tool": "modify_by_query", "query": "in:inbox", "messages": 2,
-        "added": ["claude/organized", "STARRED"], "removed": ["INBOX", "L9"],
+        "added": ["mailhub/organized", "STARRED"], "removed": ["INBOX", "L9"],
         "undone": False, "undo_of": None,
     }
     undo_entry = {**entry, "undo_of": "c0", "query": None}
@@ -144,7 +144,7 @@ def test_preview_resolves_label_names_when_given_and_survives_lookup_errors(fake
     modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     out = undo_since(lambda a: provider, journal, EPOCH, None, False,
                      label_names_for=lambda a: {l.id: l.name for l in provider.list_labels()})
-    assert "claude/organized" in out["changes"][0]["added"] and "INBOX" in out["changes"][0]["removed"]
+    assert "mailhub/organized" in out["changes"][0]["added"] and "INBOX" in out["changes"][0]["removed"]
 
     def boom(a):
         raise RuntimeError("x")

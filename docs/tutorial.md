@@ -120,6 +120,7 @@ Optionally evaluate FastMCP host/origin protection for your reverse proxy. It is
 - **Remove an account**: delete `secrets/accounts/<provider>/<alias>.json`, run `docker compose restart`, and revoke the app at https://myaccount.google.com/permissions. Without the account's credential, its past changes can no longer be undone.
 - **Journal**: `data/changes.jsonl`, one JSON object per change (label changes and preference changes).
 - **Preferences**: `data/preferences.json`. Proposals that lower attention are approved with `mailhub-admin`, see step 11.
+- **Organized label**: every changed message gets `ORG_LABEL` (default `mailhub/organized`). If an earlier install used `claude/organized`, set `ORG_LABEL=claude/organized` in `.env` to keep a single label; otherwise new changes get the new label and the old one stays on messages already changed. Changing it never breaks undo, because the journal stores label IDs.
 - **Revoke everything**: `docker compose down`, remove the public exposure, and revoke the app in your Google accounts.
 
 ### Backup and restore
@@ -197,7 +198,7 @@ If something went wrong and you need to revert in bulk:
 - Ask Claude to call `list_changes` to see recent changes (newest first, with their `change_id`s, also from earlier sessions), then `undo_change` with the `change_id` of the one to revert.
 - To revert everything since a time, call `undo_since` with `since` (ISO 8601, e.g. `2026-11-01T08:00`; no timezone means UTC). It previews by default: review the list, then call it again with `confirm=true`. It undoes newest first, at most 50 undone per call; repeat while `remaining` is true. Changes that could not be undone, and older ones held back because they touch the same emails, are listed in `failed`: fix the cause (for example a temporary Gmail error) and call again. Do not repeat the call when nothing was undone.
 - Preference changes are in the same history: `list_changes` shows them with `kind: "preferences"`, and `undo_change` or `undo_since` restores the earlier values. Undo is refused if the preference changed again since, so a later change is never overwritten.
-- In Gmail, search `label:claude/organized`: every message changed through the server has it. (`undo_change` removes the label together with the rest of that change, so undone messages no longer show up there.)
+- In Gmail, search `label:mailhub/organized` (or your `ORG_LABEL`): every message changed through the server has it. (`undo_change` removes the label together with the rest of that change, so undone messages no longer show up there.)
 - Fallback when `list_changes` is unavailable (for example the connector is not responding): read the IDs straight from `data/changes.jsonl` on the host, newest first, and call `undo_change` for each once the server is back. List them in that order with:
 
 ```bash
@@ -220,6 +221,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `create_draft` says the thread is flagged as a possible prompt injection | A message in the thread matched the injection heuristics; reply manually in Gmail |
 | A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |
 | Startup fails with `ALLOWED_REDIRECT_URIS entry ... is not valid`, or says it is empty | An entry is not an https URL with a path (or localhost), or contains a wildcard; fix or unset it |
+| Startup fails with `ORG_LABEL must ...` | The value is too long (over 100 characters), contains control characters, or is a system label name such as `INBOX` |
 | Startup fails with `TOOLS must be 'all' or 'read-only'` | Invalid `TOOLS` value in `.env` |
 | `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
 | Log warning `ALLOWED_EMAILS has N addresses` | More than one login can use this instance, and each sees every linked mailbox. Keep only the owner's login and give other people their own instance (step 14) |

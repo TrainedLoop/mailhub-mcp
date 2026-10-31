@@ -37,7 +37,7 @@ def journal(tmp_path):
 
 
 def org_label_id(fake):
-    return next(l["id"] for l in fake.labels if l["name"] == "claude/organized")
+    return next(l["id"] for l in fake.labels if l["name"] == "mailhub/organized")
 
 
 def no_writes(fake):
@@ -101,7 +101,7 @@ def test_same_label_in_add_and_remove_refused(fake, provider, journal):
 def test_removing_org_label_conflicts(fake, provider, journal):
     modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     with pytest.raises(OrganizeError):
-        modify(provider, journal, "a", ["m2"], [], ["claude/organized"], False, None, None)
+        modify(provider, journal, "a", ["m2"], [], ["mailhub/organized"], False, None, None)
 
 
 def test_prior_records_only_touched_labels(fake, provider, journal):
@@ -470,7 +470,7 @@ def _lists(fake):
 def test_apply_query_reads_label_state_by_listing_not_per_message(fake, provider, journal):
     fake.add_message("m3", labels=[])
     fake.query_results["q"] = ["m1", "m2", "m3"]
-    org = provider.ensure_label("claude/organized")
+    org = provider.ensure_label("mailhub/organized")
     fake.calls.clear()
     r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
                     archive=True, mark_read=None, star=None)
@@ -509,7 +509,7 @@ def test_apply_query_lists_under_the_journal_lock(fake, provider, journal):
 
 
 def test_apply_query_prior_includes_existing_org_label_and_undo_is_exact(fake, provider, journal):
-    org = provider.ensure_label("claude/organized")
+    org = provider.ensure_label("mailhub/organized")
     fake.add_message("m3", labels=["INBOX", org.id, "Label_9"])
     fake.add_message("m4", labels=[org.id])
     fake.query_results["q"] = ["m1", "m2", "m3", "m4"]
@@ -577,7 +577,7 @@ def test_apply_query_misordered_truncated_listing_keeps_exact_prior(fake, provid
 
     monkeypatch.setattr(organize, "MAX_QUERY_APPLY", 3)
     monkeypatch.setattr(organize, "LABEL_LISTING_LIMIT", 4)
-    org = provider.ensure_label("claude/organized")
+    org = provider.ensure_label("mailhub/organized")
     order = ["o1", "o2", "o3", "o4", "f5", "f6"]
     for i in order:
         fake.add_message(i, labels=["INBOX", org.id])
@@ -846,3 +846,29 @@ def test_apply_query_rate_limited_change_detection_fails_fast_without_reads(fake
     finally:
         type(fake)._request = orig
     assert _gets(fake) == [] and no_writes(fake) and journal.entries() == []
+
+
+def test_custom_org_label_is_added_protected_and_listed(fake, provider, journal):
+    r = modify(provider, journal, "a", ["m1"], [], [], True, None, None, org_label="triage/done")
+    assert "triage/done" in [l["name"] for l in fake.labels]
+    assert "mailhub/organized" not in [l["name"] for l in fake.labels]
+    with pytest.raises(OrganizeError, match="triage/done"):
+        modify(provider, journal, "a", ["m2"], [], ["triage/done"], False, None, None, org_label="triage/done")
+    fake.query_results["q"] = ["m2"]
+    r2 = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[], archive=True,
+                     mark_read=None, star=None, org_label="triage/done")
+    custom = next(l["id"] for l in fake.labels if l["name"] == "triage/done")
+    assert custom in journal.get(r["change_id"])["added"] and custom in journal.get(r2["change_id"])["added"]
+
+
+def test_undo_of_older_entries_survives_changing_the_org_label(fake, provider, journal):
+    old = modify(provider, journal, "a", ["m1"], [], [], True, None, None, org_label="claude/organized")
+    new = modify(provider, journal, "a", ["m2"], [], [], True, None, None, org_label="mailhub/organized")
+    old_id = next(l["id"] for l in fake.labels if l["name"] == "claude/organized")
+    new_id = next(l["id"] for l in fake.labels if l["name"] == "mailhub/organized")
+    assert old_id in fake.messages["m1"]["labelIds"]
+    undo(provider, journal, "a", old["change_id"])
+    undo(provider, journal, "a", new["change_id"])
+    for m in ("m1", "m2"):
+        labels = fake.messages[m]["labelIds"]
+        assert old_id not in labels and new_id not in labels and "INBOX" in labels

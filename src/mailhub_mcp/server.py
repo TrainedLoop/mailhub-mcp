@@ -454,7 +454,7 @@ async def create_label(account: str, name: str) -> dict:
     description=(
         "Change labels on specific emails of one account: add/remove labels (by name or ID), archive, mark read/unread, star/unstar. "
         "Never deletes, trashes or sends; TRASH, SPAM, DRAFT, SENT and CHAT cannot be changed. Max 1000 IDs. "
-        "Every change gets the 'claude/organized' label and returns a change_id for undo_change. "
+        f"Every change gets the {settings.org_label!r} label and returns a change_id for undo_change. "
         "Costs about 20 Gmail quota units per message, because each message is read first; prefer modify_by_query for large sets."
     ),
 )
@@ -471,7 +471,7 @@ async def modify_emails(
         account,
         lambda p: organize.modify(
             p, journal, account, message_ids, add_labels or [], remove_labels or [], archive, mark_read, star,
-            max_per_day=settings.max_changes_per_day,
+            max_per_day=settings.max_changes_per_day, org_label=settings.org_label,
         ),
     )
 
@@ -508,7 +508,7 @@ async def modify_by_query(
             p, journal, account, query,
             add_labels=add_labels or [], remove_labels=remove_labels or [],
             archive=archive, mark_read=mark_read, star=star,
-            max_per_day=settings.max_changes_per_day,
+            max_per_day=settings.max_changes_per_day, org_label=settings.org_label,
         ),
     )
 
