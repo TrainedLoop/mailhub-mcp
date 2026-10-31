@@ -440,15 +440,19 @@ class Fence:
         return response if block is None else {**response, "untrusted": block}
 
 
+# Names of common AI assistants, so an injection written for any of them is flagged.
+_ASSISTANT_NAMES = r"claude|chatgpt|gpt|gemini|copilot|grok|llama|mistral|deepseek"
 _OVERRIDE = re.compile(
     r"ignore\s+(?:(?:all|any|the)\s+)?(?:(?:previous|prior|above|earlier)\s+)?instructions"
     r"|disregard"
-    r"|you\s+are\s+(?:now\s+)?(?:an?\s+)?(?:ai|assistant|claude)\b"
+    rf"|you\s+are\s+(?:now\s+)?(?:an?\s+)?(?:ai|assistant|{_ASSISTANT_NAMES})\b"
     r"|ignor[ae]\s+(?:todas\s+)?(?:as\s+)?instru[cç][õo]es"
     r"|voc[eê]\s+[eé]\s+(?:um|o)\s+assistente",
     re.IGNORECASE,
 )
-_ADDRESSES = re.compile(r"\bassistant\s*:|\bai\s+assistant\b|\bclaude\s*,", re.IGNORECASE)
+_ADDRESSES = re.compile(
+    rf"\bassistant\s*:|\bai\s+assistant\b|\b(?:{_ASSISTANT_NAMES})\s*,", re.IGNORECASE
+)
 _ACTION = re.compile(
     r"\bforward\s+(?:this|it|the|all|every|these|emails?|messages?)\b"
     r"|\bforward\b[^\n]{0,60}\bto\s+\S+@"

@@ -6,11 +6,6 @@ Planned and proposed work. Items move to the changelog (git history) when they s
 
 mailhub is meant to work with any MCP client, not only Claude. The server provides tools; scheduling, prompts and judgment belong to whichever model or client uses them.
 
-- **Client-agnostic connector.** Remove what ties the server to one client:
-  - **Configurable OAuth redirect URIs.** `CLAUDE_REDIRECT_URIS` only accepts claude.ai/claude.com callbacks, so other MCP clients cannot register. Replace it with `ALLOWED_REDIRECT_URIS` (default: the Claude callbacks), documented per client.
-  - **Neutral organization label.** Default `mailhub/organized` instead of `claude/organized`, configurable (`ORG_LABEL`) so existing installs keep their current label without migrating messages.
-  - **Neutral wording.** Tool descriptions, prompts and docs say "the model" or "the MCP client" instead of "Claude"; the tutorial gets a section on connecting other MCP clients.
-
 - **Owner admin page (`/admin`).** A small web page on the server, behind the same Google login and allowlist as the connector (signed `HttpOnly`/`Secure`/`SameSite=Strict` session cookie, CSRF protection):
   - list linked mailboxes and their status (ok, expired credentials);
   - link a new mailbox or re-link an expired one through Google's web OAuth flow (verified `state`, redirect `/admin/oauth/callback` on the existing Web client); the token is written in place with the right owner and mode, and the account is loaded without a restart;

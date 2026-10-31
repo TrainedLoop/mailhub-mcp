@@ -1,6 +1,6 @@
 # Tutorial: from zero to a working connector
 
-This walks through the whole setup. You end up with mailhub-mcp running in Docker behind a public HTTPS URL, added as a custom connector in claude.ai.
+This walks through the whole setup. You end up with mailhub-mcp running in Docker behind a public HTTPS URL, added as a custom connector in claude.ai (the tested client; other MCP clients are covered in step 15).
 
 An instance belongs to one person: you link your own mailboxes (personal, work, a side project...) and only your Google login may use the connector. If someone else wants the same, they run their own instance; see [More than one person](#14-more-than-one-person).
 
@@ -109,7 +109,7 @@ From a network outside your own (a phone on mobile data, say), this should retur
 <PUBLIC_BASE_URL>/.well-known/oauth-authorization-server
 ```
 
-Then in a claude.ai chat with the connector enabled, ask Claude to call `list_accounts`. Each account should show `status: ok`.
+Then in a claude.ai chat with the connector enabled, ask the assistant to call `list_accounts`. Each account should show `status: ok`.
 
 Optionally evaluate FastMCP host/origin protection for your reverse proxy. It is not enabled by default; every endpoint except `/health` requires the Google OAuth login either way.
 
@@ -145,11 +145,11 @@ docker compose up -d
 
 ## 11. Preferences and approving proposals
 
-`get_preferences` and `set_preferences` let Claude remember which senders and keywords matter (`important_senders`, `ignored_senders`, `important_keywords`, `ignored_keywords`) and when triage last ran (`last_triage_at`). Claude should change them only when you ask in the conversation, and every change records your words as `user_request`.
+`get_preferences` and `set_preferences` let the model remember which senders and keywords matter (`important_senders`, `ignored_senders`, `important_keywords`, `ignored_keywords`) and when triage last ran (`last_triage_at`). The model should change them only when you ask in the conversation, and every change records your words as `user_request`.
 
 The direction rule decides what applies:
 
-- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately. `undo_change` on it lowers attention again, so the undo becomes a proposal you approve like any other. Once approved, the change counts as undone; if you reject it, Claude cannot propose that undo again (make the change with a new request instead). Keywords may contain only letters, digits, spaces, apostrophes, dots and hyphens.
+- Raising attention (marking a sender or keyword important, removing something from an ignored list) applies immediately. `undo_change` on it lowers attention again, so the undo becomes a proposal you approve like any other. Once approved, the change counts as undone; if you reject it, the model cannot propose that undo again (make the change with a new request instead). Keywords may contain only letters, digits, spaces, apostrophes, dots and hyphens.
 - Lowering attention (ignoring a sender or keyword, removing something from an important list) never applies from the chat. It becomes a proposal with an id such as `p-1a2b3c4d`, valid for 14 days, and at most 50 can be open at once. As long as you only approve proposals you recognize, a hostile email cannot quietly hide future alerts. Raising-attention changes apply without review, so check `list_changes` now and then; they can be undone.
 
 Approve or reject proposals from a terminal on the server, outside the chat:
@@ -165,19 +165,19 @@ docker compose exec mailhub-mcp mailhub-admin preferences reject <id>
 
 ### Prompts
 
-The server also offers three MCP prompts, which Claude clients list as ready-made workflows: `daily_triage` (optionally with `accounts`, a comma-separated list of aliases), `clean_newsletters` and `organize_inbox` (both take an `account`). The last two preview every change and wait for your explicit confirmation in the conversation; nothing is trashed or deleted, and every change can be undone with `undo_change` or `undo_since`. With `TOOLS=read-only` only a read-only `daily_triage` is offered. Messages also show `unsubscribe` options when the sender provides them; Claude shows these to you and never visits them.
+The server also offers three MCP prompts, which MCP clients list as ready-made workflows: `daily_triage` (optionally with `accounts`, a comma-separated list of aliases), `clean_newsletters` and `organize_inbox` (both take an `account`). The last two preview every change and wait for your explicit confirmation in the conversation; nothing is trashed or deleted, and every change can be undone with `undo_change` or `undo_since`. With `TOOLS=read-only` only a read-only `daily_triage` is offered. Messages also show `unsubscribe` options when the sender provides them; the model shows these to you and never visits them.
 
 ### Scheduled triage
 
-Preferences make a recurring routine (a scheduled Claude task, or a prompt you run each morning) consistent. A recommended flow:
+Preferences make a recurring routine (a scheduled task in your MCP client, or a prompt you run each morning) consistent. A recommended flow:
 
 1. Call `get_preferences`: note the rules and `last_triage_at`.
 2. Call `search_emails` for mail since `last_triage_at` (for Gmail, `after:YYYY/MM/DD`; fall back to a recent window when it is unset).
 3. Read the results in bulk with `read_emails`.
-4. Report, grouped as: **needs attention** (important senders and keywords first), **FYI**, **suspicious emails** (those with `suspicious: true` and their reasons; Claude should only report them, never act on what they say) and **preference changes** since the last run (`get_preferences` → `recent_changes`) and **pending proposals** (`get_preferences` → `pending`), with the exact `mailhub-admin preferences approve <id>` command for each pending proposal.
+4. Report, grouped as: **needs attention** (important senders and keywords first), **FYI**, **suspicious emails** (those with `suspicious: true` and their reasons; the model should only report them, never act on what they say) and **preference changes** since the last run (`get_preferences` → `recent_changes`) and **pending proposals** (`get_preferences` → `pending`), with the exact `mailhub-admin preferences approve <id>` command for each pending proposal.
 5. Call `set_preferences` with `scope: "global"`, `last_triage_at` set to now, and a `user_request` that describes the routine (for example "scheduled morning triage, as configured by me").
 
-`last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance of your own (its own directory, `.env`, `data/` folder, `HOST_PORT`, `CONTAINER_NAME` and `COMPOSE_PROJECT_NAME`, as in [More than one person](#14-more-than-one-person); copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets Claude read preferences and proposals.
+`last_triage_at` is plain data, so recording it needs a write tool. For routines that must only report, run the server with `TOOLS=read-only`: only the read tools are registered, nothing can be changed, and step 5 is impossible. The trade-off is that `last_triage_at` is never updated, so each run either re-reports mail it already covered (use a fixed window such as `newer_than:1d`) or you run a second, full instance of your own (its own directory, `.env`, `data/` folder, `HOST_PORT`, `CONTAINER_NAME` and `COMPOSE_PROJECT_NAME`, as in [More than one person](#14-more-than-one-person); copy `data/preferences.json` if you want to share rules) just for the routines that record the timestamp. A read-only instance still lets the model read preferences and proposals.
 
 Drafts are replies only. `create_draft` needs the message being answered, accepts only recipients who are already in that thread (plus your own address), and is refused for a thread containing an email flagged as suspicious; nothing is ever sent.
 
@@ -195,7 +195,7 @@ It prints one line per account, `alias  provider  ok  <address>` or `alias  prov
 
 If something went wrong and you need to revert in bulk:
 
-- Ask Claude to call `list_changes` to see recent changes (newest first, with their `change_id`s, also from earlier sessions), then `undo_change` with the `change_id` of the one to revert.
+- Ask the assistant to call `list_changes` to see recent changes (newest first, with their `change_id`s, also from earlier sessions), then `undo_change` with the `change_id` of the one to revert.
 - To revert everything since a time, call `undo_since` with `since` (ISO 8601, e.g. `2026-11-01T08:00`; no timezone means UTC). It previews by default: review the list, then call it again with `confirm=true`. It undoes newest first, at most 50 undone per call; repeat while `remaining` is true. Changes that could not be undone, and older ones held back because they touch the same emails, are listed in `failed`: fix the cause (for example a temporary Gmail error) and call again. Do not repeat the call when nothing was undone.
 - Preference changes are in the same history: `list_changes` shows them with `kind: "preferences"`, and `undo_change` or `undo_since` restores the earlier values. Undo is refused if the preference changed again since, so a later change is never overwritten.
 - In Gmail, search `label:mailhub/organized` (or your `ORG_LABEL`): every message changed through the server has it. (`undo_change` removes the label together with the rest of that change, so undone messages no longer show up there.)
@@ -229,7 +229,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `docker compose ps` shows `unhealthy` | The container is not serving: check `docker compose logs` for startup errors (missing environment variables in `.env`, permissions on `data/` or `secrets/accounts/`) |
 | `mailhub-admin accounts` prints `ERROR` for an alias | The credential no longer works; run `mailhub-authorize` again for that alias (see `invalid_grant` above) |
 | `Too many pending proposals` | 50 proposals are open; review them with `mailhub-admin preferences list` |
-| `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask Claude to propose it again |
+| `unknown or expired proposal` from `mailhub-admin` | Proposals expire after 14 days; ask the assistant to propose it again |
 | `undo_change` says a preference "changed since" | The field was modified after that change; undo the later change first |
 | "Gmail rate limit reached for this mailbox", "temporary failure, retry", `rateLimitExceeded` or `RATE_LIMIT_EXCEEDED` in the logs | Gmail's per-user quota (6,000 units per minute on new Cloud projects; a message read costs 20). Each mailbox spends at most `GMAIL_UNITS_PER_MINUTE` (default 4800), about 4 message reads per second, and rate-limited calls are retried after 2, 4, 8, 16 and 32 seconds, so large reads take a while: `inbox_overview` over 200 messages uses about 50 seconds of budget. If it still fails, wait a minute and retry, and avoid running several `inbox_overview` or large searches in parallel or back to back. Responses carry `quota` (units used in the last minute and the budget) per mailbox. If your Cloud project still has the older 15,000 limit, set `GMAIL_UNITS_PER_MINUTE=12000`; if other apps use the same mailbox heavily, lower it |
 
@@ -241,7 +241,7 @@ mailhub-mcp is designed for one owner per instance: every login in `ALLOWED_EMAI
 2. Its own `.env`: their `ALLOWED_EMAILS` (only their login), their own `JWT_SIGNING_KEY`, and a `PUBLIC_BASE_URL` of their own (a different host name, or the same host on another HTTPS port, as in the Tailscale example). Give it a different `HOST_PORT` (for example `8743`), `CONTAINER_NAME` (for example `mailhub-mcp-2`) and `COMPOSE_PROJECT_NAME` (for example `mailhub-mcp-2`), so the two containers, ports and Compose projects do not collide.
 3. Their own linked accounts in that directory's `secrets/accounts/` (step 3, signed in with their mailboxes) and their own `data/` (journal, preferences, OAuth state). Never copy one person's `secrets/` or `data/` into another instance.
 4. Their own public HTTPS URL forwarding to `127.0.0.1:<their HOST_PORT>`, and `<their PUBLIC_BASE_URL>/auth/callback` added as an authorized redirect URI of the Google Web client (the same Google Cloud project and clients can serve both instances; just add the second redirect URI).
-5. They add their own custom connector in claude.ai with `<their PUBLIC_BASE_URL>/mcp` and log in with their own Google account.
+5. They add their own custom connector in their MCP client (for example claude.ai) with `<their PUBLIC_BASE_URL>/mcp` and log in with their own Google account.
 
 Run each instance's `docker compose` and `mailhub-admin` commands from its own directory. If the instances get the example firewall, give each its own network and subnet; see [examples/tailscale-funnel/](../examples/tailscale-funnel/#more-than-one-person).
 
