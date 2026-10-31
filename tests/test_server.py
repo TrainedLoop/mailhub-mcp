@@ -1269,7 +1269,7 @@ ADMIN_SECURITY_HEADERS = {
     "content-security-policy": "default-src 'none'; style-src 'self'; "
     "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
     "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": "same-origin",
     "cache-control": "no-store",
 }
 

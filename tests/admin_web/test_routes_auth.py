@@ -51,7 +51,7 @@ SECURITY_HEADERS = {
     "content-security-policy": "default-src 'none'; style-src 'self'; "
     "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
     "x-frame-options": "DENY",
-    "referrer-policy": "no-referrer",
+    "referrer-policy": "same-origin",
     "cache-control": "no-store",
 }
 EXPIRED = "This sign-in link expired, start again"
@@ -475,6 +475,24 @@ def test_logout_from_other_origin_is_forbidden(env):
         resp = env.client.post("/admin/logout", data={"csrf": _csrf(env, token)},
                                headers={"Origin": origin}, follow_redirects=False)
         assert resp.status_code == 403
+
+
+def test_logout_with_origin_null_and_no_referer_is_forbidden(env):
+    """What a browser sends for a form POST from a page served with `Referrer-Policy: no-referrer`:
+    `Origin: null` and no Referer. It must stay refused (an opaque origin proves nothing), which is
+    why the admin pages use `same-origin`: then the browser sends the real Origin on their forms."""
+    token = login(env.client)
+    resp = env.client.post("/admin/logout", data={"csrf": _csrf(env, token)},
+                           headers={"Origin": "null"}, follow_redirects=False)
+    assert resp.status_code == 403
+    assert cookie_header(resp, SESSION_COOKIE) is None
+
+
+def test_admin_pages_let_the_browser_send_their_origin_on_form_posts(env):
+    """`no-referrer` makes browsers send `Origin: null` on form POSTs, which same_origin refuses,
+    so every admin form would answer 403. `same-origin` keeps the referrer off cross-site requests."""
+    resp = env.client.get("/admin")
+    assert resp.headers["referrer-policy"] == "same-origin"
 
 
 def test_logout_get_is_not_allowed(env):

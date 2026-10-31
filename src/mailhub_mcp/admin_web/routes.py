@@ -61,7 +61,7 @@ SECURITY_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'self'; "
     "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
     "X-Frame-Options": "DENY",
-    "Referrer-Policy": "no-referrer",
+    "Referrer-Policy": "same-origin",  # not no-referrer: browsers then send "Origin: null" on form POSTs
     "Cache-Control": "no-store",
 }
 

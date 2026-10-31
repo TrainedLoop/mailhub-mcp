@@ -103,7 +103,9 @@ The compose file mounts `secrets/accounts` read-write. At startup the server che
 Server-rendered HTML with a small embedded stylesheet, no JavaScript, usable on a phone. Every value (alias, address, error text) is HTML-escaped. All `/admin` responses carry:
 
 - `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`
-- `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`
+- `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cache-Control: no-store`
+
+`same-origin`, not `no-referrer`: under `no-referrer` browsers send `Origin: null` and no Referer on the page's own form POSTs, and the same-origin check refuses an opaque origin, so every action would fail. `same-origin` still sends no referrer to other sites.
 
 ### Errors
 
