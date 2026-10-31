@@ -17,6 +17,17 @@ mailhub is meant to work with any MCP client, not only Claude. The server provid
   - Rules that need judgment ("emails that need my reply") cannot be expressed as a search query; they stay with a model-driven run (a client routine calling the existing tools).
   - Comes after proposal approval on the admin page, which will also approve rules.
 
+## Follow-ups
+
+Known gaps from the review of the admin page (v0.2.0). None of them can attach the wrong mailbox or lose data; they are worth closing before the next feature.
+
+- **Refuse tools on a "different mailbox" alias.** When a credential placed by hand or by the CLI belongs to another mailbox than the one on record, `/admin` flags it, but the MCP tools still serve it. Tools should refuse that alias until it is re-linked.
+- **Context-aware credential hint.** The "invalid or revoked credentials" message suggests re-linking on `/admin` even when `ADMIN=off` or the credentials folder is read-only; it should point to the command line in those cases.
+- **Stricter one-time re-link.** If the old credential's address probe fails for a reason other than expired credentials (a timeout, a busy server), the re-link should not fall back to the one-time unchecked path.
+- **Record every address at startup.** The account book learns legacy accounts' addresses only when the status page loads; recording them at startup would let the "already linked under another alias" check see every account.
+- **Status checks under load.** Admin network calls share a 4-slot limiter, and a check's 10-second timeout includes waiting for a slot; many slow mailboxes can show a spurious `error`.
+- **Validate scheduled routines.** Confirm a scheduled routine in claude.ai can use the connector end to end (and document any setup it needs) before the docs or the site mention it.
+
 ## Ideas
 
 - **Safe attachment download.** Fixed download root with no model-chosen destination, inert filenames, refusal of the file types Gmail itself blocks and of attachments on spam-labeled messages. Would let triage read invoices and payment slips.
