@@ -4,6 +4,7 @@ Sanitizing (hidden text, invisible characters), delimiting (per-response nonce
 markers) and heuristic suspicion flags. The flags are an aid, not a guarantee.
 """
 
+import json
 import re
 import secrets
 from collections import defaultdict
@@ -374,7 +375,7 @@ def parse_unsubscribe(list_unsubscribe: str, list_unsubscribe_post: str = "") ->
 
     Only https:// URLs and mailto: URIs are accepted (the first of each); entries with whitespace, control
     characters or more than 500 characters are dropped. one_click needs the exact RFC 8058 post value and an
-    https URL. The result is still untrusted text: the server wraps it in untrusted markers.
+    https URL. The result is still untrusted text: the server moves it into the response's untrusted fence.
     """
     if not list_unsubscribe:
         return None
@@ -404,6 +405,39 @@ _MARKER = re.compile(r"\[(/?)untrusted:", re.IGNORECASE)
 def wrap_untrusted(text: str, nonce: str) -> str:
     defanged = _MARKER.sub(lambda m: f"[{m.group(1)}untrusted_:", clean_text(text))
     return f"[untrusted:{nonce}]\n{defanged}\n[/untrusted:{nonce}]"
+
+
+class Fence:
+    """The untrusted text of one tool response, delimited once.
+
+    Callers replace each untrusted value with the reference ref() returns ('#1', '#2', ...); render()
+    puts every referenced text in a single block, [untrusted:<nonce>] ... [/untrusted:<nonce>], holding a
+    JSON object from reference to text (or to {field: text}). JSON keeps an email from forging another
+    reference's entry, and wrap_untrusted cleans the block and defangs marker lookalikes inside it.
+    One nonce per Fence, so one per response.
+    """
+
+    def __init__(self) -> None:
+        self.nonce = new_nonce()
+        self._entries: dict[str, str | dict[str, str]] = {}
+
+    def ref(self, content: str | dict[str, str]) -> str:
+        key = f"#{len(self._entries) + 1}"
+        if isinstance(content, dict):
+            self._entries[key] = {k: clean_text(v) for k, v in content.items()}
+        else:
+            self._entries[key] = clean_text(content)
+        return key
+
+    def render(self) -> str | None:
+        if not self._entries:
+            return None
+        return wrap_untrusted(json.dumps(self._entries, ensure_ascii=False, indent=1), self.nonce)
+
+    def attach(self, response: dict) -> dict:
+        """`response` with the top-level 'untrusted' block, when anything was referenced."""
+        block = self.render()
+        return response if block is None else {**response, "untrusted": block}
 
 
 _OVERRIDE = re.compile(
