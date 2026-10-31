@@ -989,3 +989,37 @@ def test_relink_without_recorded_address_and_a_dead_old_credential_is_accepted_o
     resp = _relink(env, "legacy", "any@gmail.com")
     assert resp.status_code == 200, resp.text
     assert env.ctx.book.get("legacy").address == "any@gmail.com"
+
+
+def test_remove_whose_file_cannot_be_deleted_says_so_and_stays_consistent(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    _signed_in(env)
+    monkeypatch.setattr(accounts_module, "remove_credential", _raise)
+    resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
+    assert resp.status_code == 500
+    text = _visible(resp.text)
+    assert "Something went wrong" not in text
+    assert "The access token was revoked at Google, but the credential file could not be deleted" in text
+    assert "secrets/accounts/gmail/pessoal.json" in text and "server log" in text
+    assert "http-equiv" not in resp.text
+    assert PERMISSIONS not in resp.text  # the revocation was confirmed
+    assert "pessoal" not in env.ctx.registry.aliases()
+    assert env.ctx.book.get("pessoal").removed_at
+    assert any(r.getMessage().startswith("admin remove: credential file not deleted alias=pessoal")
+               and r.levelno == logging.ERROR for r in caplog.records)
+
+
+def test_remove_whose_file_cannot_be_deleted_and_revoke_failed_links_to_permissions(env, monkeypatch):
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    env.linker.revoke_result = False
+    _signed_in(env)
+    monkeypatch.setattr(accounts_module, "remove_credential", _raise)
+    resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
+    assert resp.status_code == 500
+    text = _visible(resp.text)
+    assert "could not be deleted" in text and "was revoked at Google" not in text
+    assert f'href="{PERMISSIONS}"' in resp.text
+    assert "pessoal" not in env.ctx.registry.aliases()

@@ -207,6 +207,23 @@ def remove_unrecorded_page(alias: str, *, revoked: bool) -> str:
     return layout(f"Removed {alias}", body, narrow=True)
 
 
+def remove_file_left_page(alias: str, provider: str, *, revoked: bool, recorded: bool) -> str:
+    """Removed from the server, but the credential file is still on disk: a restart would load it."""
+    lead = ("The access token was revoked at Google, but" if revoked
+            else "The account was removed from the server, but")
+    text = (f"{lead} the credential file could not be deleted. Delete "
+            f"secrets/accounts/{provider}/{alias}.json by hand before the next restart, or the account "
+            "comes back; see the server log.")
+    body = _sheet(
+        f"<h1>Removed {e(alias)}</h1>\n"
+        f'<p class="notice notice-error">{e(text)}</p>\n'
+        f"{'' if recorded else _notice(REMOVE_UNRECORDED_TEXT, 'error')}"
+        f"{'' if revoked else _revoke_by_hand()}"
+        '<p class="actions"><a class="btn btn-primary" href="/admin">Continue</a></p>'
+    )
+    return layout(f"Removed {alias}", body, narrow=True)
+
+
 def revoke_failed_page(alias: str) -> str:
     """Removal done, but Google did not confirm the revocation: no auto-refresh, so the link stays."""
     body = _sheet(

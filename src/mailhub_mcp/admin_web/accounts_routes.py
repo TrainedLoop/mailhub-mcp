@@ -84,6 +84,8 @@ class _LinkOutcome:
 class _RemoveOutcome:
     revoked: bool
     recorded: bool
+    file_removed: bool = True
+    provider: str = ""
 
 
 def account_routes(
@@ -354,6 +356,10 @@ def account_routes(
         outcome = await admin_io(_commit_remove, alias, act.session.email, ctx.now())  # it revokes
         if outcome is None:
             return _back_to("/admin", "not-linked")
+        if not outcome.file_removed:
+            return _html(pages.remove_file_left_page(
+                alias, outcome.provider, revoked=outcome.revoked, recorded=outcome.recorded
+            ), 500)
         if not outcome.recorded:
             return _html(pages.remove_unrecorded_page(alias, revoked=outcome.revoked), 500)
         if not outcome.revoked:
@@ -393,21 +399,30 @@ def account_routes(
                     revoked = linker.revoke(account.credential_path) is True
                 except Exception as exc:
                     log.warning("admin revoke failed alias=%s error=%s", alias, type(exc).__name__)
-            remove_credential(ctx.accounts_dir, provider, alias)
+            file_removed = True
+            try:
+                remove_credential(ctx.accounts_dir, provider, alias)
+            except Exception as exc:
+                # the token may be revoked already: finish the removal so registry and book agree,
+                # and tell the owner to delete the file before a restart loads it again
+                file_removed = False
+                log.error("admin remove: credential file not deleted alias=%s provider=%s error=%s",
+                          alias, provider, type(exc).__name__)
             ctx.registry.remove(alias)
             try:
                 ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC), provider=provider)
             except Exception as exc:
-                # the file is gone already: say so rather than pretend nothing happened
+                # the account is gone from the server already: say so rather than pretend nothing happened
                 log.error("admin remove: removed but not recorded alias=%s provider=%s error=%s",
                           alias, provider, type(exc).__name__)
-                return _RemoveOutcome(revoked=revoked, recorded=False)
+                return _RemoveOutcome(revoked=revoked, recorded=False, file_removed=file_removed,
+                                      provider=provider)
             entry = ctx.book.get(alias)
             address = entry.address if entry and entry.address else "unknown"
             log.info("admin remove alias=%s provider=%s address=%s by=%s", alias, provider, address, owner)
             if not revoked:
                 log.warning("admin remove: revocation not confirmed alias=%s", alias)
-            return _RemoveOutcome(revoked=revoked, recorded=True)
+            return _RemoveOutcome(revoked=revoked, recorded=True, file_removed=file_removed, provider=provider)
 
     return [
         route("/admin/link", get_or_post(link_form, link_start), ("GET", "POST")),
