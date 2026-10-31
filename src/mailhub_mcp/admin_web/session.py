@@ -87,6 +87,7 @@ class Flow:
     email: str | None = None
     alias: str | None = None
     provider: str | None = None
+    login_at: float | None = None  # login time of the session a login flow re-authenticates
 
 
 def _is_number(v: Any) -> bool:
@@ -152,6 +153,8 @@ def decode_flow(signer: Signer, token: str | None, now: float) -> Flow | None:
     if not all(isinstance(data.get(k, ""), str) for k in strs):
         return None
     if not all(data.get(k) is None or isinstance(data[k], str) for k in opts):
+        return None
+    if data.get("login_at") is not None and not _is_number(data["login_at"]):
         return None
     f = Flow(**data)
     if now - f.created_at >= FLOW_SECONDS:

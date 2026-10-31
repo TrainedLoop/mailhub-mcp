@@ -157,3 +157,13 @@ def test_pkce_and_random_token():
     assert "=" not in challenge
     assert new_pkce()[0] != verifier
     assert random_token() != random_token()
+
+
+def test_flow_carries_login_at_of_the_session_being_reauthenticated():
+    f = _flow(sid="x", email="me@gmail.com", login_at=900.0)
+    assert decode_flow(SIGNER, encode_flow(SIGNER, f), 1001.0) == f
+    assert decode_flow(SIGNER, encode_flow(SIGNER, _flow()), 1001.0).login_at is None
+    for bad in ("900", True):
+        data = {"kind": "login", "state": "s", "nonce": "n", "code_verifier": "v",
+                "created_at": 1000.0, "login_at": bad}
+        assert decode_flow(SIGNER, SIGNER.dumps(data), 1001.0) is None
