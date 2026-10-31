@@ -26,8 +26,9 @@ def make(claims=None, response=None, post_exc=None, verify_exc=None):
             raise post_exc
         return response or FakeResponse(200, {"id_token": "tok"})
 
-    def verify(token, request, client_id):
+    def verify(token, request, client_id, **kw):
         calls["verify"] = (token, client_id)
+        calls["verify_kw"] = kw
         if verify_exc:
             raise verify_exc
         return claims
@@ -85,6 +86,7 @@ def test_happy_path_and_post_args():
         "code_verifier": "ver",
     }
     assert calls["verify"] == ("tok", "cid")
+    assert calls["verify_kw"] == {"clock_skew_in_seconds": 10}  # same tolerance as the Gmail linker
 
 
 def test_no_auth_time():

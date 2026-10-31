@@ -99,3 +99,24 @@ def test_loopback_entry_without_port_matches_any_port(monkeypatch):
     _register(s, "http://localhost:5555/cb")
     with pytest.raises(Exception, match="not allowed"):
         _register(s, "http://localhost:5555/other")
+
+
+# --- ADMIN ---
+
+def test_admin_is_on_by_default(monkeypatch):
+    monkeypatch.delenv("ADMIN", raising=False)
+    assert Settings.from_env().admin is True
+
+
+@pytest.mark.parametrize("value,expected", [("off", False), ("OFF", False), (" Off ", False),
+                                            ("on", True), ("ON", True), ("", True), ("  ", True)])
+def test_admin_on_off_case_insensitive_and_empty_is_on(monkeypatch, value, expected):
+    monkeypatch.setenv("ADMIN", value)
+    assert Settings.from_env().admin is expected
+
+
+@pytest.mark.parametrize("value", ["maybe", "true", "0", "yes"])
+def test_admin_other_values_raise(monkeypatch, value):
+    monkeypatch.setenv("ADMIN", value)
+    with pytest.raises(ValueError, match=r"ADMIN must be 'on' or 'off', got"):
+        Settings.from_env()

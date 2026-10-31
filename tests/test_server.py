@@ -1263,6 +1263,95 @@ def test_mcp_endpoint_requires_auth_when_protection_is_enabled():
     assert _asgi("POST", "/mcp", "127.0.0.1:8742")[0] == 401
 
 
+# --- /admin ---
+
+ADMIN_SECURITY_HEADERS = {
+    "content-security-policy": "default-src 'none'; style-src 'self'; "
+    "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store",
+}
+
+
+def _http(method: str, path: str, host: str = "example.test") -> tuple[int, dict[str, str], bytes]:
+    """One request through the app main() serves, with the response headers."""
+    async def go():
+        app = server.mcp.http_app(**server.run_options())
+        sent = []
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(m):
+            sent.append(m)
+
+        await app({"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": method,
+                   "path": path, "raw_path": path.encode(), "query_string": b"", "scheme": "https",
+                   "root_path": "", "headers": [(b"host", host.encode())], "server": ("0.0.0.0", 8742),
+                   "client": ("127.0.0.1", 1)}, receive, send)
+        start = next(m for m in sent if m["type"] == "http.response.start")
+        headers = {k.decode().lower(): v.decode() for k, v in start["headers"]}
+        body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+        return start["status"], headers, body
+    return asyncio.run(go())
+
+
+def _has_security_headers(headers: dict[str, str]) -> bool:
+    return all(headers.get(k) == v for k, v in ADMIN_SECURITY_HEADERS.items())
+
+
+def test_admin_page_is_served_without_a_session():
+    status, headers, body = _http("GET", "/admin")
+    assert status == 200 and b"Sign in" in body
+    assert _has_security_headers(headers)
+    assert _http("GET", "/health")[0] == 200
+
+
+@pytest.mark.parametrize("path", ["/admin/style.css", "/admin/login", "/admin/link"])
+def test_admin_pages_carry_the_security_headers(path):
+    status, headers, _ = _http("GET", path)
+    assert status in (200, 303) and _has_security_headers(headers)
+
+
+@pytest.mark.parametrize("path", ["/admin/nope", "/admin/remove/x/y/z", "/admin/", "/admin/style.css/x"])
+def test_unknown_admin_paths_are_404_with_the_security_headers(path):
+    status, headers, body = _http("GET", path)
+    assert status == 404 and _has_security_headers(headers)
+    assert b"Traceback" not in body
+
+
+@pytest.mark.parametrize("method,path", [("TRACE", "/admin"), ("PROPFIND", "/admin/login"), ("POST", "/admin"),
+                                         ("PUT", "/admin/logout"), ("BREW", "/admin/nope")])
+def test_unlisted_admin_methods_carry_the_security_headers(method, path):
+    status, headers, _ = _http(method, path)
+    assert status in (404, 405) and _has_security_headers(headers)
+    if path != "/admin/nope":
+        assert status == 405 and headers.get("allow")
+
+
+def test_admin_routes_are_not_in_the_schema():
+    routes = [r for r in server.mcp._get_additional_http_routes() if getattr(r, "path", "").startswith("/admin")]
+    assert routes and not any(r.include_in_schema for r in routes)
+
+
+def test_admin_off_removes_every_admin_route():
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import json\n"
+        "from tests.test_server import _http\n"
+        "print(json.dumps([_http('GET', p)[0] for p in ('/admin', '/admin/login', '/admin/style.css', '/health')]))"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], env={**os.environ, "ADMIN": "off"},
+        capture_output=True, text=True, check=True,
+    ).stdout.strip().splitlines()[-1]
+    assert json.loads(out) == [404, 404, 404, 200]
+
+
 # --- prompt argument validation, unsubscribe suspicion ---
 
 @pytest.mark.parametrize("name,args", [

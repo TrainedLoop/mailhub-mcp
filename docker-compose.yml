@@ -16,11 +16,15 @@ services:
     ports:
       - "127.0.0.1:${HOST_PORT:-8742}:${PORT:-8742}"
     volumes:
-      # OAuth state (client registrations, encrypted tokens) and the change
-      # journal. Must survive restarts or the claude.ai connector has to
-      # reconnect.
+      # OAuth state (client registrations, encrypted tokens), the change
+      # journal and the account book. Must survive restarts or the claude.ai
+      # connector has to reconnect.
       - ./data:/data
-      - ./secrets/accounts:/secrets/accounts:ro
+      # Mailbox credentials. Writable so the admin page (/admin) can link,
+      # re-link and remove mailboxes; only the admin code path writes here.
+      # Append :ro to keep it read-only: /admin then shows status only and
+      # mailboxes are linked with mailhub-authorize instead.
+      - ./secrets/accounts:/secrets/accounts
     read_only: true
     tmpfs:
       - /tmp

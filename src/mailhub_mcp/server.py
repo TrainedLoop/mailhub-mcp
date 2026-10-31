@@ -12,6 +12,8 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mailhub_mcp.admin_web.context import build_admin_context
+from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
 from mailhub_mcp import prompts
@@ -769,6 +771,18 @@ else:
 async def health(request: Request) -> JSONResponse:
     """Liveness probe for Docker and monitors: no auth, and nothing beyond the status."""
     return JSONResponse({"status": "ok"})
+
+
+# The owner admin page (ADMIN=on): sign-in, account status, linking and removal. With ADMIN=off no
+# route under /admin exists and every /admin path answers 404.
+if settings.admin:
+    for admin_route in admin_routes(build_admin_context(settings, registry, journal)):
+        # methods=None (every method) reaches the admin wrapper, which answers 405 itself.
+        mcp.custom_route(
+            admin_route.path,
+            methods=admin_route.methods,  # type: ignore[arg-type]
+            include_in_schema=False,
+        )(admin_route.endpoint)
 
 
 def allowed_hosts() -> list[str]:

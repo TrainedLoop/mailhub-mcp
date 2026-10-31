@@ -27,7 +27,7 @@ import anyio.to_thread
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, RedirectResponse, Response
-from starlette.routing import Route
+from starlette.routing import Route, request_response
 
 from mailhub_mcp.admin_web import pages
 from mailhub_mcp.admin_web.context import AdminContext
@@ -71,7 +71,6 @@ LOGIN_CALLBACK_PATH = "/admin/auth/callback"
 LINK_CALLBACK_PATH = "/admin/oauth/callback"
 USED_STATES_CAP = 1000  # consumed flow states remembered at once; beyond it, the oldest are evicted
 STATUS_CHECK_SECONDS = 10.0  # per-account status check; slower counts as "error"
-_ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 _SAFE_PATH = re.compile(r"^/admin(?:[/?][A-Za-z0-9/_\-.~%?=&]*)?$")
 
 _NO_RETURN = frozenset({"/admin/login", LOGIN_CALLBACK_PATH, LINK_CALLBACK_PATH, "/admin/logout"})
@@ -203,15 +202,15 @@ async def require_action(request: Request, ctx: AdminContext, next_path: str | N
     return checked
 
 
-def admin_endpoint(ctx: AdminContext, fn: Endpoint, methods: tuple[str, ...] = ("GET",)) -> Endpoint:
-    """Wrap an admin handler: context on request.state, method check, no stack traces, and the
-    security headers on every response."""
-    allowed = set(methods) | ({"HEAD"} if "GET" in methods else set())
+def admin_endpoint(ctx: AdminContext, fn: Endpoint, methods: tuple[str, ...] | None = ("GET",)) -> Endpoint:
+    """Wrap an admin handler: context on request.state, method check (None: any method reaches
+    `fn`), no stack traces, and the security headers on every response."""
+    allowed = None if methods is None else set(methods) | ({"HEAD"} if "GET" in methods else set())
 
     async def endpoint(request: Request) -> Response:
         request.state.admin_ctx = ctx
         try:
-            if request.method not in allowed:
+            if allowed is not None and request.method not in allowed:
                 resp: Response = _html(pages.message_page("Not allowed", "Method not allowed."), 405)
                 resp.headers["Allow"] = ", ".join(sorted(allowed))
             else:
@@ -224,6 +223,22 @@ def admin_endpoint(ctx: AdminContext, fn: Endpoint, methods: tuple[str, ...] = (
         return resp
 
     return endpoint
+
+
+class _AnyMethod:
+    """An endpoint as a plain ASGI app. Starlette limits a function endpoint without `methods` to
+    GET and answers other methods with its own bare 405; an ASGI app with `methods=None` receives
+    every method, so admin_endpoint answers them, security headers included."""
+
+    def __init__(self, endpoint: Endpoint) -> None:
+        self._app = request_response(endpoint)
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        await self._app(scope, receive, send)
+
+
+def _any_method_route(path: str, endpoint: Endpoint) -> Route:
+    return Route(path, _AnyMethod(endpoint), methods=None)
 
 
 # --- single use of login flows ------------------------------------------------------------
@@ -426,13 +441,16 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         return resp
 
     def route(path: str, fn: Endpoint, methods: tuple[str, ...] = ("GET",)) -> Route:
-        return Route(path, admin_endpoint(ctx, fn, methods), methods=_ALL_METHODS)
+        return _any_method_route(path, admin_endpoint(ctx, fn, methods))
 
     def get_or_post(get_fn: Endpoint, post_fn: Endpoint) -> Endpoint:
         async def endpoint(request: Request) -> Response:
             return await (post_fn if request.method == "POST" else get_fn)(request)
 
         return endpoint
+
+    async def not_found(request: Request) -> Response:
+        return _html(pages.message_page("Not found", "There is no such admin page."), 404)
 
     return [
         route("/admin", status),
@@ -441,6 +459,9 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         route(LOGIN_CALLBACK_PATH, auth_callback),
         route("/admin/logout", logout, ("POST",)),
         *account_routes(ctx, route, get_or_post),
+        # Last: any other path under /admin/ gets a 404 page with the security headers, whatever
+        # the method, instead of the host app's bare 404.
+        _any_method_route("/admin/{rest:path}", admin_endpoint(ctx, not_found, None)),
     ]
 
 

@@ -100,7 +100,9 @@ class GoogleIdentity:
         if not raw or not isinstance(raw, str):
             raise LoginError(_FAILED)
         try:
-            claims = self._verify(raw, google_requests.Request(), self._client_id)
+            # 10 s of clock skew, as in the Gmail linker: a host clock slightly behind Google's
+            # would otherwise reject a token issued "in the future".
+            claims = self._verify(raw, google_requests.Request(), self._client_id, clock_skew_in_seconds=10)
         except (ValueError, GoogleAuthError):
             raise LoginError(_FAILED) from None
         if claims.get("nonce") != nonce:

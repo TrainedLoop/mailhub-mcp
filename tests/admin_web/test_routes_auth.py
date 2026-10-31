@@ -526,9 +526,10 @@ def _action_client(env):
             return PlainTextResponse(f"ok {result.session.email} {result.form.get('extra', '')}".strip())
         return result
 
-    app = Starlette(routes=admin_routes(env.ctx) + [
+    # The probe goes first: admin_routes ends with a catch-all 404 for every other /admin/ path.
+    app = Starlette(routes=[
         Route("/admin/probe/action", admin_endpoint(env.ctx, action, ("POST",)), methods=["POST"]),
-    ])
+    ] + admin_routes(env.ctx))
     client = TestClient(app, base_url=CLIENT_BASE)
     client.identity = env.identity
     return client
