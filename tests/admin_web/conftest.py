@@ -59,17 +59,24 @@ class FakeLinker:
 
     def __init__(self) -> None:
         self.result = LinkResult(credential_json='{"refresh_token": "r"}', address="box@example.test")
+        self.error: Exception | None = None
+        self.calls: list[dict] = []
         self.revoked: list[Path] = []
+        self.revoke_result = True
 
     def authorization_url(self, redirect_uri, state, code_challenge):
-        return f"{GOOGLE_AUTH}?{urlencode({'redirect_uri': redirect_uri, 'state': state})}"
+        q = urlencode({"redirect_uri": redirect_uri, "state": state, "code_challenge": code_challenge})
+        return f"{GOOGLE_AUTH}?{q}"
 
     def complete(self, code, redirect_uri, code_verifier):
+        self.calls.append({"code": code, "redirect_uri": redirect_uri, "code_verifier": code_verifier})
+        if self.error is not None:
+            raise self.error
         return self.result
 
     def revoke(self, credential_path):
         self.revoked.append(credential_path)
-        return True
+        return self.revoke_result
 
 
 class FakeProvider:

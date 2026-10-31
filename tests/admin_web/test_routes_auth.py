@@ -1,15 +1,23 @@
+import asyncio
+import dataclasses
 import logging
 import re
+import threading
+import time
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from starlette.applications import Starlette
+from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
+from mailhub_mcp.admin_web import routes as routes_module
 from mailhub_mcp.admin_web.routes import (
+    Action,
+    _UsedStates,
     admin_endpoint,
     admin_routes,
     done_page,
@@ -477,14 +485,14 @@ def test_unexpected_error_returns_page_with_headers(env, monkeypatch):
 
 def _action_client(env):
     async def action(request):
-        form = await request.form()
-        result = require_action(request, env.ctx, form)
-        if isinstance(result, Session):
-            return PlainTextResponse(f"ok {result.email}")
+        result = await require_action(request, env.ctx)
+        if isinstance(result, Action):
+            assert isinstance(result.session, Session)
+            return PlainTextResponse(f"ok {result.session.email} {result.form.get('extra', '')}".strip())
         return result
 
     app = Starlette(routes=admin_routes(env.ctx) + [
-        Route("/admin/accounts/alice/remove", admin_endpoint(env.ctx, action, ("POST",)), methods=["POST"]),
+        Route("/admin/probe/action", admin_endpoint(env.ctx, action, ("POST",)), methods=["POST"]),
     ])
     client = TestClient(app, base_url=CLIENT_BASE)
     client.identity = env.identity
@@ -494,7 +502,7 @@ def _action_client(env):
 def test_require_action_accepts_fresh_session(env):
     client = _action_client(env)
     token = login(client)
-    resp = client.post("/admin/accounts/alice/remove", data={"csrf": _csrf(env, token)},
+    resp = client.post("/admin/probe/action", data={"csrf": _csrf(env, token)},
                        headers={"Origin": PUBLIC}, follow_redirects=False)
     assert resp.status_code == 200 and resp.text == "ok me@gmail.com"
 
@@ -503,12 +511,12 @@ def test_require_action_redirects_stale_session_to_login(env):
     client = _action_client(env)
     token = login(client)
     env.clock.t += REAUTH_SECONDS
-    resp = client.post("/admin/accounts/alice/remove", data={"csrf": _csrf(env, token)},
+    resp = client.post("/admin/probe/action", data={"csrf": _csrf(env, token)},
                        headers={"Origin": PUBLIC}, follow_redirects=False)
     assert resp.status_code == 303
     loc = urlsplit(resp.headers["location"])
     assert loc.path == "/admin/login"
-    assert parse_qs(loc.query) == {"next": ["/admin/accounts/alice/remove"]}
+    assert parse_qs(loc.query) == {"next": ["/admin/probe/action"]}
 
 
 @pytest.mark.parametrize("case", ["no-session", "no-csrf", "bad-origin", "referer-only-ok"])
@@ -524,8 +532,8 @@ def test_require_action_checks(env, case):
     elif case == "bad-origin":
         headers = {"Origin": "https://evil.test"}
     elif case == "referer-only-ok":
-        headers = {"Referer": f"{PUBLIC}/admin/accounts/alice/remove"}
-    resp = client.post("/admin/accounts/alice/remove", data=data, headers=headers, follow_redirects=False)
+        headers = {"Referer": f"{PUBLIC}/admin/probe/action"}
+    resp = client.post("/admin/probe/action", data=data, headers=headers, follow_redirects=False)
     if case == "referer-only-ok":
         assert resp.status_code == 200
     else:
@@ -541,3 +549,132 @@ def test_done_page_escapes_and_meta_refreshes():
     assert 'href="/admin/link"' in body
     assert "&lt;b&gt;" in body
     assert done_page("x", to="//evil.test").body.decode().count("url=/admin\"") == 1
+
+
+# --- review fixes ---------------------------------------------------------------------------
+
+
+def test_used_states_prunes_expired_entries_from_the_front():
+    store = _UsedStates()
+    assert store.claim("a", 0.0)
+    assert store.claim("b", 1.0)
+    assert not store.claim("a", 2.0)  # still inside its lifetime
+    assert store.claim("c", FLOW_SECONDS + 0.5)  # "a" has expired and is pruned
+    assert len(store) == 2  # "b" and "c"
+    assert store.claim("a", FLOW_SECONDS + 0.5)  # a pruned state can be claimed again
+
+
+def test_used_states_fails_closed_beyond_the_cap():
+    store = _UsedStates(cap=3)
+    assert all(store.claim(s, 0.0) for s in ("a", "b", "c"))
+    assert not store.claim("d", 1.0)  # full: new claims are treated as expired
+    assert len(store) == 3
+    assert store.claim("d", FLOW_SECONDS)  # once the old ones expire there is room again
+
+
+def test_login_callback_that_raises_still_deletes_flow_cookie(env, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("secret")
+
+    monkeypatch.setattr(env.identity, "complete", boom)
+    _, flow, query = start_login(env.client)
+    resp = callback(env.client, flow, query["state"][0])
+    assert resp.status_code == 500
+    assert "secret" not in resp.text
+    assert _attrs(cookie_header(resp, FLOW_COOKIE))["max-age"] == "0"
+    assert resp.headers["x-frame-options"] == "DENY"
+
+
+def _form_must_not_be_read(monkeypatch):
+    async def form(self, *args, **kwargs):
+        raise AssertionError("form read before the session and origin checks")
+
+    monkeypatch.setattr(Request, "form", form)
+
+
+def test_logout_without_session_is_refused_before_reading_the_form(env, monkeypatch):
+    _form_must_not_be_read(monkeypatch)
+    resp = env.client.post("/admin/logout", data={"csrf": "x"}, headers={"Origin": PUBLIC},
+                           follow_redirects=False)
+    assert resp.status_code == 403
+
+
+def test_logout_from_other_origin_is_refused_before_reading_the_form(env, monkeypatch):
+    login(env.client)
+    _form_must_not_be_read(monkeypatch)
+    resp = env.client.post("/admin/logout", data={"csrf": "x"}, headers={"Origin": "https://evil.test"},
+                           follow_redirects=False)
+    assert resp.status_code == 403
+
+
+def test_require_action_refuses_before_reading_the_form(env, monkeypatch):
+    client = _action_client(env)
+    _form_must_not_be_read(monkeypatch)
+    resp = client.post("/admin/probe/action", data={"csrf": "x"}, headers={"Origin": PUBLIC},
+                       follow_redirects=False)
+    assert resp.status_code == 403
+
+
+def test_status_page_runs_book_io_off_the_event_loop(env, monkeypatch):
+    env.add_account("alice", "alice@example.test")
+    env.add_account("bob", error=AuthExpired("bob", "mailhub-mcp auth"))
+    login(env.client)
+    calls = []
+
+    def spy(name):
+        real = getattr(env.ctx.book, name)
+
+        def wrapper(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                on_loop = True
+            except RuntimeError:
+                on_loop = False
+            calls.append((name, on_loop))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(env.ctx.book, name, wrapper)
+
+    for name in ("record_address", "get", "entries"):
+        spy(name)
+    assert env.client.get("/admin").status_code == 200
+    assert {n for n, _ in calls} == {"record_address", "get", "entries"}
+    assert not any(on_loop for _, on_loop in calls)
+
+
+def test_status_check_times_out_as_error(env, monkeypatch):
+    release = threading.Event()
+
+    class Blocking:
+        def address(self):
+            release.wait(5)
+            return "slow@example.test"
+
+    monkeypatch.setattr(routes_module, "STATUS_CHECK_SECONDS", 0.05)
+    env.add_account("alice", "alice@example.test")
+    env.add_account("slow")
+    env.providers["slow"] = Blocking()
+    login(env.client)
+    try:
+        started = time.monotonic()
+        resp = env.client.get("/admin")
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+    assert elapsed < 2
+    row = re.search(r"<tr>\s*<td>slow</td>.*?</tr>", resp.text, re.DOTALL).group(0)
+    assert ">error<" in row
+    assert ">ok<" in re.search(r"<tr>\s*<td>alice</td>.*?</tr>", resp.text, re.DOTALL).group(0)
+
+
+def test_allowed_emails_are_lowercased_once(tmp_path):
+    env = make_env(tmp_path)
+    ctx = dataclasses.replace(env.ctx, allowed_emails=frozenset({"Me@Gmail.COM"}))
+    assert ctx.allowed_emails == frozenset({"me@gmail.com"})
+    client = TestClient(Starlette(routes=admin_routes(ctx)), base_url=CLIENT_BASE)
+    client.identity = env.identity
+    env.identity.email = "ME@gmail.com"
+    token = login(client, email="ME@gmail.com")
+    assert decode_session(Signer(ctx.key), token, env.clock(), ctx.allowed_emails).email == "me@gmail.com"
+    client.cookies.set(SESSION_COOKIE, token)
+    assert "Sign out" in client.get("/admin").text

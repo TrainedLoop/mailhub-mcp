@@ -14,6 +14,8 @@ State = Literal["ok", "credential expired", "error"]
 EXPIRED_TEXT = "This sign-in link expired, start again"
 NOT_ALLOWED_TEXT = "This Google account is not allowed"
 READ_ONLY_TEXT = "credentials are read-only: linking is disabled"
+CONSENT_REFUSED_TEXT = "Google consent was refused. Nothing was changed."
+PERMISSIONS_URL = "https://myaccount.google.com/permissions"
 
 # `?msg=<code>` on /admin shows one of these fixed texts; unknown codes are ignored.
 MESSAGES: dict[str, str] = {
@@ -25,6 +27,12 @@ MESSAGES: dict[str, str] = {
     "address-taken": "That mailbox is already linked under another alias.",
     "alias-invalid": "Invalid alias: use lowercase letters, digits and dashes, up to 32 characters.",
     "alias-taken": "That alias is already taken.",
+    "alias-reserved": "That alias is reserved: choose another.",
+    "alias-removed": "That alias is on record from an earlier link: re-link it from the status page.",
+    "provider-invalid": "Unknown provider.",
+    "unknown-alias": "That alias is neither linked nor on record.",
+    "not-linked": "That alias is not linked.",
+    "confirm-mismatch": "The alias you typed does not match: nothing was removed.",
     "read-only": READ_ONLY_TEXT,
     "revoke-failed": "The account was removed, but Google did not confirm the revocation.",
     "linked": "Mailbox linked.",
@@ -180,3 +188,54 @@ def status_page(
             )
         parts.append("</table></div>")
     return layout("mailhub-mcp admin", "\n".join(p for p in parts if p))
+
+
+def link_page(*, csrf: str, providers: list[tuple[str, str]], msg: str | None = None) -> str:
+    """The link form: alias and provider. `providers` holds (name, label) pairs."""
+    options = "".join(f'<option value="{e(name)}">{e(label)}</option>' for name, label in providers)
+    body = (
+        "<h1>Link a mailbox</h1>\n"
+        f"{message_notice(msg)}\n"
+        '<form method="post" action="/admin/link">\n'
+        f"{_csrf_input(csrf)}\n"
+        '<p><label>Alias<br><input type="text" name="alias" required maxlength="32" '
+        'autocapitalize="none" autocomplete="off" spellcheck="false"></label><br>'
+        '<span class="muted">Lowercase letters, digits and dashes, up to 32 characters.</span></p>\n'
+        f'<p><label>Provider<br><select name="provider">{options}</select></label></p>\n'
+        '<p><button type="submit">Continue with Google</button> <a href="/admin">Cancel</a></p>\n'
+        "</form>"
+    )
+    return layout("Link a mailbox", body)
+
+
+def remove_page(*, alias: str, address: str | None, undoable: int, csrf: str, msg: str | None = None) -> str:
+    """Confirmation before removing a mailbox."""
+    action = f"/admin/accounts/{_path_part(alias)}/remove"
+    shown = e(address) if address else '<span class="muted">unknown address</span>'
+    body = (
+        f"<h1>Remove {e(alias)}</h1>\n"
+        f"{message_notice(msg)}\n"
+        f"<p>Mailbox: {shown}</p>\n"
+        f"<p>Changes in the journal that can no longer be undone while it is removed: "
+        f"<strong>{e(undoable)}</strong>.</p>\n"
+        "<p>Re-linking the same mailbox under the same alias makes them undoable again. "
+        "The access token is revoked at Google and the credential file is deleted.</p>\n"
+        f'<form method="post" action="{action}">\n'
+        f"{_csrf_input(csrf)}\n"
+        '<p><label>Type the alias to confirm<br><input type="text" name="confirm" required '
+        'autocapitalize="none" autocomplete="off" spellcheck="false"></label></p>\n'
+        '<p><button type="submit">Remove</button> <a href="/admin">Cancel</a></p>\n'
+        "</form>"
+    )
+    return layout(f"Remove {alias}", body)
+
+
+def revoke_failed_page(alias: str) -> str:
+    """Removal done, but Google did not confirm the revocation: no auto-refresh, so the link stays."""
+    body = (
+        f"<h1>Removed {e(alias)}</h1>\n"
+        f"<p>{e(MESSAGES['revoke-failed'])} Revoke the access by hand:</p>\n"
+        f'<p><a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a></p>\n'
+        '<p><a href="/admin">Continue</a></p>'
+    )
+    return layout(f"Removed {alias}", body)

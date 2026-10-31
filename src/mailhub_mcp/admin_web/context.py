@@ -27,3 +27,10 @@ class AdminContext:
     linkers: dict[str, Linker]
     writable: bool
     now: Callable[[], float] = time.time
+
+    def __setattr__(self, name: str, value: object) -> None:
+        # Normalised once, here, on construction and on any later assignment: every check can then
+        # compare a lowercased email with plain set membership.
+        if name == "allowed_emails":
+            value = frozenset(str(email).strip().lower() for email in value)  # type: ignore[union-attr]
+        super().__setattr__(name, value)
