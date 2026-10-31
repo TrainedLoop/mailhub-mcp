@@ -10,6 +10,7 @@ flow cookie (signed, bound to the session and the action) and end on a 200 page 
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hmac
 import logging
 import math
@@ -311,6 +312,8 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             entries = await run_in_threadpool(ctx.book.entries)
             # on record but not linked: removed, or a credential file deleted by hand
             removed = [en for en in entries if en.alias not in linked]
+            since = {en.alias: en.linked_at for en in entries}
+            rows = [dataclasses.replace(r, linked_at=since.get(r.alias)) for r in rows]
         except Exception as exc:
             log.error("admin cannot read the account book error=%s", type(exc).__name__)
             book_unreadable = True
@@ -323,6 +326,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             has_auth_time=s.has_auth_time,
             book_unreadable=book_unreadable,
             msg=msg,
+            provider_labels={name: linker.label for name, linker in ctx.linkers.items()},
         ))
 
     # --- sign-in ----------------------------------------------------------------------------

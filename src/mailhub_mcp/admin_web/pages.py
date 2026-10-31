@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from html import escape
 from typing import Literal
 from urllib.parse import quote
@@ -51,6 +52,11 @@ class AccountRow:
     provider: str
     address: str | None
     state: State
+    linked_at: str | None = None
+
+
+# (class, text) per state: the text is always shown, the colour only backs it up
+_BADGES: dict[str, str] = {"ok": "badge-ok", "credential expired": "badge-warn", "error": "badge-error"}
 
 
 def e(value: object) -> str:
@@ -61,45 +67,94 @@ def _path_part(alias: str) -> str:
     return e(quote(alias, safe=""))
 
 
-def layout(title: str, body: str, head: str = "") -> str:
+def _date(iso: str | None) -> str:
+    """`<time>` with the ISO value as its datetime and a readable UTC date ("1 Oct 2026") as text."""
+    if not iso:
+        return ""
+    try:
+        moment = datetime.fromisoformat(iso)
+    except ValueError:
+        return e(iso)
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(UTC)
+    return f'<time datetime="{e(iso)}">{moment.day} {moment:%b %Y}</time>'
+
+
+def _csrf_input(csrf: str) -> str:
+    return f'<input type="hidden" name="csrf" value="{e(csrf)}">'
+
+
+def _masthead(account: tuple[str, str] | None) -> str:
+    """Product name, and for a signed-in page the owner's email with Sign out. `account` is (email, csrf)."""
+    who = ""
+    if account is not None:
+        email, csrf = account
+        who = (
+            '<form class="who" method="post" action="/admin/logout">'
+            f'<span class="who-email">{e(email)}</span>{_csrf_input(csrf)}'
+            '<button class="btn btn-quiet btn-small" type="submit">Sign out</button></form>'
+        )
+    return (
+        '<header class="masthead"><div class="masthead-inner">'
+        '<a class="brand" href="/admin">mailhub-mcp <span class="brand-tag">admin</span></a>'
+        f"{who}</div></header>"
+    )
+
+
+def layout(title: str, body: str, head: str = "", account: tuple[str, str] | None = None,
+           narrow: bool = False) -> str:
+    main_class = "page page-narrow" if narrow else "page"
     return (
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        '<meta name="color-scheme" content="light dark">\n'
         f"{head}"
         f"<title>{e(title)}</title>\n"
         '<link rel="stylesheet" href="/admin/style.css">\n'
-        "</head>\n<body>\n<main>\n"
+        "</head>\n<body>\n"
+        '<div class="airmail" aria-hidden="true"></div>\n'
+        f"{_masthead(account)}\n"
+        f'<main class="{main_class}">\n'
         f"{body}\n"
         "</main>\n</body>\n</html>\n"
     )
 
 
-def _notice(text: str) -> str:
-    return f'<p class="notice">{e(text)}</p>'
+def _notice(text: str, kind: str = "info") -> str:
+    return f'<p class="notice notice-{kind}">{e(text)}</p>'
 
 
 def message_notice(code: str | None) -> str:
     text = MESSAGES.get(code or "")
-    return _notice(text) if text else ""
+    if not text:
+        return ""
+    good = code in ("linked", "relinked", "removed", "signed-out")
+    return _notice(text, "ok" if good else "warn")
+
+
+def _sheet(inner: str, kind: str = "") -> str:
+    return f'<section class="sheet{" sheet-" + kind if kind else ""}">\n{inner}\n</section>'
 
 
 def sign_in_page(msg: str | None = None) -> str:
-    body = (
-        "<h1>mailhub-mcp admin</h1>\n"
+    body = _sheet(
+        "<h1>Sign in</h1>\n"
         f"{message_notice(msg)}\n"
-        '<p><a class="button" href="/admin/login">Sign in with Google</a></p>'
+        '<p class="lede">Link, re-link and remove the mailboxes this server reads. '
+        "Only allowed Google accounts can sign in.</p>\n"
+        '<p class="actions"><a class="btn btn-primary" href="/admin/login">Sign in with Google</a></p>'
     )
-    return layout("mailhub-mcp admin", body)
+    return layout("mailhub-mcp admin", body, narrow=True)
 
 
 def message_page(title: str, text: str, link_text: str = "Back", to: str = "/admin") -> str:
-    body = (
+    body = _sheet(
         f"<h1>{e(title)}</h1>\n"
         f"<p>{e(text)}</p>\n"
-        f'<p><a href="{e(to)}">{e(link_text)}</a></p>'
+        f'<p class="actions"><a class="btn btn-secondary" href="{e(to)}">{e(link_text)}</a></p>'
     )
-    return layout(title, body)
+    return layout(title, body, narrow=True)
 
 
 def done_html(message: str, to: str, note: str | None = None) -> str:
@@ -107,8 +162,11 @@ def done_html(message: str, to: str, note: str | None = None) -> str:
     `to` must already be a validated /admin path."""
     head = "" if note else f'<meta http-equiv="refresh" content="0;url={e(to)}">\n'
     shown = f"<p>{e(note)}</p>\n" if note else ""
-    body = f'<h1>{e(message)}</h1>\n{shown}<p><a href="{e(to)}">Continue</a></p>'
-    return layout(message, body, head)
+    body = _sheet(
+        f"<h1>{e(message)}</h1>\n{shown}"
+        f'<p class="actions"><a class="btn btn-primary" href="{e(to)}">Continue</a></p>'
+    )
+    return layout(message, body, head, narrow=True)
 
 
 def _grant_hint() -> str:
@@ -117,40 +175,72 @@ def _grant_hint() -> str:
 
 def refused_after_grant_page(title: str, text: str) -> str:
     """A refusal after Google already granted access: the grant stays listed at Google."""
-    body = f"<h1>{e(title)}</h1>\n<p>{e(text)}</p>\n{_grant_hint()}\n" '<p><a href="/admin">Back</a></p>'
-    return layout(title, body)
+    body = _sheet(
+        f"<h1>{e(title)}</h1>\n<p>{e(text)}</p>\n{_grant_hint()}\n"
+        '<p class="actions"><a class="btn btn-secondary" href="/admin">Back</a></p>'
+    )
+    return layout(title, body, narrow=True)
+
+
+def _revoke_by_hand() -> str:
+    return (
+        f"<p>{e(MESSAGES['revoke-failed'])} Revoke the access by hand:</p>\n"
+        f'<p><a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a></p>\n'
+    )
 
 
 def remove_unrecorded_page(alias: str, *, revoked: bool) -> str:
     """The mailbox is gone but the book did not take the removal: no auto-refresh, the owner must know."""
-    revoke = "" if revoked else (
-        f"<p>{e(MESSAGES['revoke-failed'])} Revoke the access by hand:</p>\n"
-        f'<p><a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a></p>\n'
-    )
-    body = (
+    body = _sheet(
         f"<h1>Removed {e(alias)}</h1>\n"
-        f"<p>The mailbox was removed, but its record could not be saved: the alias no longer remembers "
-        f"its address, so a later re-link will not be checked against it. See the server log.</p>\n"
-        f"{revoke}"
-        '<p><a href="/admin">Continue</a></p>'
+        '<p class="notice notice-error">The mailbox was removed, but its record could not be saved: the alias '
+        "no longer remembers its address, so a later re-link will not be checked against it. "
+        "See the server log.</p>\n"
+        f"{'' if revoked else _revoke_by_hand()}"
+        '<p class="actions"><a class="btn btn-primary" href="/admin">Continue</a></p>'
     )
-    return layout(f"Removed {alias}", body)
+    return layout(f"Removed {alias}", body, narrow=True)
 
 
-def _csrf_input(csrf: str) -> str:
-    return f'<input type="hidden" name="csrf" value="{e(csrf)}">'
+def revoke_failed_page(alias: str) -> str:
+    """Removal done, but Google did not confirm the revocation: no auto-refresh, so the link stays."""
+    body = _sheet(
+        f"<h1>Removed {e(alias)}</h1>\n"
+        f"{_revoke_by_hand()}"
+        '<p class="actions"><a class="btn btn-primary" href="/admin">Continue</a></p>'
+    )
+    return layout(f"Removed {alias}", body, narrow=True)
 
 
-def _relink_form(alias: str, csrf: str, has_address: bool = True) -> str:
-    note = "" if has_address else f'<span class="note">{e(NO_ADDRESS_NOTE)}</span>'
+def _relink_form(alias: str, csrf: str) -> str:
     return (
-        f'<form class="inline" method="post" action="/admin/accounts/{_path_part(alias)}/relink">'
-        f'{_csrf_input(csrf)}<button type="submit">Re-link</button>{note}</form>'
+        f'<form method="post" action="/admin/accounts/{_path_part(alias)}/relink">'
+        f'{_csrf_input(csrf)}<button class="btn btn-secondary btn-small" type="submit">Re-link</button></form>'
     )
 
 
-def _state_class(state: State) -> str:
-    return {"ok": "state-ok", "credential expired": "state-expired"}.get(state, "state-error")
+def _badge(state: State) -> str:
+    return f'<span class="badge {_BADGES.get(state, "badge-error")}">{e(state)}</span>'
+
+
+def _breakable(address: str) -> str:
+    """The escaped address with break opportunities after "@" and before each ".", so a long one
+    wraps at those points and never inside a word."""
+    return e(address).replace("@", "@<wbr>").replace(".", "<wbr>.")
+
+
+def _address_cell(address: str | None, writable: bool) -> str:
+    """The address, or "not on record" and, where re-link is offered, what that re-link will accept."""
+    if not address:
+        note = f'<span class="row-note">{e(NO_ADDRESS_NOTE)}</span>' if writable else ""
+        return f'<td class="addr" data-label="Address"><span class="muted">not on record</span>{note}</td>'
+    return f'<td class="addr" data-label="Address"><span class="addr-text">{_breakable(address)}</span></td>'
+
+
+def _section_head(title: str, count: int, action: str = "") -> str:
+    return (
+        f'<div class="section-head"><h2>{e(title)} <span class="count">{count}</span></h2>{action}</div>'
+    )
 
 
 def status_page(
@@ -163,112 +253,121 @@ def status_page(
     has_auth_time: bool,
     book_unreadable: bool = False,
     msg: str | None = None,
+    provider_labels: dict[str, str] | None = None,
 ) -> str:
-    parts = [
-        "<header>",
-        "<h1>mailhub-mcp admin</h1>",
-        (
-            f'<form class="inline" method="post" action="/admin/logout">'
-            f'<span class="muted">{e(email)}</span> {_csrf_input(csrf)}'
-            '<button type="submit">Sign out</button></form>'
-        ),
-        "</header>",
-        message_notice(msg),
-    ]
+    labels = provider_labels or {}
+    parts = [message_notice(msg)]
     if not writable:
-        parts.append(_notice(READ_ONLY_TEXT))
+        parts.append(_notice(READ_ONLY_TEXT, "warn"))
     if not has_auth_time:
         parts.append(_notice(
             "Google did not report when you last entered your password. Enable the session age "
             "claim in the Google Auth Platform console so re-authentication proves a recent sign-in."
         ))
     if book_unreadable:
-        parts.append(_notice("The account book could not be read; see the server log."))
+        parts.append(_notice("The account book could not be read; see the server log.", "error"))
 
-    parts.append("<h2>Mailboxes</h2>")
+    link = '<a class="btn btn-primary" href="/admin/link">Link a mailbox</a>' if writable else ""
+    parts.append('<section class="block">')
+    parts.append(_section_head("Mailboxes", len(rows), link))
     if rows:
-        parts.append('<div class="table-wrap"><table>')
-        parts.append("<tr><th>Alias</th><th>Provider</th><th>Address</th><th>State</th>"
-                     + ("<th></th>" if writable else "") + "</tr>")
+        parts.append('<table class="boxes">')
+        parts.append('<thead><tr><th scope="col">Alias</th><th scope="col">Provider</th>'
+                     '<th scope="col">Address</th><th scope="col">State</th>'
+                     + ('<th scope="col"><span class="sr">Actions</span></th>' if writable else "")
+                     + "</tr></thead><tbody>")
         for row in rows:
+            since = f'<span class="since">since {_date(row.linked_at)}</span>' if row.linked_at else ""
             actions = ""
             if writable:
                 actions = (
-                    f"<td>{_relink_form(row.alias, csrf, bool(row.address))} "
-                    f'<a class="button" href="/admin/accounts/{_path_part(row.alias)}/remove">Remove</a></td>'
+                    '<td class="act"><div class="act-row">'
+                    f"{_relink_form(row.alias, csrf)}"
+                    f'<a class="btn btn-danger-quiet btn-small" '
+                    f'href="/admin/accounts/{_path_part(row.alias)}/remove">Remove</a></div></td>'
                 )
             parts.append(
-                f"<tr>\n<td>{e(row.alias)}</td><td>{e(row.provider)}</td>"
-                f'<td>{e(row.address or "")}</td>'
-                f'<td class="{_state_class(row.state)}">{e(row.state)}</td>{actions}</tr>'
+                f'<tr>\n<th scope="row">{e(row.alias)}{since}</th>'
+                f'<td data-label="Provider">{e(labels.get(row.provider, row.provider))}</td>'
+                f"{_address_cell(row.address, writable)}"
+                f'<td class="state" data-label="State">{_badge(row.state)}</td>{actions}</tr>'
             )
-        parts.append("</table></div>")
+        parts.append("</tbody></table>")
     else:
-        parts.append('<p class="muted">No mailboxes linked.</p>')
-    if writable:
-        parts.append('<p><a class="button" href="/admin/link">Link a mailbox</a></p>')
+        parts.append('<p class="empty">No mailboxes linked yet.'
+                     + (" Link one to let the server read it." if writable else "") + "</p>")
+    parts.append("</section>")
 
     if removed:
-        parts.append("<h2>Removed</h2>")
-        parts.append('<div class="table-wrap"><table>')
-        parts.append("<tr><th>Alias</th><th>Address</th><th>Removed</th>"
-                     + ("<th></th>" if writable else "") + "</tr>")
+        parts.append('<section class="block block-quiet">')
+        parts.append(_section_head("Removed", len(removed)))
+        parts.append('<p class="section-note">Kept on record so a re-link can only attach the same mailbox.</p>')
+        parts.append('<table class="boxes boxes-removed">')
+        parts.append('<thead><tr><th scope="col">Alias</th><th scope="col">Address</th>'
+                     '<th scope="col">Removed</th>'
+                     + ('<th scope="col"><span class="sr">Actions</span></th>' if writable else "")
+                     + "</tr></thead><tbody>")
         for entry in removed:
-            actions = f"<td>{_relink_form(entry.alias, csrf, bool(entry.address))}</td>" if writable else ""
+            actions = (
+                f'<td class="act"><div class="act-row">{_relink_form(entry.alias, csrf)}</div></td>'
+            ) if writable else ""
             parts.append(
-                f"<tr>\n<td>{e(entry.alias)}</td><td>{e(entry.address or '')}</td>"
-                f"<td>{e(entry.removed_at)}</td>{actions}</tr>"
+                f'<tr>\n<th scope="row">{e(entry.alias)}</th>'
+                f"{_address_cell(entry.address, writable)}"
+                f'<td data-label="Removed">{_date(entry.removed_at) or "unknown"}</td>{actions}</tr>'
             )
-        parts.append("</table></div>")
-    return layout("mailhub-mcp admin", "\n".join(p for p in parts if p))
+        parts.append("</tbody></table></section>")
+    return layout("mailhub-mcp admin", "\n".join(p for p in parts if p), account=(email, csrf))
 
 
-def link_page(*, csrf: str, providers: list[tuple[str, str]], msg: str | None = None) -> str:
+def link_page(*, csrf: str, providers: list[tuple[str, str]], msg: str | None = None,
+              email: str | None = None) -> str:
     """The link form: alias and provider. `providers` holds (name, label) pairs."""
     options = "".join(f'<option value="{e(name)}">{e(label)}</option>' for name, label in providers)
-    body = (
+    body = _sheet(
         "<h1>Link a mailbox</h1>\n"
         f"{message_notice(msg)}\n"
-        '<form method="post" action="/admin/link">\n'
+        '<p class="lede">Choose the name tools will use for this mailbox, then sign in to it at Google.</p>\n'
+        '<form class="form" method="post" action="/admin/link">\n'
         f"{_csrf_input(csrf)}\n"
-        '<p><label>Alias<br><input type="text" name="alias" required maxlength="32" '
-        'autocapitalize="none" autocomplete="off" spellcheck="false"></label><br>'
-        '<span class="muted">Lowercase letters, digits and dashes, up to 32 characters.</span></p>\n'
-        f'<p><label>Provider<br><select name="provider">{options}</select></label></p>\n'
-        '<p><button type="submit">Continue with Google</button> <a href="/admin">Cancel</a></p>\n'
+        '<div class="field"><label for="alias">Alias</label>'
+        '<input id="alias" type="text" name="alias" required maxlength="32" aria-describedby="alias-hint" '
+        'autocapitalize="none" autocomplete="off" spellcheck="false">'
+        '<p class="hint" id="alias-hint">Lowercase letters, digits and dashes, up to 32 characters.</p></div>\n'
+        f'<div class="field"><label for="provider">Provider</label>'
+        f'<select id="provider" name="provider">{options}</select></div>\n'
+        '<div class="actions"><button class="btn btn-primary" type="submit">Continue with Google</button>'
+        '<a class="btn btn-quiet" href="/admin">Cancel</a></div>\n'
         "</form>"
     )
-    return layout("Link a mailbox", body)
+    account = (email, csrf) if email else None
+    return layout("Link a mailbox", body, account=account, narrow=True)
 
 
-def remove_page(*, alias: str, address: str | None, undoable: int, csrf: str, msg: str | None = None) -> str:
+def remove_page(*, alias: str, address: str | None, undoable: int, csrf: str, msg: str | None = None,
+                email: str | None = None) -> str:
     """Confirmation before removing a mailbox."""
     action = f"/admin/accounts/{_path_part(alias)}/remove"
     shown = e(address) if address else '<span class="muted">unknown address</span>'
-    body = (
+    body = _sheet(
         f"<h1>Remove {e(alias)}</h1>\n"
         f"{message_notice(msg)}\n"
-        f"<p>Mailbox: {shown}</p>\n"
-        f"<p>Changes in the journal that can no longer be undone while it is removed: "
-        f"<strong>{e(undoable)}</strong>.</p>\n"
-        "<p>Re-linking the same mailbox under the same alias makes them undoable again. "
-        "The access token is revoked at Google and the credential file is deleted.</p>\n"
-        f'<form method="post" action="{action}">\n'
+        '<dl class="facts">'
+        f"<div><dt>Mailbox</dt><dd>{shown}</dd></div>"
+        f"<div><dt>Changes you cannot undo while it is removed</dt>"
+        f"<dd><strong>{e(undoable)}</strong></dd></div>"
+        "</dl>\n"
+        "<p>The access token is revoked at Google and the credential file is deleted. "
+        "Re-linking the same mailbox under the same alias makes those changes undoable again.</p>\n"
+        f'<form class="form" method="post" action="{action}">\n'
         f"{_csrf_input(csrf)}\n"
-        '<p><label>Type the alias to confirm<br><input type="text" name="confirm" required '
-        'autocapitalize="none" autocomplete="off" spellcheck="false"></label></p>\n'
-        '<p><button type="submit">Remove</button> <a href="/admin">Cancel</a></p>\n'
-        "</form>"
+        f'<div class="field"><label for="confirm">Type <strong>{e(alias)}</strong> to confirm</label>'
+        '<input id="confirm" type="text" name="confirm" required '
+        'autocapitalize="none" autocomplete="off" spellcheck="false"></div>\n'
+        '<div class="actions"><button class="btn btn-danger" type="submit">Remove</button>'
+        '<a class="btn btn-quiet" href="/admin">Cancel</a></div>\n'
+        "</form>",
+        "danger",
     )
-    return layout(f"Remove {alias}", body)
-
-
-def revoke_failed_page(alias: str) -> str:
-    """Removal done, but Google did not confirm the revocation: no auto-refresh, so the link stays."""
-    body = (
-        f"<h1>Removed {e(alias)}</h1>\n"
-        f"<p>{e(MESSAGES['revoke-failed'])} Revoke the access by hand:</p>\n"
-        f'<p><a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a></p>\n'
-        '<p><a href="/admin">Continue</a></p>'
-    )
-    return layout(f"Removed {alias}", body)
+    account = (email, csrf) if email else None
+    return layout(f"Remove {alias}", body, account=account, narrow=True)

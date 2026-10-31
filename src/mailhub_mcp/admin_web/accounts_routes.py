@@ -109,7 +109,8 @@ def account_routes(
             return _back_to("/admin", "read-only")
         providers = [(name, linker.label) for name, linker in sorted(ctx.linkers.items())]
         return _html(pages.link_page(
-            csrf=csrf_token(ctx.key, s), providers=providers, msg=request.query_params.get("msg")
+            csrf=csrf_token(ctx.key, s), providers=providers, msg=request.query_params.get("msg"),
+            email=s.email,
         ))
 
     async def link_start(request: Request) -> Response:
@@ -301,6 +302,7 @@ def account_routes(
             undoable=undoable,
             csrf=csrf_token(ctx.key, s),
             msg=request.query_params.get("msg"),
+            email=s.email,
         ))
 
     async def remove(request: Request) -> Response:

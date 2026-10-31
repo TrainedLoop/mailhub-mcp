@@ -336,7 +336,8 @@ def test_status_page_states_and_backfill(env):
     login(env.client)
     resp = env.client.get("/admin")
     assert resp.status_code == 200
-    rows = {alias: re.search(rf"<tr>\s*<td>{alias}</td>.*?</tr>", resp.text, re.DOTALL).group(0)
+    page = resp.text.replace("<wbr>", "")  # break opportunities inside addresses
+    rows = {alias: re.search(rf"<tr>\s*<th scope=\"row\">{alias}<.*?</tr>", page, re.DOTALL).group(0)
             for alias in ("alice", "bob", "carol")}
     assert ">ok<" in rows["alice"] and "Alice@Example.test" in rows["alice"]
     assert "credential expired" in rows["bob"]
@@ -361,8 +362,34 @@ def test_status_page_lists_removed_aliases(env):
     env.ctx.book.record_removed("dave", datetime.now(UTC))
     login(env.client)
     resp = env.client.get("/admin")
-    assert "dave" in resp.text and "dave@example.test" in resp.text
+    assert "dave" in resp.text and "dave@example.test" in resp.text.replace("<wbr>", "")
     assert 'action="/admin/accounts/dave/relink"' in resp.text
+
+
+def test_status_page_shows_provider_label_and_readable_dates(env):
+    env.add_account("alice", "alice@example.test")
+    env.ctx.book.record_linked("alice", "gmail", "alice@example.test", datetime(2026, 9, 1, 12, tzinfo=UTC))
+    env.ctx.book.record_linked("dave", "gmail", "dave@example.test", datetime(2026, 8, 1, tzinfo=UTC))
+    env.ctx.book.record_removed("dave", datetime(2026, 10, 1, 9, 30, tzinfo=UTC))
+    login(env.client)
+    page = env.client.get("/admin").text
+    assert "gmail</td>" not in page and ">Gmail</td>" in page
+    assert '<time datetime="2026-10-01T09:30:00+00:00">1 Oct 2026</time>' in page
+    assert '<time datetime="2026-09-01T12:00:00+00:00">1 Sep 2026</time>' in page
+    assert "2026-10-01T09:30:00+00:00<" not in page  # the raw ISO only in the attribute
+    assert re.search(r'class="badge badge-ok">ok<', page)
+    # long addresses wrap after "@" and before ".", never inside a word
+    assert '<span class="addr-text">alice@<wbr>example<wbr>.test</span>' in page
+
+
+def test_style_has_dark_mode_tokens_and_phone_cards():
+    css = routes_module.STYLE_CSS
+    assert "prefers-color-scheme: dark" in css
+    dark = css.split("prefers-color-scheme: dark", 1)[1]
+    for token in ("--bg", "--surface", "--text", "--muted", "--border", "--accent", "--ok", "--warn", "--danger"):
+        assert token in dark, token
+    assert "@media (max-width: 860px)" in css  # cards on phones (and narrow tablets)
+    assert "url(" not in css and "@import" not in css  # nothing outside 'self'
 
 
 def test_status_page_shows_buttons_and_session_age_notice(env):
@@ -387,7 +414,7 @@ def test_status_page_escapes_alias_and_address(env):
     login(env.client)
     resp = env.client.get("/admin")
     assert "<script>" not in resp.text
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;@example.test" in resp.text
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;@example.test" in resp.text.replace("<wbr>", "")
     assert "&lt;script&gt;x" in resp.text
 
 
@@ -402,7 +429,7 @@ def test_read_only_context_shows_notice_and_no_buttons(tmp_path):
     assert "/admin/link" not in resp.text
     assert "relink" not in resp.text
     assert "/remove" not in resp.text
-    assert "alice@example.test" in resp.text
+    assert "alice@example.test" in resp.text.replace("<wbr>", "")
 
 
 def test_msg_codes_map_to_fixed_texts(env):
@@ -688,9 +715,9 @@ def test_status_check_times_out_as_error(env, monkeypatch):
     finally:
         release.set()
     assert elapsed < 2
-    row = re.search(r"<tr>\s*<td>slow</td>.*?</tr>", resp.text, re.DOTALL).group(0)
+    row = re.search(r"<tr>\s*<th scope=\"row\">slow<.*?</tr>", resp.text, re.DOTALL).group(0)
     assert ">error<" in row
-    assert ">ok<" in re.search(r"<tr>\s*<td>alice</td>.*?</tr>", resp.text, re.DOTALL).group(0)
+    assert ">ok<" in re.search(r"<tr>\s*<th scope=\"row\">alice<.*?</tr>", resp.text, re.DOTALL).group(0)
 
 
 def test_allowed_emails_are_lowercased_once(tmp_path):

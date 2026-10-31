@@ -99,7 +99,7 @@ def test_link_form_has_alias_provider_and_csrf(env):
     resp = env.client.get("/admin/link")
     assert resp.status_code == 200
     assert 'name="alias"' in resp.text
-    assert '<select name="provider"' in resp.text and '<option value="gmail">Gmail</option>' in resp.text
+    assert 'name="provider"' in resp.text and '<option value="gmail">Gmail</option>' in resp.text
     assert f'value="{_csrf(env, token)}"' in resp.text
     assert 'action="/admin/link"' in resp.text
     assert resp.headers["x-frame-options"] == "DENY"
@@ -702,7 +702,7 @@ def test_relink_control_without_address_shows_one_time_note(env):
     _signed_in(env)
     page = env.client.get("/admin").text
     assert page.count(NO_ADDRESS_NOTE) == 2
-    work_row = re.search(r"<tr>\s*<td>work</td>.*?</tr>", page, re.DOTALL).group(0)
+    work_row = re.search(r"<tr>\s*<th scope=\"row\">work<.*?</tr>", page, re.DOTALL).group(0)
     assert NO_ADDRESS_NOTE not in work_row
 
 
