@@ -75,7 +75,7 @@ The Web client's id and secret go into the credential file, as the Desktop clien
 
 `POST /admin/accounts/<alias>/relink` runs the same flow with action `relink` for an alias that is linked or recorded as removed. The address returned must equal the one in `accounts.json`; otherwise the callback refuses and the existing file is left untouched. On success it replaces the file atomically, `upsert` drops the cached provider (and its cached credentials), and `removed_at` is cleared.
 
-An alias with no address on record (an account linked before this design whose credential no longer works, so its address could not be recorded) can be re-linked once without the address check. The page says so, and the address is recorded from then on.
+An alias with no address on record (an account linked before this design whose credential no longer works, so its address could not be recorded) can be re-linked once without the address check. The page says so, and the address is recorded from then on. Before that, the server asks the old credential for its address: at the re-link, if it still answers, the new mailbox must match it; at removal, an answer is recorded before the token is revoked.
 
 ### Removing a mailbox
 

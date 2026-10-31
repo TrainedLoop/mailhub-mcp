@@ -31,6 +31,7 @@ from mailhub_mcp.admin_web.routes import (
     _back_to,
     _clearing_flow_cookie,
     _html,
+    _in_thread,
     _link_redirect_uri,
     _normalize_alias,
     _recorded_provider,
@@ -57,6 +58,18 @@ from mailhub_mcp.providers.base import LinkError
 log = logging.getLogger("mailhub-mcp")
 
 RouteFactory = Callable[..., Route]
+ADDRESS_PROBE_SECONDS = 5.0  # asking an old credential for its address before a remove or re-link
+
+
+async def _probe_address(account: Any) -> str | None:
+    """The address `account`'s current credential answers, lowercased; None if it does not answer
+    (expired, failing or slower than ADDRESS_PROBE_SECONDS)."""
+    try:
+        address = await _in_thread(lambda: account.provider.address(), ADDRESS_PROBE_SECONDS)
+    except Exception as exc:  # TimeoutError included
+        log.info("admin address probe failed alias=%s error=%s", account.alias, type(exc).__name__)
+        return None
+    return address.strip().lower() if isinstance(address, str) and address.strip() else None
 
 
 @dataclass(frozen=True)
@@ -198,8 +211,16 @@ def account_routes(
         address = result.address.strip().lower() if isinstance(result.address, str) else ""
         if not address:
             return _refused_after_grant("Google did not report the mailbox address. Nothing was changed.")
+        answered = None
+        if flow.kind == "relink":
+            # Nothing on record: if the old credential still answers, its mailbox is the one to match,
+            # so the unchecked one-time re-link is left for credentials that no longer work.
+            entry = await run_in_threadpool(ctx.book.get, alias)
+            old = _linked_account(alias)
+            if old is not None and (entry is None or not entry.address):
+                answered = await _probe_address(old)
         outcome = await run_in_threadpool(
-            _commit_link, flow.kind, alias, provider, address, result.credential_json, owner, now
+            _commit_link, flow.kind, alias, provider, address, result.credential_json, owner, now, answered
         )
         if outcome.rollback_failed:
             return _html(pages.refused_after_grant_page("Not linked", pages.LINK_UNDO_INCOMPLETE_TEXT), 500)
@@ -211,10 +232,12 @@ def account_routes(
         return done_page(f"Linked {alias} ({address})", note=note)
 
     def _commit_link(
-        kind: str, alias: str, provider: str, address: str, credential_json: str, owner: str, now: float
+        kind: str, alias: str, provider: str, address: str, credential_json: str, owner: str, now: float,
+        answered: str | None = None,
     ) -> _LinkOutcome:
         """Every check, then the writes, under one lock. Nothing touches the disk before every check
-        has passed; if a write fails, the earlier ones are undone (see _write_link)."""
+        has passed; if a write fails, the earlier ones are undone (see _write_link). `answered` is
+        the address the old credential gave when the book has none; a re-link must then match it."""
         with mutations:
             other = ctx.book.alias_for_address(address)
             if other is not None and other != alias:
@@ -223,7 +246,8 @@ def account_routes(
                 return _LinkOutcome(refusal=pages.MESSAGES["address-taken"])
             entry = ctx.book.get(alias)
             linked = alias in ctx.registry.aliases()
-            recorded = entry.address.lower() if entry is not None and entry.address else None
+            on_record = entry.address.lower() if entry is not None and entry.address else None
+            recorded = on_record or (answered.lower() if answered else None)
             if kind == "link":
                 if linked or entry is not None:
                     return _LinkOutcome(refusal=pages.MESSAGES["alias-taken"])
@@ -241,7 +265,7 @@ def account_routes(
             if written != "ok":
                 return _LinkOutcome(failed=True, rollback_failed=written == "rollback-failed")
             log.info("admin %s alias=%s provider=%s address=%s by=%s", kind, alias, provider, address, owner)
-            return _LinkOutcome(first_address=kind == "relink" and recorded is None)
+            return _LinkOutcome(first_address=kind == "relink" and on_record is None)
 
     def _write_link(
         kind: str, alias: str, provider: str, address: str, credential_json: str, now: float
@@ -326,6 +350,7 @@ def account_routes(
             return _back_to("/admin", "not-linked")
         if _normalize_alias(act.form.get("confirm")) != alias:
             return _back_to(page, "confirm-mismatch")
+        await _record_address_before_removal(alias)
         outcome = await admin_io(_commit_remove, alias, act.session.email, ctx.now())  # it revokes
         if outcome is None:
             return _back_to("/admin", "not-linked")
@@ -334,6 +359,22 @@ def account_routes(
         if not outcome.revoked:
             return _html(pages.revoke_failed_page(alias))
         return done_page(f"Removed {alias}")
+
+    async def _record_address_before_removal(alias: str) -> None:
+        """No address on record: ask the credential before it is revoked, so the alias stays tied to
+        its mailbox after removal. Not answering leaves the record without an address."""
+        account = _linked_account(alias)
+        if account is None:
+            return
+        try:
+            entry = await run_in_threadpool(ctx.book.get, alias)
+            if entry is not None and entry.address:
+                return
+            address = await _probe_address(account)
+            if address:
+                await run_in_threadpool(ctx.book.record_address, alias, account.provider_name, address)
+        except Exception as exc:
+            log.error("admin remove: cannot record the address alias=%s error=%s", alias, type(exc).__name__)
 
     def _commit_remove(alias: str, owner: str, now: float) -> _RemoveOutcome | None:
         """Revoke (it needs the refresh token in the file), delete the file, drop the alias from the

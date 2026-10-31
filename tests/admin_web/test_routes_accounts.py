@@ -411,8 +411,10 @@ def test_relink_without_recorded_address_is_accepted_once(env, caplog):
     assert any(r.getMessage().startswith("admin relink without recorded address alias=pessoal")
                for r in caplog.records)
     # from now on the address is checked
+    env.linker._used.clear()  # a fresh authorization code, so the refusal is the address check
     resp = _relink(env, "pessoal", "other@gmail.com")
     assert resp.status_code == 400
+    assert "expected me@gmail.com" in resp.text
 
 
 def test_relink_removed_alias_restores_it(env):
@@ -936,3 +938,54 @@ def test_admin_network_calls_use_their_own_thread_limiter(env, monkeypatch):
     assert env.client.get("/admin").status_code == 200
     assert _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"}).status_code == 200
     assert seen == {"identity.complete": 1, "linker.complete": 1, "linker.revoke": 1, "provider.address": 1}
+
+
+def test_remove_records_the_address_the_old_credential_still_answers(env, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    env.add_account("legacy", "Me@Gmail.com")  # no address in the book; the credential still works
+    _signed_in(env)
+    resp = _post(env, "/admin/accounts/legacy/remove", {"confirm": "legacy"})
+    assert resp.status_code == 200, resp.text
+    entry = env.ctx.book.get("legacy")
+    assert entry.address == "me@gmail.com" and entry.removed_at
+    assert any(r.getMessage() == "admin remove alias=legacy provider=gmail address=me@gmail.com by=me@gmail.com"
+               for r in caplog.records)
+    refused = _relink(env, "legacy", "other@gmail.com")
+    assert refused.status_code == 400
+    assert "expected me@gmail.com" in refused.text
+
+
+def test_remove_whose_address_probe_fails_still_removes(env, monkeypatch):
+    env.add_account("legacy", error=RuntimeError("down"))
+    monkeypatch.setattr(accounts_module, "ADDRESS_PROBE_SECONDS", 0.5)
+    _signed_in(env)
+    resp = _post(env, "/admin/accounts/legacy/remove", {"confirm": "legacy"})
+    assert resp.status_code == 200, resp.text
+    entry = env.ctx.book.get("legacy")
+    assert entry.address is None and entry.removed_at
+    assert "legacy" not in env.ctx.registry.aliases()
+
+
+def test_relink_without_recorded_address_must_match_the_old_credential_when_it_answers(env):
+    env.add_account("legacy", "me@gmail.com")  # not on record, but the old credential answers
+    before = _cred_path(env, "legacy").read_text()
+    _signed_in(env)
+    refused = _relink(env, "legacy", "other@gmail.com")
+    assert refused.status_code == 400
+    assert "That is a different mailbox than legacy (expected me@gmail.com)" in refused.text
+    assert _cred_path(env, "legacy").read_text() == before
+    assert env.ctx.book.get("legacy") is None
+    env.linker._used.clear()  # a fresh authorization code for the second round trip
+    resp = _relink(env, "legacy", "Me@Gmail.com")
+    assert resp.status_code == 200, resp.text
+    assert env.ctx.book.get("legacy").address == "me@gmail.com"
+
+
+def test_relink_without_recorded_address_and_a_dead_old_credential_is_accepted_once(env):
+    from mailhub_mcp.core.errors import AuthExpired
+
+    env.add_account("legacy", error=AuthExpired("legacy", "hint"))
+    _signed_in(env)
+    resp = _relink(env, "legacy", "any@gmail.com")
+    assert resp.status_code == 200, resp.text
+    assert env.ctx.book.get("legacy").address == "any@gmail.com"
