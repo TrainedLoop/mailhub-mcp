@@ -542,6 +542,13 @@ def test_every_admin_response_carries_security_headers(env):
             assert resp.headers.get(name) == value, (resp.request.url, name)
 
 
+def test_admin_trailing_slash_redirects_to_admin(env):
+    resp = env.client.get("/admin/", follow_redirects=False)
+    assert resp.status_code == 303 and resp.headers["location"] == "/admin"
+    for name, value in SECURITY_HEADERS.items():
+        assert resp.headers.get(name) == value
+
+
 def test_unexpected_error_returns_page_with_headers(env, monkeypatch):
     def boom():
         raise RuntimeError("secret")

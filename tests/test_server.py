@@ -1333,7 +1333,12 @@ def test_admin_pages_carry_the_security_headers(path):
     assert status in (200, 303) and _has_security_headers(headers)
 
 
-@pytest.mark.parametrize("path", ["/admin/nope", "/admin/remove/x/y/z", "/admin/", "/admin/style.css/x"])
+def test_admin_with_trailing_slash_redirects_to_admin_with_the_security_headers():
+    status, headers, _ = _http("GET", "/admin/")
+    assert status == 303 and headers["location"] == "/admin" and _has_security_headers(headers)
+
+
+@pytest.mark.parametrize("path", ["/admin/nope", "/admin/remove/x/y/z", "/admin/style.css/x"])
 def test_unknown_admin_paths_are_404_with_the_security_headers(path):
     status, headers, body = _http("GET", path)
     assert status == 404 and _has_security_headers(headers)

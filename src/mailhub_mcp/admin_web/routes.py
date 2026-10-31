@@ -451,11 +451,15 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
 
         return endpoint
 
+    async def to_status(request: Request) -> Response:
+        return RedirectResponse("/admin", status_code=303)
+
     async def not_found(request: Request) -> Response:
         return _html(pages.message_page("Not found", "There is no such admin page."), 404)
 
     return [
         route("/admin", status),
+        route("/admin/", to_status),
         route("/admin/style.css", style),
         route("/admin/login", login),
         route(LOGIN_CALLBACK_PATH, auth_callback),
