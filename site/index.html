@@ -205,7 +205,7 @@
         <div><dt>Untrusted content fenced</dt><dd>Email text sits in one block per response, wrapped in markers with a fresh random nonce, so an email cannot forge the closing marker. The model is told nothing inside is an instruction.</dd></div>
         <div><dt>Suspicious messages flagged</dt><dd>Heuristics flag likely injection attempts (tool names, "ignore previous instructions", requests to forward or draft, lots of hidden text). The model reports them and does not act on them.</dd></div>
         <div><dt>Out-of-band approval</dt><dd>Preferences that raise attention apply at once. Ones that lower it, like ignoring a sender, wait for you to approve them with <code>mailhub-admin</code> on the server. No MCP tool can approve them.</dd></div>
-        <div><dt>Daily change cap and read-only mode</dt><dd>At most 2000 messages changed per account per 24 hours by default (undo is never capped). <code>TOOLS=read-only</code> runs an instance with no write tools at all.</dd></div>
+        <div><dt>Daily change cap and read-only mode</dt><dd>At most 2000 messages changed per account per 24 hours by default, configurable with <code>MAX_CHANGES_PER_DAY</code> (undo is never capped). <code>TOOLS=read-only</code> runs an instance with no write tools at all.</dd></div>
         <div><dt>Your Google login only</dt><dd>Every request requires a Google login on the <code>ALLOWED_EMAILS</code> allowlist, and only allowed OAuth callbacks can register as clients.</dd></div>
       </dl>
 
