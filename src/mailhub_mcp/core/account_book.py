@@ -71,12 +71,18 @@ class AccountBook:
             }
             self._save(accounts)
 
-    def record_removed(self, alias: str, now: datetime) -> None:
+    def record_removed(self, alias: str, now: datetime, provider: str | None = None) -> None:
+        """Mark `alias` removed, keeping its address. An alias the book never saw gets an entry
+        without an address when `provider` is given, so a removal always leaves a record."""
         with self._lock:
             accounts = self._load()
             record = accounts.get(alias)
             if record is None:
-                return
+                if provider is None:
+                    return
+                record = accounts[alias] = {
+                    "provider": provider, "address": None, "linked_at": None, "removed_at": None,
+                }
             record["removed_at"] = _iso(now)
             self._save(accounts)
 

@@ -85,3 +85,26 @@ def test_written_file_is_mode_600(tmp_path):
     path = tmp_path / "accounts.json"
     AccountBook(path).record_linked("a", "gmail", "a@x.com", NOW)
     assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+
+
+def test_record_removed_creates_entry_for_unknown_alias(tmp_path):
+    book = AccountBook(tmp_path / "accounts.json")
+    book.record_removed("old", LATER, provider="gmail")
+    assert book.get("old") == BookEntry("old", "gmail", None, None, LATER.isoformat())
+    # an address learned later is filled in, the removal is kept
+    book.record_address("old", "gmail", "Me@x.com")
+    assert book.get("old").address == "me@x.com"
+    assert book.get("old").removed_at == LATER.isoformat()
+
+
+def test_record_removed_without_provider_leaves_unknown_alias_alone(tmp_path):
+    book = AccountBook(tmp_path / "accounts.json")
+    book.record_removed("old", LATER)
+    assert book.get("old") is None
+
+
+def test_record_removed_with_provider_keeps_existing_entry(tmp_path):
+    book = AccountBook(tmp_path / "accounts.json")
+    book.record_linked("a", "gmail", "me@x.com", NOW)
+    book.record_removed("a", LATER, provider="other")
+    assert book.get("a") == BookEntry("a", "gmail", "me@x.com", NOW.isoformat(), LATER.isoformat())

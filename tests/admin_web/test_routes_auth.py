@@ -564,12 +564,30 @@ def test_used_states_prunes_expired_entries_from_the_front():
     assert store.claim("a", FLOW_SECONDS + 0.5)  # a pruned state can be claimed again
 
 
-def test_used_states_fails_closed_beyond_the_cap():
+def test_used_states_evicts_oldest_beyond_the_cap():
     store = _UsedStates(cap=3)
-    assert all(store.claim(s, 0.0) for s in ("a", "b", "c"))
-    assert not store.claim("d", 1.0)  # full: new claims are treated as expired
+    assert all(store.claim(s, 0.0) for s in ("a", "b", "c", "d", "e"))
+    assert len(store) == 3  # memory stays bounded
+    assert store.claim("f", 1.0)  # the newest claim always succeeds: the owner is never locked out
     assert len(store) == 3
-    assert store.claim("d", FLOW_SECONDS)  # once the old ones expire there is room again
+    assert not store.claim("f", 1.0)  # a remembered state is still refused
+    assert store.claim("a", 1.0)  # an evicted one is forgotten (the code exchange refuses it)
+
+
+def test_replay_of_an_evicted_login_state_fails_at_the_code_exchange(env, monkeypatch):
+    monkeypatch.setattr(routes_module, "USED_STATES_CAP", 1)
+    client = TestClient(Starlette(routes=admin_routes(env.ctx)), base_url=CLIENT_BASE)
+    client.identity = env.identity
+    _, flow, query = start_login(client)
+    first = callback(client, flow, query["state"][0], code="once")
+    assert cookie_value(first, SESSION_COOKIE)
+    _, flow2, query2 = start_login(client)
+    assert cookie_value(callback(client, flow2, query2["state"][0], code="twice"), SESSION_COOKIE)
+    # the first state was evicted; its replay reaches Google, which refuses the used code
+    again = callback(client, flow, query["state"][0], code="once")
+    assert cookie_header(again, SESSION_COOKIE) is None
+    assert "Google sign-in failed" in again.text
+    assert [c["code"] for c in env.identity.calls] == ["once", "twice", "once"]
 
 
 def test_login_callback_that_raises_still_deletes_flow_cookie(env, monkeypatch):

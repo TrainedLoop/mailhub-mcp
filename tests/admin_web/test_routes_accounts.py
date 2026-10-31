@@ -619,6 +619,42 @@ def test_read_only_at_callback_writes_nothing(env):
 # --- single-use store -----------------------------------------------------------------------
 
 
+def test_replay_of_an_evicted_link_state_fails_at_the_code_exchange(env, monkeypatch):
+    monkeypatch.setattr(routes_module, "USED_STATES_CAP", 2)
+    second = env.ctx.accounts_dir.parent / "evict"
+    second.mkdir()
+    env = make_env(second)
+    _signed_in(env)
+    env.linker.result = LinkResult(credential_json=CRED, address="box@example.test")
+    flow, state = _flow_and_state(_start_link(env, "pessoal"))
+    assert _oauth_callback(env, flow, state).status_code == 200
+    for alias in ("other1", "other2"):  # two more consumed states push the first one out
+        f, st = _flow_and_state(_start_link(env, alias))
+        assert "consent" in _oauth_callback(env, f, st, code="", error="access_denied").text.lower()
+    writes = []
+    monkeypatch.setattr(routes_module, "write_credential", lambda *a, **k: writes.append(a))
+    again = _oauth_callback(env, flow, state)
+    assert again.status_code == 400
+    assert "Google refused the authorization code" in again.text
+    assert [c["code"] for c in env.linker.calls] == ["link-code", "link-code"]
+    assert writes == []
+
+
+def test_remove_of_an_account_the_book_never_saw_leaves_a_record(env):
+    env.add_account("legacy")  # linked before the account book existed; address never recorded
+    assert env.ctx.book.get("legacy") is None
+    _signed_in(env)
+    resp = _post(env, "/admin/accounts/legacy/remove", {"confirm": "legacy"})
+    assert resp.status_code == 200, resp.text
+    entry = env.ctx.book.get("legacy")
+    assert entry.provider == "gmail" and entry.address is None and entry.removed_at
+    assert _msg(_start_link(env, "legacy")) == "alias-removed"
+    resp = _relink(env, "legacy", "Any@Gmail.com")  # once, without the address check
+    assert resp.status_code == 200, resp.text
+    assert env.ctx.book.get("legacy").address == "any@gmail.com"
+    assert env.ctx.book.get("legacy").removed_at is None
+
+
 def test_full_login_store_does_not_block_linking(env, monkeypatch):
     monkeypatch.setattr(routes_module, "USED_STATES_CAP", 1)
     second = env.ctx.accounts_dir.parent / "second"

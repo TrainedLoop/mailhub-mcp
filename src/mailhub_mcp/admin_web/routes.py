@@ -71,7 +71,7 @@ STYLE_CSS = (Path(__file__).parent / "style.css").read_text(encoding="utf-8")
 
 LOGIN_CALLBACK_PATH = "/admin/auth/callback"
 LINK_CALLBACK_PATH = "/admin/oauth/callback"
-USED_STATES_CAP = 1000  # consumed flow states remembered at once; beyond it, callbacks fail closed
+USED_STATES_CAP = 1000  # consumed flow states remembered at once; beyond it, the oldest are evicted
 STATUS_CHECK_SECONDS = 10.0  # per-account status check; slower counts as "error"
 _ALL_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 _SAFE_PATH = re.compile(r"^/admin(?:[/?][A-Za-z0-9/_\-.~%?=&]*)?$")
@@ -234,7 +234,7 @@ def admin_endpoint(ctx: AdminContext, fn: Endpoint, methods: tuple[str, ...] = (
 class _UsedStates:
     """States of OAuth flows already consumed, so a replayed callback is refused even if the flow
     cookie comes back. Every entry lives FLOW_SECONDS, so insertion order is expiry order: pruning
-    pops from the front until the first live entry. Full (`cap` live entries) means fail closed."""
+    pops from the front until the first live entry. At most `cap` entries are kept."""
 
     def __init__(self, cap: int | None = None) -> None:
         self._cap = USED_STATES_CAP if cap is None else cap
@@ -254,9 +254,12 @@ class _UsedStates:
                 self._seen.popitem(last=False)
             if state in self._seen:
                 return False
-            if len(self._seen) >= self._cap:
-                log.warning("admin flow store full: refusing a callback")
-                return False
+            # Full: forget the oldest rather than refuse, so nobody can lock the owner out by
+            # filling the store. Forgetting is safe: Google's authorization codes work once, so a
+            # replay of an evicted state still fails at the code exchange (LoginError/LinkError)
+            # and writes nothing.
+            while len(self._seen) >= self._cap:
+                self._seen.popitem(last=False)
             self._seen[state] = now + FLOW_SECONDS
             return True
 
@@ -289,7 +292,7 @@ def _alias_rule_problem(alias: str) -> str | None:
 
 
 def admin_routes(ctx: AdminContext) -> list[Route]:
-    # Separate stores: anonymous sign-in attempts can fill the login one, never the link one.
+    # Separate stores: anonymous sign-in attempts can churn the login one, never the link one.
     login_states = _UsedStates()
     link_states = _UsedStates()
     signer = Signer(ctx.key)
@@ -636,7 +639,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
                     log.warning("admin revoke failed alias=%s error=%s", alias, type(exc).__name__)
             remove_credential(ctx.accounts_dir, provider, alias)
             ctx.registry.remove(alias)
-            ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC))
+            ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC), provider=provider)
             entry = ctx.book.get(alias)
             address = entry.address if entry and entry.address else "unknown"
             log.info("admin remove alias=%s provider=%s address=%s by=%s", alias, provider, address, owner)

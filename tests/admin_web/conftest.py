@@ -18,7 +18,7 @@ from mailhub_mcp.admin_web.session import FLOW_COOKIE, SESSION_COOKIE, derive_ke
 from mailhub_mcp.core.account_book import AccountBook
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.journal import Journal
-from mailhub_mcp.providers.base import LinkResult
+from mailhub_mcp.providers.base import LinkError, LinkResult
 
 PUBLIC = "https://example.test"
 CLIENT_BASE = "http://testserver:8742"
@@ -63,6 +63,7 @@ class FakeLinker:
         self.calls: list[dict] = []
         self.revoked: list[Path] = []
         self.revoke_result = True
+        self._used: set[str] = set()
 
     def authorization_url(self, redirect_uri, state, code_challenge):
         q = urlencode({"redirect_uri": redirect_uri, "state": state, "code_challenge": code_challenge})
@@ -72,6 +73,9 @@ class FakeLinker:
         self.calls.append({"code": code, "redirect_uri": redirect_uri, "code_verifier": code_verifier})
         if self.error is not None:
             raise self.error
+        if code in self._used:  # like Google: an authorization code works once
+            raise LinkError("Google refused the authorization code")
+        self._used.add(code)
         return self.result
 
     def revoke(self, credential_path):
