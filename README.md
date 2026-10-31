@@ -8,7 +8,7 @@ One instance serves one owner: `ALLOWED_EMAILS` holds only your own Google login
 
 **Status: beta (0.x).** It runs daily against real mailboxes, but only a handful of people have set it up so far. Expect rough edges in the setup, and pin a release (`MAILHUB_VERSION`) so updates happen when you choose.
 
-**Contents:** [Features](#features) · [Admin page](#admin-page) · [Safety model](#safety-model) · [Quickstart](#quickstart) · [More than one person](#more-than-one-person) · [Privacy](#privacy) · [Development](#development)
+**Contents:** [Features](#features) · [Admin page](#admin-page) · [Safety model](#safety-model) · [Quickstart](#quickstart) · [More than one person](#more-than-one-person) · [Privacy](#privacy) · [Development](#development) · [License](#license)
 
 ## Features
 
