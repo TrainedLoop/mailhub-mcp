@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Safety model: mailhub-mcp</title>
+<meta name="description" content="How mailhub-mcp keeps an AI assistant from misusing your mail: it cannot send, trash or delete, every change is journaled and undoable, email text is fenced as untrusted, and the limits it cannot fix.">
+<meta name="theme-color" content="#eef1f5" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f1729" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="canonical" href="https://trainedloop.github.io/mailhub-mcp/security.html">
+
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="mailhub-mcp">
+<meta property="og:title" content="Safety model: mailhub-mcp">
+<meta property="og:description" content="mailhub-mcp cannot send, trash or delete mail, journals every change so it can be undone, and assumes the model can be fooled. The guards, the lethal trifecta and the known limits.">
+<meta property="og:url" content="https://trainedloop.github.io/mailhub-mcp/security.html">
+<meta property="og:image" content="https://trainedloop.github.io/mailhub-mcp/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="mailhub-mcp: one MCP server for all your mailboxes. Cannot send, trash or delete.">
+<meta name="twitter:card" content="summary_large_image">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="airmail" aria-hidden="true"></div>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="./" aria-label="mailhub-mcp home">
+      <svg viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <rect x="2" y="6" width="28" height="20" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M3 8l13 10L29 8" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M2 24l4-4M6 26l6-6" stroke="#b3122c" stroke-width="2.4"/>
+        <path d="M30 24l-4-4M26 26l-6-6" stroke="#1c4a96" stroke-width="2.4"/>
+      </svg>
+      mailhub-mcp
+    </a>
+    <nav aria-label="Site">
+      <ul>
+        <li><a href="./">Home</a></li>
+        <li><a href="security.html" aria-current="page">Security</a></li>
+        <li><a href="install.html">Install</a></li>
+        <li><a href="https://github.com/TrainedLoop/mailhub-mcp">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="page-head">
+    <div class="wrap">
+      <h1>Safe by construction, honest about the limits</h1>
+      <p class="intro">Your mailbox is full of text written by strangers, and some of it will try to give your assistant orders. The server is built on the assumption that the model can be fooled.</p>
+    </div>
+  </div>
+
+  <div class="wrap doc">
+    <nav class="toc" aria-labelledby="toc-h">
+      <h2 id="toc-h">On this page</h2>
+      <ol>
+        <li><a href="#guarantees">Three guarantees</a></li>
+        <li><a href="#guards">More guards</a></li>
+        <li><a href="#trifecta">The lethal trifecta</a></li>
+        <li><a href="#limits">Limits</a></li>
+        <li><a href="#more">Full details and reports</a></li>
+      </ol>
+    </nav>
+
+    <div class="doc-body">
+      <section id="guarantees" aria-labelledby="guarantees-h">
+        <h2 class="stripe" id="guarantees-h">Three guarantees</h2>
+        <dl class="guarantees">
+          <div><dt>Cannot send, trash or delete</dt><dd>The code never calls Gmail's send, trash or delete methods, and a test scans the source to enforce it. Trash, Spam, Sent and Draft labels are refused.</dd></div>
+          <div><dt>Every change is undoable</dt><dd>Each organizing change is journaled with the labels messages had before. <code>undo_change</code> reverts one batch exactly; <code>undo_since</code> is the panic button that reverts everything since a time.</dd></div>
+          <div><dt>Preview before bulk changes</dt><dd>Changes by query show a match count and a sample first, and apply only with explicit confirmation, at most 500 messages per call.</dd></div>
+        </dl>
+      </section>
+
+      <section id="guards" aria-labelledby="guards-h">
+        <h2 class="stripe" id="guards-h">More guards</h2>
+        <dl class="guards">
+          <div><dt>Reply-only drafts</dt><dd>Drafts must answer a message, and may only be addressed to people already in that thread. Nothing is ever sent. Threads with a suspicious message are refused.</dd></div>
+          <div><dt>Hidden text stripped</dt><dd>Hidden HTML (<code>display:none</code>, zero-size text, comments, scripts) and invisible or bidirectional control characters are removed before the model sees a message.</dd></div>
+          <div><dt>Untrusted content fenced</dt><dd>Email text sits in one block per response, wrapped in markers with a fresh random nonce, so an email cannot forge the closing marker. The model is told nothing inside is an instruction.</dd></div>
+          <div><dt>Suspicious messages flagged</dt><dd>Heuristics flag likely injection attempts (tool names, "ignore previous instructions", requests to forward or draft, lots of hidden text). The model reports them and does not act on them.</dd></div>
+          <div><dt>Out-of-band approval</dt><dd>Preferences that raise attention apply at once. Ones that lower it, like ignoring a sender, wait for you to approve them with <code>mailhub-admin</code> on the server. No MCP tool can approve them.</dd></div>
+          <div><dt>Daily change cap and read-only mode</dt><dd>At most 2000 messages changed per account per 24 hours by default, configurable with <code>MAX_CHANGES_PER_DAY</code> (undo is never capped). <code>TOOLS=read-only</code> runs an instance with no write tools at all.</dd></div>
+          <div><dt>Your Google login only</dt><dd>Every request requires a Google login on the <code>ALLOWED_EMAILS</code> allowlist, and only allowed OAuth callbacks can register as clients.</dd></div>
+          <div><dt>Locked-down container</dt><dd>Read-only filesystem, all capabilities dropped, a memory limit, and the port bound to <code>127.0.0.1</code> only. See <a href="install.html#self-hosted">running it in Docker</a>.</dd></div>
+        </dl>
+      </section>
+
+      <section id="trifecta" aria-labelledby="trifecta-h">
+        <h2 class="stripe" id="trifecta-h">The lethal trifecta, and what mailhub can't fix</h2>
+        <div class="trifecta">
+          <div>
+            <p>An AI agent becomes dangerous when it has all three of:</p>
+            <ol>
+              <li>access to private data,</li>
+              <li>exposure to untrusted content,</li>
+              <li>a way to send data out.</li>
+            </ol>
+          </div>
+          <div>
+            <p>A mailbox is the first two by design. mailhub removes its own way out: it can't send mail, drafts only go to people already in the thread, and unsubscribe links are never visited.</p>
+            <p>But any other internet-capable tool in the same session (web fetch or search, a browser, a connector that posts messages, files or tickets) reopens the third leg, and the server can't see it. Choose which tools share a session with mailhub; for unattended routines, use <code>TOOLS=read-only</code> with no internet-capable tools alongside.</p>
+          </div>
+        </div>
+      </section>
+
+      <section id="limits" aria-labelledby="limits-h">
+        <h2 class="stripe" id="limits-h">Limits</h2>
+        <ul class="limits">
+          <li>The defenses are an aid, not a guarantee; see the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/architecture.md#limitations">known limitations</a>.</li>
+          <li>Gmail's <code>gmail.modify</code> scope technically permits sending; these protections live in the code, not the token.</li>
+          <li>What the assistant reads becomes part of your conversation, so it is sent to the provider of the model you use. With a local model, through an MCP client that runs it on your machine, email content never goes to an AI provider (untested; see <a href="install.html#clients">clients</a>).</li>
+          <li>mailhub-mcp is beta software.</li>
+        </ul>
+      </section>
+
+      <section id="more" aria-labelledby="more-h">
+        <h2 class="stripe" id="more-h">Full details and reports</h2>
+        <div class="prose">
+          <p>Full details: the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/README.md#safety-model">safety model</a> in the README.</p>
+          <p>Please report vulnerabilities privately through the repository's Security tab (private vulnerability reporting), not in a public issue. Prompt-injection and sanitizer bypasses are in scope. See <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <div class="cta">
+    <div class="wrap">
+      <div>
+        <h2>Run it on your own server</h2>
+        <p>Setup takes a Google Cloud project, Docker and an HTTPS address. Reports, fixes and new mail providers are welcome.</p>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary" href="install.html">Install</a>
+        <a class="btn btn-ghost" href="install.html#contribute">Contribute</a>
+      </div>
+    </div>
+  </div>
+  <div class="foot-meta">
+    <div class="wrap">
+      <p>mailhub-mcp is beta software, released under the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/LICENSE">MIT license</a>.</p>
+      <ul>
+        <li><a href="https://github.com/TrainedLoop/mailhub-mcp">GitHub</a></li>
+        <li><a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/tutorial.md">Tutorial</a></li>
+        <li><a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/ROADMAP.md">Roadmap</a></li>
+        <li><a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/SECURITY.md">SECURITY.md</a></li>
+      </ul>
+      <p class="indep">An independent open-source project, not affiliated with Anthropic, OpenAI or Google.</p>
+    </div>
+  </div>
+</footer>
+</body>
+</html>
