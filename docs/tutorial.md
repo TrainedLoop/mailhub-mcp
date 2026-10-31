@@ -119,7 +119,7 @@ docker compose up -d
 docker compose logs -f
 ```
 
-`docker compose up -d` pulls the published image (`MAILHUB_VERSION` in `.env` picks the release; the default follows the latest 0.1.x). To run your own build of this checkout instead, use `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`, and keep passing both files to every `docker compose` command.
+`docker compose up -d` pulls the published image (`MAILHUB_VERSION` in `.env` picks the release; the default follows the latest 0.2.x). To run your own build of this checkout instead, use `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`, and keep passing both files to every `docker compose` command.
 
 The compose file publishes the server on `127.0.0.1:8742` only (`HOST_PORT`), with a read-only filesystem, all capabilities dropped and a memory limit. Only the `data/` and `secrets/accounts/` volumes are writable; append `:ro` to the `secrets/accounts` line to keep credentials read-only, which disables linking on `/admin` (status only) and leaves the command-line flow. On startup the server logs a warning if no accounts are found (expected before you link the first one), another if `ALLOWED_EMAILS` lists more than one address, and another if `secrets/accounts` is read-only.
 
