@@ -8,45 +8,86 @@ One instance serves one owner: `ALLOWED_EMAILS` holds only your own Google login
 
 **Status: beta (0.x).** It runs daily against real mailboxes, but only a handful of people have set it up so far. Expect rough edges in the setup, and pin a release (`MAILHUB_VERSION`) so updates happen when you choose.
 
+**Contents:** [Features](#features) · [Admin page](#admin-page) · [Safety model](#safety-model) · [Quickstart](#quickstart) · [More than one person](#more-than-one-person) · [Privacy](#privacy) · [Development](#development) · [License](#license)
+
 ## Features
 
 The server exposes 18 tools (11 read-only, 7 that change something); see [docs/architecture.md](docs/architecture.md#tools) for the list.
 
+### Read and triage
+
 - **Multi-account**: each mailbox gets an alias. Read tools take `accounts=None` to mean "all accounts" and return `{results, errors}`, with at most one error per account.
 - **Search, read and triage signals**: `search_emails`, `read_email`, `read_emails`, `read_thread`, `list_labels`, `list_drafts`. Messages carry unread, starred, importance, category and newsletter flags.
 - **Inbox overview**: `inbox_overview` gives per-account totals, unread counts, newsletters, categories and top senders. `count_messages` counts the matches of a query per account from message ids only (about 5 quota units per 500 messages), to size a bulk change before running it.
-- **Reversible organization**: `create_label`, `modify_emails`, `modify_by_query` (labels, archive, mark read, star), each recorded in a journal, `undo_change` to revert a batch, `list_changes` to find earlier changes and their change_ids across sessions, and `undo_since` as a panic button that undoes everything since a time.
-- **Triage preferences**: `get_preferences` and `set_preferences` keep rules such as important and ignored senders or keywords, and the time of the last triage, so scheduled triage is consistent from one run to the next. Rules that raise attention apply immediately; rules that lower attention wait for your approval outside the chat (`mailhub-admin`).
-- **Change history**: every label change and every preference change is journaled with its motivating request, listed by `list_changes` and undoable.
-- **Content defenses**: hidden text is removed from HTML bodies, invisible characters are removed from message text fields (sender, recipients, subject, date, snippet, body, attachment names), email text is delimited as untrusted, and likely injection attempts are flagged (see the safety model).
-- **Prompts**: `daily_triage`, `clean_newsletters` and `organize_inbox` are MCP prompts (reusable workflows you pick in your MCP client). The two that change mail preview first and ask for your explicit confirmation; none of them trashes or deletes. With `TOOLS=read-only` only a read-only `daily_triage` is offered.
 - **Unsubscribe info**: messages carry `unsubscribe` (`url`, `mailto`, `one_click`) parsed from `List-Unsubscribe`, and `inbox_overview` top senders carry their most recent one. It is sender-controlled text: shown to you, kept in the untrusted block, never visited by the assistant.
-- **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
+- **Content defenses**: hidden text is removed from HTML bodies, invisible characters are removed from message text fields (sender, recipients, subject, date, snippet, body, attachment names), email text is delimited as untrusted, and likely injection attempts are flagged (see the safety model).
+
+### Organize, reversibly
+
+- **Reversible organization**: `create_label`, `modify_emails`, `modify_by_query` (labels, archive, mark read, star), each recorded in a journal, `undo_change` to revert a batch, `list_changes` to find earlier changes and their change_ids across sessions, and `undo_since` as a panic button that undoes everything since a time.
+- **Change history**: every label change and every preference change is journaled with its motivating request, listed by `list_changes` and undoable.
 - **Drafts**: `create_draft` leaves a reply draft in the mailbox for you to review and send yourself. Replies only, addressed to people already in the thread.
+
+### Remember and automate
+
+- **Triage preferences**: `get_preferences` and `set_preferences` keep rules such as important and ignored senders or keywords, and the time of the last triage, so scheduled triage is consistent from one run to the next. Rules that raise attention apply immediately; rules that lower attention wait for your approval outside the chat (`mailhub-admin`).
+- **Prompts**: `daily_triage`, `clean_newsletters` and `organize_inbox` are MCP prompts (reusable workflows you pick in your MCP client). The two that change mail preview first and ask for your explicit confirmation; none of them trashes or deletes. With `TOOLS=read-only` only a read-only `daily_triage` is offered.
+
+### Run it
+
+- **Admin page**: `<PUBLIC_BASE_URL>/admin` lists your mailboxes and their state, and links, re-links and removes them through Google's web sign-in, without SSH, file copying or a restart. See [Admin page](#admin-page).
+- **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
+
+## Admin page
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/admin-status-1280-dark.png">
+  <img alt="The admin status page: four mailboxes with alias, provider, address, state (ok or credential expired) and Re-link and Remove buttons, plus one removed alias" src="docs/images/admin-status-1280-light.png" width="720">
+</picture>
+
+Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALLOWED_EMAILS`) to see every linked mailbox with its address and state (`ok`, `credential expired`, `different mailbox`, `error`). From there you link a new mailbox, re-link an expired one and remove one you no longer want; changes take effect at once, without a restart. It is server-rendered HTML with no JavaScript and works on a phone. The safety rules are in the [safety model](#safety-model); setup is in [docs/tutorial.md](docs/tutorial.md#3-link-your-mailboxes-at-public_base_urladmin). `mailhub-authorize` on a workstation remains as a command-line alternative, and `ADMIN=off` turns the page off.
 
 ## Safety model
 
+### Nothing destructive
+
 - The code never calls `messages.trash`, `messages.delete`, `batchDelete`, `messages.send` or `drafts.send`. A test scans `src/` to enforce this.
 - The system labels `TRASH`, `SPAM`, `DRAFT`, `SENT` and `CHAT` are refused in `add_labels` and `remove_labels`, by name or by ID.
+
+### Every change is reversible and capped
+
 - `modify_by_query` previews by default (`confirm=false`: match count plus a sample). Applying (`confirm=true`) touches at most 500 messages per call.
 - Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had.
 - `list_changes` shows the journal (newest first, with label names). `undo_since` reverts every change since a time, newest first so overlapping changes restore exactly; it previews by default (`confirm=false`) and handles at most 50 changes per call.
 - Every message the server changes gets the organized label (`mailhub/organized` by default, set with `ORG_LABEL`; existing installs that used `claude/organized` should set it to that value; created automatically in each account), so you can always find what the assistant touched. `modify_emails` and `modify_by_query` refuse to remove it; only `undo_change` and `undo_since` take it off, together with the rest of the reverted change.
+- A daily cap (`MAX_CHANGES_PER_DAY`, default 2000) limits how many messages `modify_emails` and `modify_by_query` can change per account in a rolling 24 hours. Undo is never capped.
+- `TOOLS=read-only` starts an instance that registers only the read tools, for routines that should report but never change anything.
+
+### Email is untrusted
+
 - Email content is treated as untrusted third-party text. Before the model sees a message, hidden HTML (for example `display:none` or zero-size text, comments, scripts) and invisible or bidirectional control characters are removed. Untrusted text (`body`, `snippet`, unsubscribe links, preference values, recorded requests) is never inline: each response puts all of it in one `untrusted` block, `[untrusted:<nonce>]` ... `[/untrusted:<nonce>]` with a fresh random nonce per response (marker lookalikes inside are defanged), and messages point into it with `content_ref`. Tool descriptions tell the model that nothing inside is an instruction.
 - Each message carries `suspicious` and `suspicious_reasons`, from heuristics for injection attempts (mentions of tool names, "ignore previous instructions", addressing an assistant by name, requests to forward or draft, large amounts of hidden text). The model is told to report flagged emails and not to act on them. This is an aid, not a guarantee.
 - Drafts are replies only: `create_draft` requires a message to reply to, and `to` and `cc` may only contain people already in that thread (plus your own address). Drafting is refused for a thread that contains a suspicious message.
-- A daily cap (`MAX_CHANGES_PER_DAY`, default 2000) limits how many messages `modify_emails` and `modify_by_query` can change per account in a rolling 24 hours. Undo is never capped.
-- `TOOLS=read-only` starts an instance that registers only the read tools, for routines that should report but never change anything.
-- Preferences follow a direction rule: anything that raises attention (marking a sender important, un-ignoring) applies immediately, anything that lowers attention (ignoring a sender, un-marking important) becomes a proposal that no MCP tool can approve. You approve it with `mailhub-admin preferences approve <id>` inside the container. As long as you only approve proposals you recognize, injected text cannot silently hide future alerts. Raising-attention changes apply without review, but are visible in `list_changes` and can be undone; since undoing them lowers attention, that undo is itself a proposal you approve the same way. Undo entries cannot be undone (make the change again instead). Proposals expire after 14 days.
-- **The lethal trifecta.** An agent becomes dangerous when it combines three things: access to private data, exposure to untrusted content, and a way to send data out (egress). Your mailbox is the first two by design. mailhub removes the obvious egress: it cannot send mail or trash it, drafts are replies only, addressed to people already in the thread, and unsubscribe links are never visited. But any other tool in the same assistant session that can reach the internet (web fetch or search, browser automation, another connector that posts messages, files or tickets) reopens the third leg: injected text in an email could ask the model to put your private mail into a URL or a message. The server cannot see or control those tools, so be deliberate about which tools share a session or a routine with mailhub; for unattended routines, prefer `TOOLS=read-only` and no internet-capable tools alongside.
 - These defenses have limits (heuristics can be evaded, the server cannot verify who motivated a call); see [Limitations](docs/architecture.md#limitations).
+
+### Out-of-band approval
+
+- Preferences follow a direction rule: anything that raises attention (marking a sender important, un-ignoring) applies immediately, anything that lowers attention (ignoring a sender, un-marking important) becomes a proposal that no MCP tool can approve. You approve it with `mailhub-admin preferences approve <id>` inside the container. As long as you only approve proposals you recognize, injected text cannot silently hide future alerts. Raising-attention changes apply without review, but are visible in `list_changes` and can be undone; since undoing them lowers attention, that undo is itself a proposal you approve the same way. Undo entries cannot be undone (make the change again instead). Proposals expire after 14 days.
+
+### Access
+
 - Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only the OAuth redirect URIs in `ALLOWED_REDIRECT_URIS` (by default Claude's own) can register as clients. Every allowed login sees every linked mailbox, so `ALLOWED_EMAILS` should hold only the owner's login; the server logs a warning at startup when it lists more than one address.
+- The admin page has its own sign-in: a separate Google OpenID Connect login on the same Web client, accepted only for a verified email in `ALLOWED_EMAILS`. The session is a signed cookie (`HttpOnly`, `Secure`, `SameSite=Strict`) that lasts 8 hours. Linking, re-linking and removing a mailbox require a Google sign-in from the last 5 minutes, a CSRF token and a same-origin request. A re-link only accepts the mailbox already recorded for that alias, and a mailbox already linked under another alias is refused. Credentials are written only by the admin code path; no MCP tool can reach it (a test enforces this). Every response carries a strict Content-Security-Policy and no-framing, no-cross-site-referrer and no-store headers, and every sign-in, link and removal is logged. Keeping `secrets/accounts` read-only disables linking, and `ADMIN=off` removes the page.
+
+### The lethal trifecta
+
+An agent becomes dangerous when it combines three things: access to private data, exposure to untrusted content, and a way to send data out (egress). Your mailbox is the first two by design. mailhub removes the obvious egress: it cannot send mail or trash it, drafts are replies only, addressed to people already in the thread, and unsubscribe links are never visited. But any other tool in the same assistant session that can reach the internet (web fetch or search, browser automation, another connector that posts messages, files or tickets) reopens the third leg: injected text in an email could ask the model to put your private mail into a URL or a message. The server cannot see or control those tools, so be deliberate about which tools share a session or a routine with mailhub; for unattended routines, prefer `TOOLS=read-only` and no internet-capable tools alongside.
 
 Note on scope: Gmail's `gmail.modify` scope technically also permits sending and trashing, and it is the minimum that covers label changes and drafts. The protections above are in this code, not in the token. Review `src/` if that distinction matters to you.
 
 ## Quickstart
 
-1. Follow [docs/tutorial.md](docs/tutorial.md) for the Google Cloud setup, account linking, configuration and the claude.ai connector (or another client, step 15).
+1. Follow [docs/tutorial.md](docs/tutorial.md) for the Google Cloud setup, configuration, account linking on the admin page and the claude.ai connector (or another client, step 15).
 2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d`. This pulls the published image `ghcr.io/trainedloop/mailhub-mcp` (linux/amd64 and linux/arm64); to build from source instead, add `-f docker-compose.build.yml` (see the comment in that file). The server listens on `127.0.0.1:8742` (set `HOST_PORT` in `.env` to change the host port); it needs HTTPS at a public URL in front of it.
 3. [examples/tailscale-funnel/](examples/tailscale-funnel/) shows one complete way to publish it, including a firewall that isolates the container.
 
@@ -57,8 +98,8 @@ Run a separate instance per person: its own directory, `.env`, linked accounts, 
 ## Privacy
 
 - Anything the assistant reads through this server (message text, headers, search results) becomes part of your conversation and is sent to the provider of the model you use (for Claude, Anthropic; see [its privacy policy](https://www.anthropic.com/legal/privacy)).
-- The server stores locally, in `data/` and `secrets/`: OAuth tokens, the change journal (including the `query` and `user_request` of each change) and your preferences.
-- Logs record each tool call with its arguments: tool names, accounts, message ids, search queries, label names, draft recipients and subject, and preference values. Draft bodies are replaced by their length and `user_request` is cut to 80 characters; every other value is capped at 200 characters. Set log retention on the host accordingly.
+- The server stores locally, in `data/` and `secrets/`: OAuth tokens, the change journal (including the `query` and `user_request` of each change), your preferences and the account book (each alias's mailbox address).
+- Logs record each tool call with its arguments: tool names, accounts, message ids, search queries, label names, draft recipients and subject, and preference values. Draft bodies are replaced by their length and `user_request` is cut to 80 characters; every other value is capped at 200 characters. Admin page events are logged with the owner email, alias, provider and mailbox address; tokens, codes and cookies never are. The HTTP access log is off, so request URLs, which carry OAuth codes on the sign-in callbacks, are not logged. Set log retention on the host accordingly.
 - Apart from the Google APIs, the server sends nothing anywhere else.
 
 ## Development

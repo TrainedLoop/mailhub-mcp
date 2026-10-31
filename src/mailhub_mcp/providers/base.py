@@ -71,3 +71,23 @@ class ChangeDetection(Protocol):
 
 
 ProviderFactory = Callable[[str, Path], MailProvider]
+
+
+class LinkError(Exception):
+    """Linking a mailbox failed. The message is safe to show to the user."""
+
+
+@dataclass(frozen=True)
+class LinkResult:
+    credential_json: str
+    address: str
+
+
+class Linker(Protocol):
+    """Web-based account linking: build the consent URL, finish the exchange, revoke on removal."""
+
+    label: ClassVar[str]
+
+    def authorization_url(self, redirect_uri: str, state: str, code_challenge: str) -> str: ...
+    def complete(self, code: str, redirect_uri: str, code_verifier: str) -> LinkResult: ...
+    def revoke(self, credential_path: Path) -> bool: ...

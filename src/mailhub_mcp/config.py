@@ -41,6 +41,8 @@ class Settings:
     gmail_units_per_minute: int = 4800
     # Default length of message bodies returned by the read tools; 0 means the full body.
     max_body_chars: int = 2000
+    # Serve the owner admin page at /admin (ADMIN=on|off).
+    admin: bool = True
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -61,6 +63,7 @@ class Settings:
             tools_mode=_tools_mode(os.environ.get("TOOLS", "all")),
             gmail_units_per_minute=_positive_int_env("GMAIL_UNITS_PER_MINUTE", 4800),
             max_body_chars=_body_chars_env("MAX_BODY_CHARS", 2000),
+            admin=_on_off_env("ADMIN", default=True),
         )
 
 
@@ -98,6 +101,16 @@ def _tools_mode(raw: str) -> Literal["all", "read-only"]:
     if value == "read-only":
         return "read-only"
     raise ValueError(f"TOOLS must be 'all' or 'read-only', got {raw!r}")
+
+
+def _on_off_env(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name, "")
+    value = raw.strip().lower()
+    if not value:
+        return default
+    if value in ("on", "off"):
+        return value == "on"
+    raise ValueError(f"{name} must be 'on' or 'off', got {raw!r}")
 
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})

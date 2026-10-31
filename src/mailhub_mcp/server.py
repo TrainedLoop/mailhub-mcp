@@ -12,6 +12,8 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mailhub_mcp.admin_web.context import build_admin_context
+from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
 from mailhub_mcp import prompts
@@ -771,6 +773,18 @@ async def health(request: Request) -> JSONResponse:
     return JSONResponse({"status": "ok"})
 
 
+# The owner admin page (ADMIN=on): sign-in, account status, linking and removal. With ADMIN=off no
+# route under /admin exists and every /admin path answers 404.
+if settings.admin:
+    for admin_route in admin_routes(build_admin_context(settings, registry, journal)):
+        # methods=None (every method) reaches the admin wrapper, which answers 405 itself.
+        mcp.custom_route(
+            admin_route.path,
+            methods=admin_route.methods,  # type: ignore[arg-type]
+            include_in_schema=False,
+        )(admin_route.endpoint)
+
+
 def allowed_hosts() -> list[str]:
     return [urlparse(settings.public_base_url).hostname, "localhost", "127.0.0.1"]
 
@@ -785,6 +799,9 @@ def main() -> None:
         transport="http",
         host="0.0.0.0",
         port=settings.port,
+        # No access log: it records paths with query strings, so OAuth codes and states from the
+        # callbacks would land in the container logs. Tool calls and admin actions log themselves.
+        uvicorn_config={"access_log": False},
         **run_options(),
     )
 

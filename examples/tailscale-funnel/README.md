@@ -14,7 +14,7 @@ Paths below assume the project lives in `/opt/mailhub-mcp` on the host. Change t
 
 In the Tailscale admin console, enable HTTPS certificates for your tailnet and allow Funnel for the host in the tailnet policy (the `funnel` node attribute). Your public URL will be `https://<host>.<tailnet>.ts.net`.
 
-Use it as `PUBLIC_BASE_URL` in `.env` and register `https://<host>.<tailnet>.ts.net/auth/callback` as the redirect URI of the Google Web client.
+Use it as `PUBLIC_BASE_URL` in `.env` and register these redirect URIs on the Google Web client: `https://<host>.<tailnet>.ts.net/auth/callback` (connector login), `https://<host>.<tailnet>.ts.net/admin/auth/callback` and `https://<host>.<tailnet>.ts.net/admin/oauth/callback` (admin page sign-in and mailbox linking).
 
 ## 2. Why the port is loopback-only
 
@@ -74,13 +74,13 @@ rsync -av --rsync-path='sudo rsync' --exclude .venv --exclude .git \
   ./ <host>:/opt/mailhub-mcp/
 ```
 
-`--rsync-path='sudo rsync'` needs passwordless sudo for rsync on the host. On first install, copy the account credentials separately (see the tutorial's "Add an account") and create `.env` there. Then run the compose command from step 3 on the host.
+`--rsync-path='sudo rsync'` needs passwordless sudo for rsync on the host. On first install, create `.env` there and run the compose command from step 3 on the host, then link your mailboxes at `https://<host>.<tailnet>.ts.net/admin` (tutorial step 3); the server writes the credentials itself, so there is nothing to copy. If you link with the command-line alternative (`mailhub-authorize` on your workstation), copy the credentials separately, for example with `rsync -av --rsync-path='sudo rsync' --chmod=D700,F600 secrets/accounts/ <host>:/opt/mailhub-mcp/secrets/accounts/` followed by `sudo chown -R 10001:10001 /opt/mailhub-mcp/secrets/accounts` on the host (see the tutorial's step 5 and "Without the admin page").
 
 ## More than one person
 
 Every login in `ALLOWED_EMAILS` sees every linked mailbox, so a second person gets a second instance, not a second address in the first one's `.env`. On the same host:
 
-1. Install a second copy, for example in `/opt/mailhub-mcp-2`, with its own `.env`, `secrets/accounts/` (their mailboxes) and `data/` (tutorial steps 3 to 6). Never share `secrets/` or `data/` between instances.
+1. Install a second copy, for example in `/opt/mailhub-mcp-2`, with its own `.env`, `secrets/accounts/` (their mailboxes, linked at their instance's `/admin`) and `data/` (tutorial steps 3 to 6). Never share `secrets/` or `data/` between instances.
 2. In its `.env`, besides their own `ALLOWED_EMAILS` and `JWT_SIGNING_KEY`, set a distinct local port, container, Compose project and network:
 
    ```
@@ -99,10 +99,10 @@ Every login in `ALLOWED_EMAILS` sees every linked mailbox, so a second person ge
    tailscale funnel status
    ```
 
-   Its public URL is `https://<host>.<tailnet>.ts.net:8443`. Set `PUBLIC_BASE_URL=https://<host>.<tailnet>.ts.net:8443` in the second `.env`, and add `https://<host>.<tailnet>.ts.net:8443/auth/callback` as an authorized redirect URI of the Google Web client (one Web client can list both instances' redirect URIs).
+   Its public URL is `https://<host>.<tailnet>.ts.net:8443`. Set `PUBLIC_BASE_URL=https://<host>.<tailnet>.ts.net:8443` in the second `.env`, and add `https://<host>.<tailnet>.ts.net:8443/auth/callback`, `https://<host>.<tailnet>.ts.net:8443/admin/auth/callback` and `https://<host>.<tailnet>.ts.net:8443/admin/oauth/callback` as authorized redirect URIs of the Google Web client (one Web client can list both instances' redirect URIs).
 4. Start it from its own directory with the same compose command as step 3.
 5. List both subnets for the firewall: edit the installed unit with `sudo systemctl edit --full mailhub-mcp-firewall.service`, add `Environment="SUBNETS=172.31.0.0/24 172.31.1.0/24"` under `[Service]`, then `sudo systemctl restart mailhub-mcp-firewall.service`. Repeat the checks of step 5 from the second directory, using `172.31.1.1` as the host-side address, and check that the first container cannot reach the second (`docker compose exec mailhub-mcp python -c "import socket; socket.create_connection(('172.31.1.2', 8742), 3)"` from the first directory must time out; check the second container's address with `docker inspect mailhub-mcp-2`).
-6. The second person adds their own custom connector in claude.ai with `https://<host>.<tailnet>.ts.net:8443/mcp` and logs in with their own Google account.
+6. The second person links their mailboxes at `https://<host>.<tailnet>.ts.net:8443/admin`, then adds their own custom connector in claude.ai with `https://<host>.<tailnet>.ts.net:8443/mcp` and logs in with their own Google account.
 
 When deploying updates (step 6), rsync to each instance's directory; `.env`, `secrets/` and `data/` are excluded, so each keeps its own settings.
 

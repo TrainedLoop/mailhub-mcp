@@ -39,6 +39,8 @@ class Account:
 class AccountRegistry:
     def __init__(self, accounts_dir: Path, providers: Mapping[str, ProviderFactory]):
         self._accounts: dict[str, Account] = {}
+        self._providers = providers
+        self._lock = threading.Lock()
         if not accounts_dir.is_dir():
             log.warning("accounts directory not found: %s", accounts_dir)
             return
@@ -71,14 +73,32 @@ class AccountRegistry:
                 raise DuplicateAlias(alias, alias_paths)
         self._accounts = found
 
+    def upsert(self, alias: str, provider_name: str, credential_path: Path) -> Account:
+        """Add or replace an account. A replaced alias gets a fresh Account, dropping cached credentials."""
+        factory = self._providers[provider_name]  # KeyError for an unknown provider
+        account = Account(alias, provider_name, credential_path, factory)
+        with self._lock:
+            self._accounts[alias] = account
+        return account
+
+    def remove(self, alias: str) -> None:
+        with self._lock:
+            if alias not in self._accounts:
+                raise AccountNotFound(alias, sorted(self._accounts))
+            del self._accounts[alias]
+
     def all(self) -> list[Account]:
-        return [self._accounts[a] for a in sorted(self._accounts)]
+        with self._lock:
+            return [self._accounts[a] for a in sorted(self._accounts)]
 
     def aliases(self) -> list[str]:
-        return sorted(self._accounts)
+        with self._lock:
+            return sorted(self._accounts)
 
     def get(self, alias: str) -> Account:
-        try:
-            return self._accounts[alias]
-        except KeyError:
-            raise AccountNotFound(alias, self.aliases()) from None
+        with self._lock:
+            account = self._accounts.get(alias)
+            known = sorted(self._accounts)
+        if account is None:
+            raise AccountNotFound(alias, known)
+        return account

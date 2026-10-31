@@ -23,7 +23,8 @@ from mailhub_mcp.providers.base import GetResult, SearchResult
 from mailhub_mcp.providers.gmail import api
 from mailhub_mcp.providers.gmail.parsing import full, summarize
 
-SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
+GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.modify"
+SCOPES = [GMAIL_SCOPE]
 
 _FORMATS = {"summary": "metadata", "full": "full", "labels": "minimal"}
 

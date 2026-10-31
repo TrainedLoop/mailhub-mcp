@@ -751,13 +751,15 @@ wheels = [
 
 [[package]]
 name = "mailhub-mcp"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "google-api-python-client" },
     { name = "google-auth" },
     { name = "pydantic" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -772,11 +774,13 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = ">=44" },
     { name = "fastmcp", specifier = ">=4.1.4,<5" },
     { name = "google-api-python-client", specifier = ">=2.150" },
     { name = "google-auth", specifier = ">=2.35" },
     { name = "google-auth-oauthlib", marker = "extra == 'authorize'" },
     { name = "pydantic", specifier = ">=2.11" },
+    { name = "requests", specifier = ">=2.32" },
 ]
 provides-extras = ["authorize"]
 

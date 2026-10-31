@@ -106,6 +106,19 @@ class Journal:
     def is_undone(self, change_id: str) -> bool:
         return any(e.get("undo_of") == change_id for e in self._entries())
 
+    def undoable_count(self, account: str) -> int:
+        """Label changes for `account` that are not undo entries and have not been undone."""
+        entries = self._entries()
+        undone = {e.get("undo_of") for e in entries}
+        return sum(
+            1
+            for e in entries
+            if e.get("account") == account
+            and "kind" not in e
+            and e.get("undo_of") is None
+            and e["change_id"] not in undone
+        )
+
 
 def _aware(moment: datetime) -> datetime:
     return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)

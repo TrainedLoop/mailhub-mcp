@@ -10,8 +10,17 @@ src/mailhub_mcp/
   cli.py           mailhub-authorize: links an account
   admin.py         mailhub-admin: out-of-band approval of preference proposals, `accounts` health check
   prompts.py       Text of the MCP prompts (registered in server.py)
+  admin_web/       Owner admin page at /admin (see "Admin page")
+    routes.py      admin_routes(ctx): sign-in, sign-out, status page, security headers, catch-all 404
+    accounts_routes.py  Link, re-link and remove
+    context.py     AdminContext and build_admin_context(settings, registry, journal)
+    session.py     Signed session and flow cookies, CSRF, re-authentication window, PKCE
+    identity.py    Owner sign-in (Google OpenID Connect)
+    credentials.py Credential file writes and the writability probe
+    pages.py, style.css  Server-rendered HTML, no JavaScript
   core/            Provider-agnostic logic
     accounts.py    Account discovery and registry
+    account_book.py  Alias to mailbox address record (data/accounts.json)
     aggregate.py   Fan-out across accounts, per-account error isolation
     organize.py    Guarded, journaled label changes, daily cap and undo
     content.py     Sanitizing, untrusted markers and suspicion heuristics
@@ -23,12 +32,12 @@ src/mailhub_mcp/
     errors.py      Shared exceptions
     overview.py    Inbox overview aggregation
   providers/
-    base.py        MailProvider protocol, GetResult, SearchResult
-    __init__.py    PROVIDERS and AUTHORIZERS registries
-    gmail/         Gmail implementation and its authorize flow
+    base.py        MailProvider and Linker protocols, GetResult, SearchResult, LinkResult
+    __init__.py    PROVIDERS and AUTHORIZERS registries, provider_factories(), linkers()
+    gmail/         Gmail implementation, its authorize flow (CLI) and its web Linker
 ```
 
-**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse. Providers may import only `core.models`, `core.errors` and `core.content` from it.
+**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse. Providers may import only `core.models`, `core.errors` and `core.content` from it. `admin_web` is imported only by its own modules and `server.py` (which uses only `build_admin_context` and `admin_routes`), and `admin_web.credentials`, the only code that writes credential files, only by `admin_web/routes.py`, `admin_web/accounts_routes.py` and `admin_web/context.py`; `tests/admin_web/test_boundary.py` enforces it, so no MCP tool module can reach those writes.
 
 ## Models
 
@@ -44,7 +53,21 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 
 ## Accounts
 
-`AccountRegistry` scans `<accounts_dir>/<provider>/<alias>.json`. The folder name picks the provider; the file name (without `.json`) is the alias and must match `^[a-z0-9][a-z0-9-]{0,31}$`. Unknown provider folders, loose files and invalid aliases are skipped with a warning. The same alias under two providers raises `DuplicateAlias` at startup. Providers are built lazily on first use, so a bad credential file affects only its account. Accounts are read once at startup.
+`AccountRegistry` scans `<accounts_dir>/<provider>/<alias>.json`. The folder name picks the provider; the file name (without `.json`) is the alias and must match `^[a-z0-9][a-z0-9-]{0,31}$`. Unknown provider folders, loose files and invalid aliases are skipped with a warning. The same alias under two providers raises `DuplicateAlias` at startup. Providers are built lazily on first use, so a bad credential file affects only its account. The folder is scanned once at startup; after that only the admin page changes the registry, through `upsert(alias, provider_name, credential_path)` and `remove(alias)` under a lock (`all()`, `aliases()` and `get()` read a consistent snapshot, and a tool call already holding an `Account` finishes with it). Files added or deleted by hand are picked up at the next restart.
+
+`AccountBook` (`core/account_book.py`) keeps `data/accounts.json`, next to the journal: for each alias its provider, mailbox address, `linked_at` and, after removal, `removed_at`. Writes are atomic. Entries survive removal, so a later re-link of the alias can be checked against the recorded address; an unreadable file raises instead of resetting, since resetting would drop that check. The status page fills in the address of accounts linked before the book existed.
+
+## Admin page
+
+`ADMIN=on|off` (default `on`). When on, `server.py` builds an `AdminContext` with `build_admin_context(settings, registry, journal)` and registers every route of `admin_routes(ctx)` with `mcp.custom_route(..., include_in_schema=False)`, like `/health`. When off, nothing under `/admin` exists and every path answers 404.
+
+- **Owner sign-in.** A separate OpenID Connect authorization-code flow on the existing Google Web client (not the connector's OAuth proxy): redirect `<PUBLIC_BASE_URL>/admin/auth/callback`, scopes `openid email`, `state`, `nonce` and PKCE. The ID token is verified (signature, `aud`, `iss`, expiry with 10 seconds of clock skew, `nonce`), and `email_verified` plus an email in `ALLOWED_EMAILS` are required. The request asks for the `auth_time` claim, which Google sends only when the session age claim is enabled in the Google Auth Platform console; without it the time of the Google round trip counts as the last authentication, and the status page recommends the option.
+- **Session.** A cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/admin`) signed with HMAC-SHA256 under a key derived from `JWT_SIGNING_KEY` with HKDF (label `mailhub-admin-session`, so it never equals the connector's key). It holds the email, the login time and the last authentication time and expires 8 hours after login. There is no server-side session state; every request re-checks the signature, the expiry and that the email is still allowed. Rotating `JWT_SIGNING_KEY` ends every session.
+- **Actions.** Link, re-link and remove are POSTs that require a CSRF token bound to the session, an `Origin` (or `Referer`) matching `PUBLIC_BASE_URL`, and a Google authentication under 5 minutes old; otherwise the owner goes through Google and back to the same action. Linking uses the provider's `Linker`: redirect `<PUBLIC_BASE_URL>/admin/oauth/callback`, a signed flow cookie binding the session, the action, the alias and the provider for 10 minutes, and single-use states. The callback refuses, writing nothing, without a refresh token, without the Gmail scope, without a verified email, for an address linked under another alias, for an alias taken meanwhile, and on re-link for a mailbox other than the recorded one (with no address recorded, the one the old credential still answers, if it does; only when it does not is the re-link unchecked, once). On success it writes the credential (temporary file with mode 600 in the same folder, then rename), calls `registry.upsert` and records the account in the book; if a later step fails, the earlier ones are rolled back and the page says whether the rollback succeeded. Removal first records the address the credential answers when none is on record, then revokes the token at Google (`Linker.revoke`), deletes the credential, calls `registry.remove` and records `removed_at`; a failed revocation still removes the account and links to Google's permissions page. A removed alias comes back only through re-link. Admin network calls (code exchanges, revocation, status checks, address probes) run on their own limiter of 4 threads, apart from the default pool the tools use.
+- **Writable credentials.** At startup `credentials_writable` creates and removes a probe file in each provider folder. If that fails, the server logs a warning and `/admin` shows status only ("credentials are read-only: linking is disabled"); the command-line flow keeps working.
+- **Status.** `GET /admin` lists each account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`) from one cheap check per account (Gmail `users.getProfile`, 10 seconds at most), plus removed aliases. `different mailbox` means the credential answers for another address than the one recorded (a file placed by `mailhub-authorize` or by hand); the book is not changed.
+- **Browser hardening.** Server-rendered HTML, a small stylesheet at `/admin/style.css`, no JavaScript, every value HTML-escaped. Every response under `/admin`, including unknown paths (404), unlisted methods (405) and errors (no stack traces), carries `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. `same-origin` rather than `no-referrer`, because under `no-referrer` browsers send `Origin: null` on the page's own form POSTs and the same-origin check refuses it.
+- **Audit log.** Sign-ins (accepted, refused, failed with a fixed reason code such as `unverified-email`, and cancelled), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
 
 ## The MailProvider interface
 
@@ -150,7 +173,7 @@ Every email is text written by a third party, so what reaches the model is sanit
 
 ## Health
 
-`GET /health` is a FastMCP custom route returning `{"status":"ok"}`. It needs no authentication and reveals nothing else; it is the only endpoint without login (every other endpoint requires the Google OAuth login). `main()` passes an allowed-hosts list (the public host name, `localhost`, `127.0.0.1`) to FastMCP, but FastMCP's Host/Origin protection is not enabled by default, so no Host check runs in production; `/health` answers for any Host. If you enable the protection, `/health` still passes for `127.0.0.1` and `localhost`, which the Docker HEALTHCHECK uses. The Dockerfile `HEALTHCHECK` calls it with the Python standard library every 30 seconds (timeout 5 seconds, 3 retries) on `$PORT` (default 8742). It only proves the process answers HTTP; it does not touch the mailboxes. `mailhub-admin accounts` does: it loads the account registry from `ACCOUNTS_DIR` (default `/secrets/accounts`, no OAuth settings needed), asks each account for its address and prints `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>`. It exits 0 when all accounts are ok, 1 when any failed and 2 when the accounts cannot be loaded.
+`GET /health` is a FastMCP custom route returning `{"status":"ok"}`. It needs no authentication and reveals nothing else. Apart from it, only the admin sign-in flow (the signed-out `/admin` page, its stylesheet, `/admin/login` and the Google callbacks) answers without a session; every other endpoint requires the Google OAuth login (`/mcp`) or the owner session (`/admin`). `main()` passes an allowed-hosts list (the public host name, `localhost`, `127.0.0.1`) to FastMCP, but FastMCP's Host/Origin protection is not enabled by default, so no Host check runs in production; `/health` answers for any Host. If you enable the protection, `/health` still passes for `127.0.0.1` and `localhost`, which the Docker HEALTHCHECK uses. The Dockerfile `HEALTHCHECK` calls it with the Python standard library every 30 seconds (timeout 5 seconds, 3 retries) on `$PORT` (default 8742). It only proves the process answers HTTP; it does not touch the mailboxes. `mailhub-admin accounts` does: it loads the account registry from `ACCOUNTS_DIR` (default `/secrets/accounts`, no OAuth settings needed), asks each account for its address and prints `alias  provider  ok  <address>` or `alias  provider  ERROR  <message>`. It exits 0 when all accounts are ok, 1 when any failed and 2 when the accounts cannot be loaded.
 
 ## Capability limits
 
@@ -172,4 +195,5 @@ Every email is text written by a third party, so what reaches the model is sanit
 1. Create `providers/<name>/` with a class implementing `MailProvider`, constructed as `(alias, credential_path)`, and `authorize(client_secret: Path) -> str` returning the credential file contents.
 2. Run the shared contract suite in `tests/providers/contract.py` against it (see how the Gmail tests parametrize it).
 3. Register the class in `PROVIDERS` and the function in `AUTHORIZERS` in `providers/__init__.py`. A test requires both to have the same keys.
-4. Link accounts with `mailhub-authorize <name> <client_secret> <alias>`; credentials land in `secrets/accounts/<name>/<alias>.json`.
+4. For the admin page, implement the `Linker` protocol (`authorization_url`, `complete` returning a `LinkResult` with the credential and the mailbox address, `revoke`, and a `label`) and add it to `linkers()` in `providers/__init__.py`.
+5. Link accounts on `/admin`, or with `mailhub-authorize <name> <client_secret> <alias>`; credentials land in `secrets/accounts/<name>/<alias>.json`.

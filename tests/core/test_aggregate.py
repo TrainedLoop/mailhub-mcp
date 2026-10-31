@@ -35,7 +35,7 @@ def test_one_failing_account_does_not_break_others():
 
     out = asyncio.run(fan_out([acc("ok"), acc("broken")], fn))
     assert [r.account for r in out["results"]] == ["ok"]
-    assert out["errors"]["broken"] == "invalid or revoked credentials: run mailhub-authorize gmail <client_secret.json> broken again"
+    assert out["errors"]["broken"] == "invalid or revoked credentials: re-link broken on the admin page (/admin), or run mailhub-authorize gmail <client_secret.json> broken again"
 
 
 def test_results_merged_newest_first():
@@ -87,7 +87,7 @@ def test_resolve_empty_list_means_all():
 
 
 def test_describe_mailhub_error_has_no_class_name():
-    assert describe_error(expired("a"), "a") == "invalid or revoked credentials: run mailhub-authorize gmail <client_secret.json> a again"
+    assert describe_error(expired("a"), "a") == "invalid or revoked credentials: re-link a on the admin page (/admin), or run mailhub-authorize gmail <client_secret.json> a again"
 
 
 def test_describe_other_errors():
@@ -100,7 +100,7 @@ def test_run_one_wraps_in_core_error():
 
     with pytest.raises(MailhubError) as e:
         asyncio.run(run_one(acc("a"), fn))
-    assert str(e.value) == "a: invalid or revoked credentials: run mailhub-authorize gmail <client_secret.json> a again"
+    assert str(e.value) == "a: invalid or revoked credentials: re-link a on the admin page (/admin), or run mailhub-authorize gmail <client_secret.json> a again"
 
 
 def test_run_one_returns_value():

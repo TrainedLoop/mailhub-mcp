@@ -75,7 +75,7 @@ The Web client's id and secret go into the credential file, as the Desktop clien
 
 `POST /admin/accounts/<alias>/relink` runs the same flow with action `relink` for an alias that is linked or recorded as removed. The address returned must equal the one in `accounts.json`; otherwise the callback refuses and the existing file is left untouched. On success it replaces the file atomically, `upsert` drops the cached provider (and its cached credentials), and `removed_at` is cleared.
 
-An alias with no address on record (an account linked before this design whose credential no longer works, so its address could not be recorded) can be re-linked once without the address check. The page says so, and the address is recorded from then on.
+An alias with no address on record (an account linked before this design whose credential no longer works, so its address could not be recorded) can be re-linked once without the address check. The page says so, and the address is recorded from then on. Before that, the server asks the old credential for its address: at the re-link, if it still answers, the new mailbox must match it; at removal, an answer is recorded before the token is revoked.
 
 ### Removing a mailbox
 
@@ -92,7 +92,7 @@ If revocation fails (network, already revoked), steps 2 to 4 still run and the p
 
 ### Status page
 
-`GET /admin` lists every account with its alias, provider, address and state (`ok`, `credential expired`, `error`), with re-link and remove buttons, plus removed aliases with a re-link button. The state comes from a cheap check per account (Gmail `users.getProfile`, 1 quota unit) run when the page loads. The same check fills in `accounts.json` for accounts linked before this design.
+`GET /admin` lists every account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`), with re-link and remove buttons, plus removed aliases with a re-link button. The state comes from a cheap check per account (Gmail `users.getProfile`, 1 quota unit) run when the page loads. The same check fills in `accounts.json` for accounts linked before this design.
 
 ### Accounts directory permissions
 
@@ -103,7 +103,9 @@ The compose file mounts `secrets/accounts` read-write. At startup the server che
 Server-rendered HTML with a small embedded stylesheet, no JavaScript, usable on a phone. Every value (alias, address, error text) is HTML-escaped. All `/admin` responses carry:
 
 - `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`
-- `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`
+- `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cache-Control: no-store`
+
+`same-origin`, not `no-referrer`: under `no-referrer` browsers send `Origin: null` and no Referer on the page's own form POSTs, and the same-origin check refuses an opaque origin, so every action would fail. `same-origin` still sends no referrer to other sites.
 
 ### Errors
 
