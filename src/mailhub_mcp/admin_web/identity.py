@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from urllib.parse import urlencode
 
 import requests
+from google.auth.exceptions import GoogleAuthError
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 
@@ -96,7 +97,7 @@ class GoogleIdentity:
             raise LoginError(_FAILED)
         try:
             claims = self._verify(raw, google_requests.Request(), self._client_id)
-        except ValueError:
+        except (ValueError, GoogleAuthError):
             raise LoginError(_FAILED) from None
         if claims.get("nonce") != nonce:
             raise LoginError(_FAILED)

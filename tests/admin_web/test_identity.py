@@ -3,6 +3,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 import requests
+from google.auth.exceptions import TransportError
 
 from mailhub_mcp.admin_web.identity import GoogleIdentity, LoginError, OwnerLogin
 
@@ -148,3 +149,9 @@ def test_verify_value_error():
     with pytest.raises(LoginError) as e:
         complete(ident)
     assert "tok" not in str(e.value)
+
+
+def test_verify_transport_error():
+    ident, _ = make(verify_exc=TransportError("certs fetch failed"))
+    with pytest.raises(LoginError, match="Google sign-in failed"):
+        complete(ident)
