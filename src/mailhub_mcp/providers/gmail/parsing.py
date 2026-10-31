@@ -2,9 +2,8 @@
 
 import base64
 
-from mailhub_mcp.core.content import clean_text, html_to_safe_text, parse_unsubscribe
+from mailhub_mcp.core.content import MAX_BODY_CHARS, clean_text, html_to_safe_text, parse_unsubscribe, truncate_body
 
-MAX_BODY_CHARS = 20_000
 METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe", "List-Unsubscribe-Post", "Reply-To"]
 CATEGORIES = {
     "CATEGORY_PERSONAL": "primary",
@@ -44,9 +43,7 @@ def _extract_body(payload: dict) -> tuple[str, list[dict], int]:
         text = clean_text("\n".join(plain))
     else:
         text, hidden_removed = html_to_safe_text("\n".join(html))
-    if len(text) > MAX_BODY_CHARS:
-        text = text[:MAX_BODY_CHARS] + "\n[... truncated ...]"
-    return text, attachments, hidden_removed
+    return truncate_body(text, MAX_BODY_CHARS), attachments, hidden_removed
 
 
 def _headers(payload: dict) -> dict[str, str]:

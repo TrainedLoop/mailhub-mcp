@@ -575,6 +575,9 @@ def test_settings_tools_and_cap(monkeypatch):
     s = Settings.from_env()
     assert s.tools_mode == "all" and s.max_changes_per_day == 2000
     assert s.gmail_units_per_minute == 4800
+    assert s.max_body_chars == 2000
+    monkeypatch.setenv("MAX_BODY_CHARS", "0")
+    assert Settings.from_env().max_body_chars == 0
     monkeypatch.setenv("TOOLS", "read-only")
     monkeypatch.setenv("MAX_CHANGES_PER_DAY", "5")
     monkeypatch.setenv("GMAIL_UNITS_PER_MINUTE", "12000")
@@ -586,7 +589,8 @@ def test_settings_tools_and_cap(monkeypatch):
 @pytest.mark.parametrize(
     "name,value",
     [("TOOLS", "readonly"), ("TOOLS", "write"), ("MAX_CHANGES_PER_DAY", "lots"), ("MAX_CHANGES_PER_DAY", "-1"),
-     ("GMAIL_UNITS_PER_MINUTE", "0"), ("GMAIL_UNITS_PER_MINUTE", "-5"), ("GMAIL_UNITS_PER_MINUTE", "fast")],
+     ("GMAIL_UNITS_PER_MINUTE", "0"), ("GMAIL_UNITS_PER_MINUTE", "-5"), ("GMAIL_UNITS_PER_MINUTE", "fast"),
+     ("MAX_BODY_CHARS", "-1"), ("MAX_BODY_CHARS", "long")],
 )
 def test_settings_invalid_values_raise(monkeypatch, name, value):
     from mailhub_mcp.config import Settings
@@ -1367,3 +1371,76 @@ def test_count_messages_is_read_only_and_describes_cost():
     assert t.annotations.read_only_hint is True
     assert "5" in t.description and "500" in t.description and "modify_by_query" in t.description
     assert "count_messages" in server.READ_ONLY_TOOLS and "count_messages" in server.ALL_TOOL_NAMES
+
+
+TRUNCATED = "\n[... truncated ...]"
+
+
+def _body_text(m) -> str:
+    """The body of a presented message, without untrusted markers."""
+    match = re.fullmatch(r"\[untrusted:([0-9a-f]{12})\]\n(.*)\n\[/untrusted:\1\]", m["body"], re.S)
+    assert match, m["body"]
+    return match.group(2)
+
+
+def test_read_tools_shorten_bodies_by_default(fakes):
+    long = "a" * 5000
+    fakes.a.add_message("L1", thread_id="LT", body=long, labels=["INBOX"])
+    assert server.settings.max_body_chars == 2000
+    one = call("read_email", {"account": "alice-personal", "message_id": "L1"})
+    assert _body_text(one) == "a" * 2000 + TRUNCATED
+    many = call("read_emails", {"account": "alice-personal", "message_ids": ["L1"]})["messages"][0]
+    assert _body_text(many) == "a" * 2000 + TRUNCATED
+    th = call("read_thread", {"account": "alice-personal", "thread_id": "LT"})["messages"][0]
+    assert _body_text(th) == "a" * 2000 + TRUNCATED
+
+
+def test_short_bodies_are_untouched(fakes):
+    fakes.a.add_message("S1", body="short", labels=["INBOX"])
+    assert _body_text(call("read_email", {"account": "alice-personal", "message_id": "S1"})) == "short"
+
+
+def test_max_body_chars_explicit_and_zero_means_full_up_to_hard_cap(fakes):
+    fakes.a.add_message("L1", thread_id="LT", body="b" * 5000, labels=["INBOX"])
+    fakes.a.add_message("H1", body="c" * 30000, labels=["INBOX"])
+    out = call("read_email", {"account": "alice-personal", "message_id": "L1", "max_body_chars": 3000})
+    assert _body_text(out) == "b" * 3000 + TRUNCATED
+    out = call("read_emails", {"account": "alice-personal", "message_ids": ["L1"], "max_body_chars": 0})
+    assert _body_text(out["messages"][0]) == "b" * 5000
+    out = call("read_thread", {"account": "alice-personal", "thread_id": "LT", "max_body_chars": 10})
+    assert _body_text(out["messages"][0]) == "b" * 10 + TRUNCATED
+    full = call("read_email", {"account": "alice-personal", "message_id": "H1", "max_body_chars": 0})
+    assert _body_text(full) == "c" * 20000 + TRUNCATED
+    big = call("read_email", {"account": "alice-personal", "message_id": "H1", "max_body_chars": 50000})
+    assert _body_text(big) == "c" * 20000 + TRUNCATED
+
+
+def test_max_body_chars_negative_refused(fakes):
+    with pytest.raises(ToolError, match="max_body_chars"):
+        call("read_email", {"account": "alice-personal", "message_id": "m1", "max_body_chars": -1})
+
+
+def test_max_body_chars_default_from_settings(fakes, monkeypatch):
+    monkeypatch.setattr(server, "settings", dataclasses.replace(server.settings, max_body_chars=0))
+    fakes.a.add_message("L1", body="d" * 5000, labels=["INBOX"])
+    assert _body_text(call("read_email", {"account": "alice-personal", "message_id": "L1"})) == "d" * 5000
+
+
+def test_suspicion_uses_text_beyond_the_cut(fakes):
+    fakes.a.add_message("X1", thread_id="XT", body="x" * 3000 + " " + INJECTION, labels=["INBOX"])
+    for out in (
+        call("read_email", {"account": "alice-personal", "message_id": "X1"}),
+        call("read_emails", {"account": "alice-personal", "message_ids": ["X1"]})["messages"][0],
+        call("read_thread", {"account": "alice-personal", "thread_id": "XT"})["messages"][0],
+    ):
+        assert "Ignore previous" not in out["body"]
+        assert out["suspicious"] and "instruction_override" in out["suspicious_reasons"]
+
+
+def test_read_tool_descriptions_mention_max_body_chars():
+    async def go():
+        async with Client(server.mcp) as c:
+            return {t.name: t for t in await c.list_tools()}
+    tools = asyncio.run(go())
+    for name in ("read_email", "read_emails", "read_thread"):
+        assert "max_body_chars" in tools[name].description

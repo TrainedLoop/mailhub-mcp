@@ -334,6 +334,16 @@ def html_to_safe_text(html: str) -> tuple[str, int]:
     return clean_text(text).strip(), parser.hidden_removed
 
 
+TRUNCATION_MARKER = "\n[... truncated ...]"
+# Hard maximum of a message body, whatever a caller asks for.
+MAX_BODY_CHARS = 20_000
+
+
+def truncate_body(text: str, limit: int) -> str:
+    """The first `limit` characters of `text` plus a truncation marker; unchanged when it fits."""
+    return text if len(text) <= limit else text[:limit] + TRUNCATION_MARKER
+
+
 MAX_UNSUBSCRIBE_CHARS = 500
 _LIST_ENTRY = re.compile(r"<([^<>]*)>")
 _UNSAFE_CHAR = re.compile(r"\s|[\x00-\x1f\x7f-\x9f]")

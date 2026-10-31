@@ -77,7 +77,7 @@ All 17 are defined in `server.py`. With `TOOLS=read-only` only the ten marked re
 |---|---|---|
 | `list_accounts` | read-only | Aliases with email, provider, query hint and credential status |
 | `search_emails` | read-only | Search all or selected accounts; max 100 per account |
-| `read_email` | read-only | One message in full |
+| `read_email` | read-only | One message; body cut to `max_body_chars` (default 2000) |
 | `read_emails` | read-only | Up to 25 messages of one account |
 | `read_thread` | read-only | A whole thread |
 | `inbox_overview` | read-only | Per-account totals, unread, newsletters, categories, top 30 senders; scans 200 messages by default (max 2000) |
@@ -123,6 +123,8 @@ Every email is text written by a third party, so what reaches Claude is sanitize
 **What is removed.** `html_to_safe_text(html)` returns the visible text and a count of removed hidden characters. It drops `<head>`, `<script>`, `<style>`, `<template>`, `<noscript>`, comments, elements hidden by inline style (`display:none`, `visibility:hidden`, `opacity:0`, a font size of zero or tiny, `max-height:0` with `overflow:hidden`) and elements with the `hidden` attribute or `aria-hidden="true"`. It does not compare colors. `clean_text(s)` removes zero-width and bidirectional control characters, Unicode tag characters, other control characters except newline and tab, and collapses runs of blank lines. The Gmail provider applies `html_to_safe_text` and `clean_text` to the body and `clean_text` to subject, sender, recipients, date, snippet, attachment names and attachment MIME types.
 
 **Markers.** Each tool response uses one random nonce of 12 hex characters. `body` and `snippet` are wrapped as `[untrusted:<nonce>]` and `[/untrusted:<nonce>]` on their own lines. Any `[untrusted:` or `[/untrusted:` already inside the text is rewritten to `[untrusted_:` and `[/untrusted_:` first, so an email cannot forge a closing marker. The descriptions of the read tools explain the markers.
+
+**Short bodies.** `read_email`, `read_emails` and `read_thread` return at most `max_body_chars` characters of each body (default from `MAX_BODY_CHARS`, 2000; 0 means the full body), never more than the hard maximum of 20,000 that the provider already applies; a cut body ends with `[... truncated ...]`. The server cuts the body only after the suspicion assessment, which always runs on the full cleaned body, so a cut never hides an injection signal.
 
 **Flags.** Each message gets `suspicious` and `suspicious_reasons`, computed by `assess` from the sender-controlled text fields (subject, From, To, Cc, Reply-To, snippet, body and attachment names) and the hidden-text count. Reasons: `mentions_tools` (the name of any mailhub-mcp tool, in any mode), `instruction_override` (for example "ignore previous instructions", in English and Portuguese), `addresses_assistant`, `requests_action` (forward, create a draft, change preferences or settings, "reply to ... with") and `hidden_text` (more than 200 hidden characters removed). The flags are a heuristic aid, not a guarantee. Because they are computed in the server, they are also what `create_draft` uses to refuse a suspicious thread.
 

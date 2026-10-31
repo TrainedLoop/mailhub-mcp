@@ -7,6 +7,7 @@ from mailhub_mcp.core.content import (
     clean_text,
     html_to_safe_text,
     new_nonce,
+    truncate_body,
     wrap_untrusted,
 )
 
@@ -583,3 +584,8 @@ def test_unsubscribe_one_click_logic():
     assert parse_unsubscribe("<https://x.com/u>", "List-Unsubscribe=One-Click; x")["one_click"] is False
     assert parse_unsubscribe("<https://x.com/u>", "")["one_click"] is False
     assert parse_unsubscribe("<mailto:u@x.com>", post)["one_click"] is False
+
+
+def test_truncate_body():
+    assert truncate_body("abc", 3) == "abc"
+    assert truncate_body("abcd", 3) == "abc\n[... truncated ...]"

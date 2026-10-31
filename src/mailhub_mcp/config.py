@@ -20,6 +20,8 @@ class Settings:
     tools_mode: Literal["all", "read-only"] = "all"
     # Gmail quota units each mailbox may spend per minute (80% of the 6,000 per-user limit).
     gmail_units_per_minute: int = 4800
+    # Default length of message bodies returned by the read tools; 0 means the full body.
+    max_body_chars: int = 2000
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -37,6 +39,7 @@ class Settings:
             max_changes_per_day=_int_env("MAX_CHANGES_PER_DAY", 2000),
             tools_mode=_tools_mode(os.environ.get("TOOLS", "all")),
             gmail_units_per_minute=_positive_int_env("GMAIL_UNITS_PER_MINUTE", 4800),
+            max_body_chars=_int_env("MAX_BODY_CHARS", 2000),
         )
 
 
