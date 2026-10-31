@@ -14,6 +14,8 @@
   --ok: #1d6b3a;
   --warn: #8a5a00;
   --focus: #b3122c;
+  --frame: #13203a;
+  --frame-shadow: #c9d0db;
   color-scheme: light;
 }
 
@@ -31,6 +33,8 @@
     --ok: #6fd498;
     --warn: #f0c060;
     --focus: #ff9aa2;
+    --frame: #4a5b80;
+    --frame-shadow: #070c18;
     color-scheme: dark;
   }
 }
@@ -181,6 +185,11 @@ h2 {
   text-wrap: balance;
   max-width: 40rem;
 }
+/* A short airmail stripe marks the start of every section. */
+main > section h2::before {
+  content: ""; display: block; width: 3.5rem; height: 6px; margin-bottom: 1.1rem;
+  background: repeating-linear-gradient(-45deg, var(--red) 0 7px, transparent 7px 11px, var(--blue) 11px 18px, transparent 18px 22px);
+}
 h3 { font-size: 1.15rem; line-height: 1.3; margin: 0 0 0.4rem; font-variation-settings: "wdth" 110; }
 .intro { max-width: 42rem; margin: 0 0 2.25rem; font-size: 1.1rem; }
 .prose { max-width: 42rem; }
@@ -220,9 +229,9 @@ h3 { font-size: 1.15rem; line-height: 1.3; margin: 0 0 0.4rem; font-variation-se
 .table-wrap { overflow-x: auto; border: 1px solid var(--rule); background: var(--sheet); border-radius: 4px; }
 table { border-collapse: collapse; width: 100%; font-size: 0.97rem; }
 th, td { text-align: left; vertical-align: top; padding: 0.85rem 1rem; border-bottom: 1px solid var(--rule); }
-tr:last-child td { border-bottom: 0; }
+tr:last-child > * { border-bottom: 0; }
 thead th { font-size: 0.9rem; color: var(--muted); font-weight: 600; background: var(--paper); }
-td:first-child { font-weight: 600; min-width: 9rem; }
+tbody th { font-weight: 600; min-width: 9rem; }
 .tag { display: inline-block; font-size: 0.85rem; font-weight: 600; white-space: nowrap; }
 .tag-ok { color: var(--ok); }
 .tag-untested { color: var(--warn); }
@@ -283,8 +292,8 @@ td:first-child { font-weight: 600; min-width: 9rem; }
 }
 .copy:hover { border-color: var(--ink); }
 .code.has-copy pre { padding-right: 4.5rem; }
-
-.soon { font-size: 0.95rem; color: var(--muted); max-width: 46rem; }
+/* On a phone the button gets its own row so it never covers a long line. */
+@media (max-width: 30rem) { .code.has-copy pre { padding: 2.3rem 1rem 0.9rem; } }
 
 /* Contribute */
 .contrib { display: grid; gap: 2rem; }
@@ -296,3 +305,128 @@ td:first-child { font-weight: 600; min-width: 9rem; }
 .site-foot .wrap { display: flex; flex-wrap: wrap; gap: 0.75rem 2rem; justify-content: space-between; }
 .site-foot p { margin: 0; }
 .site-foot ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
+
+/* Four short facts under the hero */
+.glance { border-top: 1px solid var(--rule); background: var(--sheet); }
+.glance ul { list-style: none; margin: 0 auto; display: grid; grid-template-columns: 1fr; }
+.glance li { border-bottom: 1px solid var(--rule); }
+.glance li:last-child { border-bottom: 0; }
+.glance a { display: block; height: 100%; padding: 1rem 0 1.05rem; text-decoration: none; color: var(--ink); }
+@media (min-width: 36rem) {
+  .glance ul { grid-template-columns: 1fr 1fr; }
+  .glance li:nth-child(odd) { border-right: 1px solid var(--rule); }
+  .glance li:nth-last-child(-n+2) { border-bottom: 0; }
+  .glance a { padding: 1.25rem 1.25rem; }
+  .glance li:nth-child(odd) a { padding-left: 0; }
+}
+@media (min-width: 62rem) {
+  .glance ul { grid-template-columns: repeat(4, 1fr); }
+  .glance li, .glance li:nth-child(odd) { border-bottom: 0; border-right: 1px solid var(--rule); }
+  .glance li:last-child { border-right: 0; }
+  .glance li:nth-child(odd) a { padding-left: 1.25rem; }
+  .glance li:first-child a { padding-left: 0; }
+}
+.glance a:hover strong { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 0.2em; }
+.glance strong { display: block; font-size: 1.12rem; line-height: 1.2; font-weight: 750; font-variation-settings: "wdth" 115; }
+.glance span { display: block; margin-top: 0.3rem; font-size: 0.92rem; color: var(--muted); }
+
+/* Admin page section */
+.admin-head .intro { margin-bottom: 1.75rem; }
+.trio { list-style: none; counter-reset: trio; margin: 0 0 2.5rem; padding: 0; display: grid; gap: 1rem; }
+@media (min-width: 48rem) { .trio { grid-template-columns: repeat(3, 1fr); gap: 2rem; } }
+.trio li { counter-increment: trio; display: grid; grid-template-columns: 2rem 1fr; gap: 0.1rem 0.75rem; }
+.trio li::before {
+  content: counter(trio); grid-row: span 2; width: 2rem; height: 2rem; border-radius: 50%;
+  background: var(--ink); color: var(--paper); display: grid; place-items: center; font-weight: 700; font-size: 0.95rem;
+}
+.trio strong { font-size: 1.08rem; font-variation-settings: "wdth" 112; line-height: 1.3; padding-top: 0.2rem; }
+.trio span { color: var(--muted); font-size: 0.95rem; }
+
+.shots { display: grid; gap: 2rem; align-items: end; }
+@media (min-width: 48rem) { .shots { grid-template-columns: minmax(0, 1fr) 14rem; gap: 2.5rem; } }
+@media (min-width: 62rem) { .shots { grid-template-columns: minmax(0, 1fr) 16rem; gap: 3rem; } }
+.shot { margin: 0; min-width: 0; }
+.shot picture { display: block; }
+.shot img { display: block; width: 100%; height: auto; }
+.shot figcaption { margin-top: 0.75rem; font-size: 0.9rem; color: var(--muted); }
+
+/* A plain browser window drawn in CSS: a title bar holding the address. */
+.browser {
+  border: 2px solid var(--frame); border-radius: 8px; overflow: hidden; background: var(--sheet);
+  box-shadow: 6px 6px 0 var(--frame-shadow);
+}
+.browser-bar {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0.45rem 0.6rem;
+  border-bottom: 2px solid var(--frame); background: var(--paper);
+}
+.browser-bar::before {
+  content: ""; flex: none; width: 2.5rem; height: 0.6rem; opacity: 0.55;
+  background: radial-gradient(circle, var(--muted) 0 0.2rem, transparent 0.23rem) 0 50% / 0.85rem 0.6rem repeat-x;
+}
+.url {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.78rem; color: var(--muted);
+  background: var(--sheet); border: 1px solid var(--rule); border-radius: 999px; padding: 0.1rem 0.75rem;
+}
+
+/* A phone drawn in CSS: a thick rounded bezel. */
+.phone {
+  max-width: 16rem; margin: 0 auto; padding: 9px; border-radius: 30px; background: var(--frame);
+  box-shadow: 6px 6px 0 var(--frame-shadow);
+}
+.phone picture { border-radius: 22px; overflow: hidden; }
+.shot-phone figcaption { text-align: center; }
+/* On a phone the phone screenshot is the readable one, so it comes first. */
+@media (max-width: 47.99rem) { .shot-phone { order: -1; } }
+
+.admin-more { display: grid; gap: 2rem; margin-top: 3.5rem; align-items: start; }
+@media (min-width: 56rem) { .admin-more { grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 3rem; } }
+.checks { list-style: none; margin: 0.75rem 0 0; padding: 0; border-top: 2px solid var(--ink); }
+.checks li { position: relative; padding: 0.7rem 0 0.7rem 1.6rem; border-bottom: 1px solid var(--rule); }
+.checks li::before {
+  content: ""; position: absolute; left: 0.1rem; top: 1.12rem; width: 0.75rem; height: 0.4rem;
+  border-left: 2px solid var(--blue); border-bottom: 2px solid var(--blue); transform: rotate(-45deg);
+}
+.admin-more .note { margin-top: 1rem; }
+
+/* Safety: three headline guarantees, then the other guards */
+.pillars { margin: 0 0 3rem; display: grid; gap: 1rem; }
+@media (min-width: 56rem) { .pillars { grid-template-columns: repeat(3, 1fr); gap: 1.5rem; } }
+.pillars div { background: var(--sheet); border: 2px solid var(--ink); border-top-width: 6px; padding: 1.1rem 1.2rem 1.25rem; }
+.pillars div:nth-child(1) { border-top-color: var(--red); }
+.pillars div:nth-child(3) { border-top-color: var(--blue); }
+.pillars dt { font-size: 1.3rem; line-height: 1.15; font-weight: 800; font-variation-settings: "wdth" 118; }
+.pillars dd { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.98rem; }
+.pillars dd code { color: var(--ink); }
+.sub { font-size: 1.05rem; margin-bottom: 0.6rem; }
+.guards dd { font-size: 0.97rem; }
+
+.trifecta-body p { margin-top: 0; }
+.trifecta-body > div:last-child p:last-child { margin-bottom: 0; }
+@media (min-width: 56rem) {
+  .trifecta-body { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 2.5rem; }
+  .trifecta-body ol { margin-bottom: 0; }
+}
+
+/* The client table becomes stacked rows on a phone */
+@media (max-width: 40rem) {
+  .table-wrap { overflow: visible; }
+  .clients thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .clients, .clients tbody, .clients tr, .clients th, .clients td { display: block; }
+  .clients tr { padding: 0.9rem 1rem; border-bottom: 1px solid var(--rule); }
+  .clients tr:last-child { border-bottom: 0; }
+  .clients th, .clients td { padding: 0; border: 0; min-width: 0; }
+  .clients td { margin-top: 0.3rem; }
+}
+
+/* Install: steps with a short checklist beside them */
+.install { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2rem; }
+@media (min-width: 62rem) { .install { grid-template-columns: minmax(0, 46rem) minmax(0, 1fr); gap: 4rem; align-items: start; } }
+.install .steps { margin-bottom: 0; }
+.needs { padding: 1.2rem 1.25rem; background: var(--sheet); border: 2px solid var(--ink); }
+.needs h3 { margin-bottom: 0.25rem; }
+.needs ul { margin: 0.5rem 0 1rem; padding-left: 1.2rem; }
+.needs li { margin-bottom: 0.25rem; }
+.needs p { margin: 0; font-size: 0.95rem; color: var(--muted); }
+@media (max-width: 61.99rem) { .needs { order: -1; } }
+@media (min-width: 62rem) { .needs { position: sticky; top: 1.5rem; } }
