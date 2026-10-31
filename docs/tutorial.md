@@ -62,7 +62,7 @@ cp .env.example .env
 
 ## 5. Put the code and credentials on the server
 
-If the server is another machine, clone this repository there and copy your credentials, keeping the modes (directories 700, files 600):
+If the server is another machine, clone this repository there too (the server only needs `docker-compose.yml`, `.env.example` and, if you follow one, the files in `examples/`; the image itself is pulled from `ghcr.io/trainedloop/mailhub-mcp`) and copy your credentials, keeping the modes (directories 700, files 600):
 
 ```bash
 rsync -av --chmod=D700,F600 secrets/accounts/ <server>:<project-dir>/secrets/accounts/
@@ -82,9 +82,11 @@ sudo chown -R 10001:10001 data secrets/accounts
 sudo chmod 600 .env secrets/accounts/*/*.json
 sudo chmod 700 data secrets/accounts secrets/accounts/*
 
-docker compose up -d --build
+docker compose up -d
 docker compose logs -f
 ```
+
+`docker compose up -d` pulls the published image (`MAILHUB_VERSION` in `.env` picks the release; the default follows the latest 0.1.x). To run your own build of this checkout instead, use `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build`, and keep passing both files to every `docker compose` command.
 
 The compose file publishes the server on `127.0.0.1:8742` only (`HOST_PORT`), with a read-only filesystem, all capabilities dropped and a memory limit. On startup it logs a warning if no accounts are found, and another if `ALLOWED_EMAILS` lists more than one address.
 
@@ -137,7 +139,7 @@ docker compose up -d
 
 ### Updating
 
-`git pull`, then `docker compose up -d --build`, then check `docker compose logs mailhub-mcp`. Reconnecting the connector in claude.ai is not needed unless `JWT_SIGNING_KEY` changed.
+`git pull` (for changes to the compose file and docs), then `docker compose pull && docker compose up -d`, then check `docker compose logs mailhub-mcp`. If you pinned an exact `MAILHUB_VERSION`, raise it in `.env` first; release notes are on the GitHub releases page. If you build from source, use `docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build` instead. Reconnecting the connector in claude.ai is not needed unless `JWT_SIGNING_KEY` changed.
 
 ### Journal growth
 

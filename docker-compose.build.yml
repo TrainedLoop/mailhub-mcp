@@ -1,0 +1,9 @@
+# Builds the image from this checkout instead of pulling the published one,
+# for development or to run unreleased changes:
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+# Add any other override files (for example examples/tailscale-funnel/) after
+# these two.
+services:
+  mailhub-mcp:
+    image: mailhub-mcp:local
+    build: .

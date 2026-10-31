@@ -6,6 +6,8 @@ It is built for inbox triage: the assistant can search, read and summarize mail 
 
 One instance serves one owner: `ALLOWED_EMAILS` holds only your own Google login, and every mailbox linked to the instance is yours. Someone else who wants the same setup runs their own instance (see [More than one person](#more-than-one-person)).
 
+**Status: beta (0.x).** It runs daily against real mailboxes, but only a handful of people have set it up so far. Expect rough edges in the setup, and pin a release (`MAILHUB_VERSION`) so updates happen when you choose.
+
 ## Features
 
 The server exposes 18 tools (11 read-only, 7 that change something); see [docs/architecture.md](docs/architecture.md#tools) for the list.
@@ -45,7 +47,7 @@ Note on scope: Gmail's `gmail.modify` scope technically also permits sending and
 ## Quickstart
 
 1. Follow [docs/tutorial.md](docs/tutorial.md) for the Google Cloud setup, account linking, configuration and the claude.ai connector (or another client, step 15).
-2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d --build`. The server listens on `127.0.0.1:8742` (set `HOST_PORT` in `.env` to change the host port); it needs HTTPS at a public URL in front of it.
+2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d`. This pulls the published image `ghcr.io/trainedloop/mailhub-mcp` (linux/amd64 and linux/arm64); to build from source instead, add `-f docker-compose.build.yml` (see the comment in that file). The server listens on `127.0.0.1:8742` (set `HOST_PORT` in `.env` to change the host port); it needs HTTPS at a public URL in front of it.
 3. [examples/tailscale-funnel/](examples/tailscale-funnel/) shows one complete way to publish it, including a firewall that isolates the container.
 
 ## More than one person

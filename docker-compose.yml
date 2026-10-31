@@ -1,6 +1,9 @@
 services:
   mailhub-mcp:
-    build: .
+    # Published image. MAILHUB_VERSION in .env pins a release (e.g. 0.1.0);
+    # the default follows the latest 0.1.x. To build from this checkout
+    # instead, add -f docker-compose.build.yml (see that file).
+    image: ghcr.io/trainedloop/mailhub-mcp:${MAILHUB_VERSION:-0.1}
     # CONTAINER_NAME, HOST_PORT and PORT come from .env (Compose reads it for
     # these substitutions). Defaults suit a single instance; a second instance
     # (another person) sets its own CONTAINER_NAME and HOST_PORT.

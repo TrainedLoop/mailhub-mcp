@@ -25,8 +25,10 @@ The root `docker-compose.yml` publishes `127.0.0.1:8742:8742`. On hosts whose fi
 The firewall targets a known subnet, so use the override that creates the named network `mailhub_mcp` (172.31.0.0/24):
 
 ```bash
-docker compose -f docker-compose.yml -f examples/tailscale-funnel/compose.override.yml up -d --build
+docker compose -f docker-compose.yml -f examples/tailscale-funnel/compose.override.yml up -d
 ```
+
+To run a build of your checkout instead of the published image, add `-f docker-compose.build.yml` after `docker-compose.yml` and append `--build`.
 
 If you change the subnet (`SUBNET` in `.env`), list it in `SUBNETS` for the firewall (step 5) as well.
 
@@ -62,7 +64,7 @@ docker compose exec mailhub-mcp python -c "import socket; socket.create_connecti
 
 ## 6. Deploying updates
 
-From your workstation, this is safe to repeat: it never overwrites `secrets/`, `data/` or `.env` on the host.
+To update the image, run on the host `docker compose -f docker-compose.yml -f examples/tailscale-funnel/compose.override.yml pull`, then the compose command from step 3. To deploy files from your checkout (compose files, or source for your own build), from your workstation, this is safe to repeat: it never overwrites `secrets/`, `data/` or `.env` on the host.
 
 ```bash
 ssh <host> 'sudo mkdir -p /opt/mailhub-mcp'
