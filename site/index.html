@@ -44,9 +44,9 @@
     <nav aria-label="Sections">
       <ul>
         <li><a href="#accounts">Accounts</a></li>
-        <li><a href="#self-hosted">Self-hosted</a></li>
-        <li><a href="#clients">Clients</a></li>
+        <li><a href="#admin">Admin page</a></li>
         <li><a href="#safety">Safety</a></li>
+        <li><a href="#clients">Clients</a></li>
         <li><a href="#install">Install</a></li>
         <li><a href="https://github.com/TrainedLoop/mailhub-mcp">GitHub</a></li>
       </ul>
@@ -58,9 +58,9 @@
   <div class="hero">
     <div class="wrap">
       <div>
-        <p class="status"><strong>Beta</strong> v0.1.0, open source under MIT</p>
+        <p class="status"><strong>Beta</strong> v0.2.0, open source under MIT</p>
         <h1>Let your AI assistant sort all your mail. It can't send or delete any of it.</h1>
-        <p class="lede">mailhub-mcp is an MCP server you run yourself. It gives an AI assistant access to every mailbox you own (Gmail today) so it can search, read and summarize your mail, then tidy up with labels, archiving and reply drafts. Every organizing change is recorded and can be undone.</p>
+        <p class="lede">An MCP server you run yourself. Your assistant can search, read and summarize every mailbox you own (Gmail today), then tidy up with labels, archiving and reply drafts. Every organizing change is recorded and can be undone.</p>
         <div class="actions">
           <a class="btn btn-primary" href="#install">How to install</a>
           <a class="btn btn-ghost" href="https://github.com/TrainedLoop/mailhub-mcp">View on GitHub</a>
@@ -92,20 +92,29 @@
     </div>
   </div>
 
+  <div class="glance">
+    <ul class="wrap" aria-label="In short">
+      <li><a href="#safety"><strong>Cannot send, trash or delete</strong><span>Enforced in code, checked by a test</span></a></li>
+      <li><a href="#safety"><strong>Every change can be undone</strong><span>Journaled, one batch or all since a time</span></a></li>
+      <li><a href="#accounts"><strong>All your mailboxes, one connector</strong><span>Personal, work and side projects</span></a></li>
+      <li><a href="#self-hosted"><strong>Runs on your server</strong><span>One Docker container, tokens on your disk</span></a></li>
+    </ul>
+  </div>
+
   <section id="what" aria-labelledby="what-h">
     <div class="wrap split">
       <div>
         <h2 id="what-h">Built for inbox triage</h2>
         <div class="prose">
           <p>MCP (Model Context Protocol) is how AI assistants call outside tools. mailhub-mcp is a remote MCP server: your assistant connects to it over HTTPS, you log in with Google, and the assistant gets a set of mail tools.</p>
-          <p>Ask it what came in overnight, which senders flood your inbox, or to file last month's receipts under a label. It reads, reports and proposes; changes to many messages are previewed first and applied only when you confirm.</p>
+          <p>Ask what came in overnight, which senders flood your inbox, or to file last month's receipts under a label. It reads, reports and proposes; changes to many messages are previewed first and applied only when you confirm.</p>
         </div>
       </div>
       <dl class="facts">
         <div><dt>Read</dt><dd><code>search_emails</code>, <code>read_email</code>, <code>read_thread</code>, <code>inbox_overview</code> with unread counts, categories and top senders, <code>count_messages</code> to size a change before making it.</dd></div>
         <div><dt>Organize</dt><dd>Add or remove labels, archive, mark read, star, by message or by search query. Each batch is journaled and can be reverted.</dd></div>
         <div><dt>Draft</dt><dd>Leave a reply draft in the thread for you to review and send yourself.</dd></div>
-        <div><dt>Remember</dt><dd>Triage preferences (important and ignored senders or keywords, time of the last triage) so a daily routine is consistent from one run to the next.</dd></div>
+        <div><dt>Remember</dt><dd>Triage preferences (important and ignored senders or keywords, time of the last triage) keep a daily routine consistent from one run to the next.</dd></div>
       </dl>
     </div>
   </section>
@@ -115,7 +124,7 @@
       <div>
         <h2 id="accounts-h">One server, every mailbox you own</h2>
         <div class="prose">
-          <p>Link your personal, work and side-project mailboxes to the same instance. Each gets a short alias, and the read tools search across all of them at once by default, so one question covers every inbox.</p>
+          <p>Link your personal, work and side-project mailboxes to the same instance. Each gets a short alias, and the read tools search all of them at once by default, so one question covers every inbox.</p>
           <p>If one mailbox fails (an expired credential, a rate limit), the others still answer: results come back with at most one error per account.</p>
         </div>
       </div>
@@ -130,11 +139,77 @@
     </div>
   </section>
 
+  <section id="admin" class="admin" aria-labelledby="admin-h">
+    <div class="wrap">
+      <div class="admin-head">
+        <h2 id="admin-h">Link mailboxes from your browser</h2>
+        <p class="intro">The server has an owner page at <code>/admin</code>. Linking a mailbox needs no command line and no restart.</p>
+      </div>
+
+      <ol class="trio">
+        <li><strong>Open <code>/admin</code></strong><span>On your own server, for example <code>https://mail.example.com/admin</code>.</span></li>
+        <li><strong>Sign in with Google</strong><span>Only a login in <code>ALLOWED_EMAILS</code> gets in, the same rule as the connector.</span></li>
+        <li><strong>Link a mailbox</strong><span>Choose an alias, then sign in to that mailbox at Google and consent.</span></li>
+      </ol>
+
+      <div class="shots">
+        <figure class="shot shot-main">
+          <div class="browser">
+            <div class="browser-bar" aria-hidden="true"><span class="url">mail.example.com/admin</span></div>
+            <picture>
+              <source srcset="img/admin-status-dark.webp" media="(prefers-color-scheme: dark)">
+              <img src="img/admin-status-light.webp" width="1040" height="780" loading="lazy" decoding="async"
+                   alt="The admin page listing four linked mailboxes with alias, provider, address and state. Three are ok and alice-side-project shows credential expired. Each row has Re-link and Remove buttons, and a Removed table below lists old-project with a Re-link button.">
+            </picture>
+          </div>
+          <figcaption>Every linked mailbox with its state, checked when the page loads.</figcaption>
+        </figure>
+
+        <figure class="shot shot-phone">
+          <div class="phone">
+            <picture>
+              <source srcset="img/admin-status-phone-dark.webp" media="(prefers-color-scheme: dark)">
+              <img src="img/admin-status-phone-light.webp" width="390" height="900" loading="lazy" decoding="async"
+                   alt="The same admin page on a phone: each mailbox is a card with provider, address, state and full-width Re-link and Remove buttons.">
+            </picture>
+          </div>
+          <figcaption>It works on a phone.</figcaption>
+        </figure>
+      </div>
+
+      <div class="admin-more">
+        <figure class="shot">
+          <div class="browser">
+            <div class="browser-bar" aria-hidden="true"><span class="url">mail.example.com/admin/link</span></div>
+            <picture>
+              <source srcset="img/admin-link-dark.webp" media="(prefers-color-scheme: dark)">
+              <img src="img/admin-link-light.webp" width="1040" height="570" loading="lazy" decoding="async"
+                   alt="The Link a mailbox form with an Alias field (lowercase letters, digits and dashes, up to 32 characters), a Provider menu set to Gmail, and a Continue with Google button.">
+            </picture>
+          </div>
+          <figcaption>Linking: an alias and a provider, then Google's own consent screen.</figcaption>
+        </figure>
+
+        <div>
+          <h3>Also on the page</h3>
+          <ul class="checks">
+            <li><strong>Re-link</strong> a mailbox whose credential expired.</li>
+            <li><strong>Remove</strong> a mailbox: the token is revoked at Google and the credential file is deleted.</li>
+            <li>A re-link can only attach <strong>the same mailbox</strong> it replaces.</li>
+            <li>Link, re-link and remove need a <strong>recent Google sign-in</strong>; otherwise the page sends you through Google first.</li>
+            <li>Turn the page off with <code>ADMIN=off</code>; its routes then answer 404.</li>
+          </ul>
+          <p class="note">Prefer the command line? <code>mailhub-authorize</code> still links mailboxes from your workstation.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="self-hosted" aria-labelledby="self-h">
     <div class="wrap split">
       <div>
         <h2 id="self-h">Runs on your machine, in Docker</h2>
-        <p class="intro">Put it on a home server, a small VPS or any Linux box with Docker. Your OAuth tokens, change journal and preferences live in folders on that machine. Apart from the Google APIs, the server sends nothing anywhere.</p>
+        <p class="intro">A home server, a small VPS or any Linux box with Docker. Your OAuth tokens, change journal and preferences live in folders on that machine. Apart from the Google APIs, the server sends nothing anywhere.</p>
         <dl class="facts">
           <div><dt>Published image</dt><dd><code>ghcr.io/trainedloop/mailhub-mcp</code> for linux/amd64 and linux/arm64. Pin a release with <code>MAILHUB_VERSION</code> so updates happen when you choose.</dd></div>
           <div><dt>Locked-down container</dt><dd>Read-only filesystem, all capabilities dropped, a memory limit, and the port bound to <code>127.0.0.1</code> only. You put HTTPS in front of it.</dd></div>
@@ -147,8 +222,51 @@
           <li class="yours"><span class="via">HTTPS + Google login</span><strong>mailhub-mcp on your server</strong><span>https://mail.example.com, tokens and journal on local disk</span></li>
           <li><span class="via">Gmail API</span><strong>Your mailboxes</strong><span>alice-personal, alice-work, alice-side-project</span></li>
         </ol>
-        <p class="note">What the assistant reads becomes part of your conversation, so it is sent to the provider of the model you use. That is also why a model you run yourself is interesting; see below.</p>
+        <p class="note">What the assistant reads becomes part of your conversation, so it is sent to the provider of the model you use. That is also why a model you run yourself is interesting; see <a href="#clients">clients</a>.</p>
       </div>
+    </div>
+  </section>
+
+  <section id="safety" aria-labelledby="safety-h">
+    <div class="wrap">
+      <h2 id="safety-h">Safe by construction, honest about the limits</h2>
+      <p class="intro">Your mailbox is full of text written by strangers, and some of it will try to give your assistant orders. The server is built on the assumption that the model can be fooled.</p>
+
+      <dl class="pillars">
+        <div><dt>Cannot send, trash or delete</dt><dd>The code never calls Gmail's send, trash or delete methods, and a test scans the source to enforce it. Trash, Spam, Sent and Draft labels are refused.</dd></div>
+        <div><dt>Every change is undoable</dt><dd>Each organizing change is journaled with the labels messages had before. <code>undo_change</code> reverts one batch exactly; <code>undo_since</code> is the panic button that reverts everything since a time.</dd></div>
+        <div><dt>Preview before bulk changes</dt><dd>Changes by query show a match count and a sample first, and apply only with explicit confirmation, at most 500 messages per call.</dd></div>
+      </dl>
+
+      <h3 class="sub">More guards</h3>
+      <dl class="guards">
+        <div><dt>Reply-only drafts</dt><dd>Drafts must answer a message, and may only be addressed to people already in that thread. Nothing is ever sent. Threads with a suspicious message are refused.</dd></div>
+        <div><dt>Hidden text stripped</dt><dd>Hidden HTML (<code>display:none</code>, zero-size text, comments, scripts) and invisible or bidirectional control characters are removed before the model sees a message.</dd></div>
+        <div><dt>Untrusted content fenced</dt><dd>Email text sits in one block per response, wrapped in markers with a fresh random nonce, so an email cannot forge the closing marker. The model is told nothing inside is an instruction.</dd></div>
+        <div><dt>Suspicious messages flagged</dt><dd>Heuristics flag likely injection attempts (tool names, "ignore previous instructions", requests to forward or draft, lots of hidden text). The model reports them and does not act on them.</dd></div>
+        <div><dt>Out-of-band approval</dt><dd>Preferences that raise attention apply at once. Ones that lower it, like ignoring a sender, wait for you to approve them with <code>mailhub-admin</code> on the server. No MCP tool can approve them.</dd></div>
+        <div><dt>Daily change cap and read-only mode</dt><dd>At most 2000 messages changed per account per 24 hours by default, configurable with <code>MAX_CHANGES_PER_DAY</code> (undo is never capped). <code>TOOLS=read-only</code> runs an instance with no write tools at all.</dd></div>
+        <div><dt>Your Google login only</dt><dd>Every request requires a Google login on the <code>ALLOWED_EMAILS</code> allowlist, and only allowed OAuth callbacks can register as clients.</dd></div>
+      </dl>
+
+      <aside class="trifecta" aria-labelledby="trifecta-h">
+        <h3 id="trifecta-h">The lethal trifecta, and what mailhub can't fix</h3>
+        <div class="trifecta-body">
+          <div>
+            <p>An AI agent becomes dangerous when it has all three of:</p>
+            <ol>
+              <li>access to private data,</li>
+              <li>exposure to untrusted content,</li>
+              <li>a way to send data out.</li>
+            </ol>
+          </div>
+          <div>
+            <p>A mailbox is the first two by design. mailhub removes its own way out: it can't send mail, drafts only go to people already in the thread, and unsubscribe links are never visited.</p>
+            <p>But any other internet-capable tool in the same session (web fetch or search, a browser, a connector that posts messages, files or tickets) reopens the third leg, and the server can't see it. Choose which tools share a session with mailhub; for unattended routines, use <code>TOOLS=read-only</code> with no internet-capable tools alongside. The defenses are an aid, not a guarantee; see the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/architecture.md#limitations">known limitations</a>.</p>
+          </div>
+        </div>
+      </aside>
+      <p class="note">Gmail's <code>gmail.modify</code> scope technically permits sending; these protections live in the code, not the token. Full details: <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/README.md#safety-model">safety model</a>.</p>
     </div>
   </section>
 
@@ -164,24 +282,24 @@
         </ul>
       </div>
       <div class="table-wrap">
-        <table>
+        <table class="clients">
           <caption class="sr-only">Client support status</caption>
           <thead>
             <tr><th scope="col">Client</th><th scope="col">Status</th><th scope="col">Notes</th></tr>
           </thead>
           <tbody>
             <tr>
-              <td>Claude</td>
+              <th scope="row">Claude</th>
               <td><span class="tag tag-ok">Tested</span></td>
               <td>As a custom connector in claude.ai, on the web and in the mobile app.</td>
             </tr>
             <tr>
-              <td>Online assistants with remote MCP support, such as ChatGPT</td>
+              <th scope="row">Online assistants with remote MCP support, such as ChatGPT</th>
               <td><span class="tag tag-untested">Should work, untested</span></td>
               <td>Designed for any client that meets the requirements above. Add the client's callback URL and connect to <code>/mcp</code>. Reports are welcome.</td>
             </tr>
             <tr>
-              <td>Local models, through an MCP client that runs them on your machine</td>
+              <th scope="row">Local models, through an MCP client that runs them on your machine</th>
               <td><span class="tag tag-untested">Should work, untested</span></td>
               <td>Email content then never goes to an AI provider: the model, the client and the server are all yours. The server still needs internet access to reach Gmail; "offline" refers to the model. Loopback callbacks (<code>http://localhost</code>) are accepted.</td>
             </tr>
@@ -189,38 +307,6 @@
         </table>
       </div>
       <p class="note">mailhub-mcp is an independent open-source project, not affiliated with Anthropic, OpenAI or Google. Setup for other clients: <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/tutorial.md#15-connecting-other-mcp-clients">Connecting other MCP clients</a>.</p>
-    </div>
-  </section>
-
-  <section id="safety" aria-labelledby="safety-h">
-    <div class="wrap">
-      <h2 id="safety-h">Safe by construction, honest about the limits</h2>
-      <p class="intro">Your mailbox is full of text written by strangers, and some of it will try to give your assistant orders. The server is built on the assumption that the model can be fooled.</p>
-      <dl class="guards">
-        <div><dt>Cannot send, trash or delete</dt><dd>The code never calls Gmail's send, trash or delete methods, and a test scans the source to enforce it. Trash, Spam, Sent and Draft labels are refused.</dd></div>
-        <div><dt>Every change is undoable</dt><dd>Each organizing change is journaled with the labels messages had before. <code>undo_change</code> reverts one batch exactly; <code>undo_since</code> is the panic button that reverts everything since a time.</dd></div>
-        <div><dt>Preview before bulk changes</dt><dd>Changes by query show a match count and a sample first, and apply only with explicit confirmation, at most 500 messages per call.</dd></div>
-        <div><dt>Reply-only drafts</dt><dd>Drafts must answer a message, and may only be addressed to people already in that thread. Nothing is ever sent. Threads with a suspicious message are refused.</dd></div>
-        <div><dt>Hidden text stripped</dt><dd>Hidden HTML (<code>display:none</code>, zero-size text, comments, scripts) and invisible or bidirectional control characters are removed before the model sees a message.</dd></div>
-        <div><dt>Untrusted content fenced</dt><dd>Email text sits in one block per response, wrapped in markers with a fresh random nonce, so an email cannot forge the closing marker. The model is told nothing inside is an instruction.</dd></div>
-        <div><dt>Suspicious messages flagged</dt><dd>Heuristics flag likely injection attempts (tool names, "ignore previous instructions", requests to forward or draft, lots of hidden text). The model reports them and does not act on them.</dd></div>
-        <div><dt>Out-of-band approval</dt><dd>Preferences that raise attention apply at once. Ones that lower it, like ignoring a sender, wait for you to approve them with <code>mailhub-admin</code> on the server. No MCP tool can approve them.</dd></div>
-        <div><dt>Daily change cap and read-only mode</dt><dd>At most 2000 messages changed per account per 24 hours by default, configurable with <code>MAX_CHANGES_PER_DAY</code> (undo is never capped). <code>TOOLS=read-only</code> runs an instance with no write tools at all.</dd></div>
-        <div><dt>Your Google login only</dt><dd>Every request requires a Google login on the <code>ALLOWED_EMAILS</code> allowlist, and only allowed OAuth callbacks can register as clients.</dd></div>
-      </dl>
-
-      <aside class="trifecta" aria-labelledby="trifecta-h">
-        <h3 id="trifecta-h">The lethal trifecta, and what mailhub can't fix</h3>
-        <p>An AI agent becomes dangerous when it has all three of:</p>
-        <ol>
-          <li>access to private data,</li>
-          <li>exposure to untrusted content,</li>
-          <li>a way to send data out.</li>
-        </ol>
-        <p>A mailbox is the first two by design. mailhub removes its own way out: it can't send mail, drafts only go to people already in the thread, and unsubscribe links are never visited.</p>
-        <p>But any other internet-capable tool in the same session (web fetch or search, a browser, a connector that posts messages, files or tickets) reopens the third leg, and the server can't see it. Choose which tools share a session with mailhub; for unattended routines, use <code>TOOLS=read-only</code> with no internet-capable tools alongside. The defenses are an aid, not a guarantee; see the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/architecture.md#limitations">known limitations</a>.</p>
-      </aside>
-      <p class="note">Gmail's <code>gmail.modify</code> scope technically permits sending; these protections live in the code, not the token. Full details: <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/README.md#safety-model">safety model</a>.</p>
     </div>
   </section>
 
@@ -260,36 +346,47 @@
   <section id="install" aria-labelledby="install-h">
     <div class="wrap">
       <h2 id="install-h">Install</h2>
-      <p class="intro">Setup takes some care: a Google Cloud project, a server with Docker and a public HTTPS address. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/tutorial.md">tutorial</a> walks through every step; this is the outline.</p>
-      <ol class="steps">
-        <li>
-          <h3>Create a Google Cloud project</h3>
-          <p>Enable the Gmail API and create two OAuth clients: a Web application client for the connector login, and a Desktop client for linking mailboxes.</p>
-        </li>
-        <li>
-          <h3>Link your mailboxes</h3>
-          <p>On your workstation, once per mailbox, with one alias each:</p>
-          <div class="code"><pre><code>uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json alice-personal</code></pre></div>
-        </li>
-        <li>
-          <h3>Configure <code>.env</code></h3>
-          <p>Copy <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/.env.example"><code>.env.example</code></a> and set your public URL, the Google client ID and secret, your own login in <code>ALLOWED_EMAILS</code> and a signing key.</p>
-        </li>
-        <li>
-          <h3>Start the container</h3>
-          <p>This pulls <code>ghcr.io/trainedloop/mailhub-mcp</code> and listens on <code>127.0.0.1:8742</code>.</p>
-          <div class="code"><pre><code>docker compose up -d</code></pre></div>
-        </li>
-        <li>
-          <h3>Put HTTPS in front</h3>
-          <p>Any reverse proxy or tunnel with TLS at the root of a host name, such as <code>https://mail.example.com</code>. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/examples/tailscale-funnel/README.md">Tailscale Funnel example</a> is a complete setup for a home server, including a firewall that isolates the container.</p>
-        </li>
-        <li>
-          <h3>Add the connector</h3>
-          <p>In claude.ai: Settings, Connectors, Add custom connector, with <code>https://mail.example.com/mcp</code>. Sign in with the Google login from <code>ALLOWED_EMAILS</code>.</p>
-        </li>
-      </ol>
-      <p class="soon">Planned on the <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/ROADMAP.md">roadmap</a>: an owner admin page to link mailboxes from a web page instead of the command line.</p>
+      <div class="install">
+        <ol class="steps">
+          <li>
+            <h3>Create a Google Cloud project</h3>
+            <p>Enable the Gmail API and create one OAuth client of type Web application. Its authorized redirect URIs are the connector login, <code>&lt;PUBLIC_BASE_URL&gt;/auth/callback</code>, plus two for the admin page:</p>
+            <div class="code"><pre><code>&lt;PUBLIC_BASE_URL&gt;/admin/auth/callback
+&lt;PUBLIC_BASE_URL&gt;/admin/oauth/callback</code></pre></div>
+          </li>
+          <li>
+            <h3>Configure <code>.env</code></h3>
+            <p>Copy <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/.env.example"><code>.env.example</code></a> and set your public URL, the Google client ID and secret, your own login in <code>ALLOWED_EMAILS</code> and a signing key.</p>
+          </li>
+          <li>
+            <h3>Start the container</h3>
+            <p>This pulls <code>ghcr.io/trainedloop/mailhub-mcp</code> and listens on <code>127.0.0.1:8742</code>.</p>
+            <div class="code"><pre><code>docker compose up -d</code></pre></div>
+          </li>
+          <li>
+            <h3>Put HTTPS in front</h3>
+            <p>Any reverse proxy or tunnel with TLS at the root of a host name, such as <code>https://mail.example.com</code>. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/examples/tailscale-funnel/README.md">Tailscale Funnel example</a> is a complete home-server setup, including a firewall that isolates the container.</p>
+          </li>
+          <li>
+            <h3>Link your mailboxes</h3>
+            <p>Open <code>https://mail.example.com/admin</code>, sign in with Google and link each mailbox under its own alias (<a href="#admin">see the admin page</a>). The command-line alternative is <code>mailhub-authorize</code>.</p>
+          </li>
+          <li>
+            <h3>Add the connector</h3>
+            <p>In claude.ai: Settings, Connectors, Add custom connector, with <code>https://mail.example.com/mcp</code>. Sign in with the Google login from <code>ALLOWED_EMAILS</code>.</p>
+          </li>
+        </ol>
+
+        <aside class="needs" aria-labelledby="needs-h">
+          <h3 id="needs-h">You will need</h3>
+          <ul>
+            <li>A Google account to create a Google Cloud project</li>
+            <li>A Linux machine with Docker</li>
+            <li>A public HTTPS address for it</li>
+          </ul>
+          <p>Setup takes some care. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/docs/tutorial.md">tutorial</a> walks through every step; this is the outline.</p>
+        </aside>
+      </div>
     </div>
   </section>
 
