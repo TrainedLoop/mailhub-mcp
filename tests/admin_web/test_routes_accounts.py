@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
+from mailhub_mcp.admin_web import accounts_routes as accounts_module
 from mailhub_mcp.admin_web import routes as routes_module
 from mailhub_mcp.admin_web.session import (
     FLOW_COOKIE,
@@ -238,7 +239,7 @@ def test_replayed_link_callback_writes_nothing_a_second_time(env, monkeypatch):
     flow, state = _flow_and_state(_start_link(env, "pessoal"))
     assert _oauth_callback(env, flow, state).status_code == 200
     writes = []
-    monkeypatch.setattr(routes_module, "write_credential", lambda *a, **k: writes.append(a))
+    monkeypatch.setattr(accounts_module, "write_credential", lambda *a, **k: writes.append(a))
     again = _oauth_callback(env, flow, state)
     assert EXPIRED in again.text
     assert len(env.linker.calls) == 1
@@ -632,7 +633,7 @@ def test_replay_of_an_evicted_link_state_fails_at_the_code_exchange(env, monkeyp
         f, st = _flow_and_state(_start_link(env, alias))
         assert "consent" in _oauth_callback(env, f, st, code="", error="access_denied").text.lower()
     writes = []
-    monkeypatch.setattr(routes_module, "write_credential", lambda *a, **k: writes.append(a))
+    monkeypatch.setattr(accounts_module, "write_credential", lambda *a, **k: writes.append(a))
     again = _oauth_callback(env, flow, state)
     assert again.status_code == 400
     assert "Google refused the authorization code" in again.text
