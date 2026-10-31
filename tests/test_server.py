@@ -284,7 +284,10 @@ def test_inbox_overview_scans_200_by_default_and_states_its_cost(fakes):
 def test_auth_expired_status_has_hint(fakes):
     fakes.b.fail = RefreshError("bad")
     by = {a["alias"]: a for a in call("list_accounts")["accounts"]}
-    assert "run uv run --extra authorize mailhub-authorize gmail <client_secret.json> bob-work again" in by["bob-work"]["status"]
+    assert by["bob-work"]["status"] == (
+        "invalid or revoked credentials: re-link bob-work on the admin page (/admin), "
+        "or run uv run --extra authorize mailhub-authorize gmail <client_secret.json> bob-work again"
+    )
 
 
 def test_list_labels_has_untrusted_note():

@@ -27,7 +27,10 @@ class AuthExpired(MailhubError):
     def __init__(self, alias: str, hint: str):
         self.alias = alias
         self.hint = hint
-        super().__init__(f"invalid or revoked credentials: run {hint} again")
+        # The admin page first: new installs have no Desktop client for the command-line route.
+        super().__init__(
+            f"invalid or revoked credentials: re-link {alias} on the admin page (/admin), or run {hint} again"
+        )
 
 
 class MessageNotFound(MailhubError):

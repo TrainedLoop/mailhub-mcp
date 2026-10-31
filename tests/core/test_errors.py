@@ -13,7 +13,8 @@ from mailhub_mcp.core.errors import (
 
 def test_error_messages():
     assert str(AuthExpired("a", "mailhub-authorize gmail <client_secret.json> a")) == (
-        "invalid or revoked credentials: run mailhub-authorize gmail <client_secret.json> a again"
+        "invalid or revoked credentials: re-link a on the admin page (/admin), "
+        "or run mailhub-authorize gmail <client_secret.json> a again"
     )
     assert "b, c" in str(AccountNotFound("z", ["b", "c"]))
     assert isinstance(OrganizeError("x"), ValueError) and isinstance(OrganizeError("x"), MailhubError)
