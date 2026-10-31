@@ -36,6 +36,7 @@ from mailhub_mcp.admin_web.routes import (
     _recorded_provider,
     _set_flow_cookie,
     _UsedStates,
+    admin_io,
     done_page,
     require_action,
     require_session,
@@ -189,7 +190,7 @@ def account_routes(
         if not code:
             return expired
         try:
-            result = await run_in_threadpool(
+            result = await admin_io(
                 ctx.linkers[provider].complete, code, _link_redirect_uri(ctx), flow.code_verifier
             )
         except LinkError as exc:
@@ -325,7 +326,7 @@ def account_routes(
             return _back_to("/admin", "not-linked")
         if _normalize_alias(act.form.get("confirm")) != alias:
             return _back_to(page, "confirm-mismatch")
-        outcome = await run_in_threadpool(_commit_remove, alias, act.session.email, ctx.now())
+        outcome = await admin_io(_commit_remove, alias, act.session.email, ctx.now())  # it revokes
         if outcome is None:
             return _back_to("/admin", "not-linked")
         if not outcome.recorded:

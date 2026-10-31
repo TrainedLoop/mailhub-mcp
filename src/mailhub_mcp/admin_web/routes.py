@@ -19,10 +19,12 @@ import threading
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+import anyio
 import anyio.to_thread
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
@@ -71,6 +73,11 @@ LOGIN_CALLBACK_PATH = "/admin/auth/callback"
 LINK_CALLBACK_PATH = "/admin/oauth/callback"
 USED_STATES_CAP = 1000  # consumed flow states remembered at once; beyond it, the oldest are evicted
 STATUS_CHECK_SECONDS = 10.0  # per-account status check; slower counts as "error"
+# Admin network calls (sign-in and link code exchanges, revocation, status checks) run on their own
+# small thread limiter, not the default pool the MCP tools share, so anonymous callback spam cannot
+# starve the tools. A timed-out call gives its token back when abandoned, though its thread runs on.
+ADMIN_THREADS = 4
+ADMIN_LIMITER = anyio.CapacityLimiter(ADMIN_THREADS)
 _SAFE_PATH = re.compile(r"^/admin(?:[/?][A-Za-z0-9/_\-.~%?=&]*)?$")
 
 _NO_RETURN = frozenset({"/admin/login", LOGIN_CALLBACK_PATH, LINK_CALLBACK_PATH, "/admin/logout"})
@@ -391,7 +398,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         if not code:
             return _expired()
         try:
-            owner = await run_in_threadpool(
+            owner = await admin_io(
                 ctx.identity.complete, code, _redirect_uri(ctx), flow.code_verifier, flow.nonce
             )
         except LoginError as exc:
@@ -497,10 +504,17 @@ def _recorded_provider(ctx: AdminContext, alias: str) -> str | None:
     return entry.provider if entry is not None else None
 
 
+async def admin_io(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run blocking `fn(*args)` (a network call or work around one) on the admin thread limiter."""
+    return await anyio.to_thread.run_sync(partial(fn, *args), limiter=ADMIN_LIMITER)
+
+
 async def _in_thread(fn: Callable[[], Any], timeout: float) -> Any:
-    """Run blocking `fn` in a worker thread; give up after `timeout` seconds (TimeoutError). The
-    thread is abandoned, not killed: it finishes on its own."""
-    return await asyncio.wait_for(anyio.to_thread.run_sync(fn, abandon_on_cancel=True), timeout)
+    """Run blocking `fn` on the admin thread limiter; give up after `timeout` seconds (TimeoutError).
+    The thread is abandoned, not killed: it finishes on its own."""
+    return await asyncio.wait_for(
+        anyio.to_thread.run_sync(fn, abandon_on_cancel=True, limiter=ADMIN_LIMITER), timeout
+    )
 
 
 async def _check_account(ctx: AdminContext, account: Any) -> pages.AccountRow:

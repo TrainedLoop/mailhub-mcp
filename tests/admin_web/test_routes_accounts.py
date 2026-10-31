@@ -906,3 +906,33 @@ def test_remove_whose_record_fails_keeps_the_address_check(env, monkeypatch):
     assert refused.status_code == 400
     assert "That is a different mailbox than pessoal (expected me@gmail.com)" in refused.text
     assert not _cred_path(env, "pessoal").exists()
+
+
+# --- final review fixes -------------------------------------------------------------------------
+
+
+def test_admin_network_calls_use_their_own_thread_limiter(env, monkeypatch):
+    """Sign-in and link exchanges, revocation and status checks hold a token of the admin limiter,
+    not the shared default thread pool, so anonymous callback spam cannot starve the MCP tools."""
+    limiter = routes_module.ADMIN_LIMITER
+    assert limiter.total_tokens == routes_module.ADMIN_THREADS == 4
+    seen = {}
+
+    def spy(name, fn):
+        def wrapper(*args, **kwargs):
+            seen[name] = limiter.borrowed_tokens
+            return fn(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(env.identity, "complete", spy("identity.complete", env.identity.complete))
+    monkeypatch.setattr(env.linker, "complete", spy("linker.complete", env.linker.complete))
+    monkeypatch.setattr(env.linker, "revoke", spy("linker.revoke", env.linker.revoke))
+    _signed_in(env)
+    assert _link(env, "pessoal", "me@gmail.com").status_code == 200
+    env.add_account("pessoal", "me@gmail.com")
+    provider = env.providers["pessoal"]
+    monkeypatch.setattr(provider, "address", spy("provider.address", provider.address))
+    env.client.cookies.set(SESSION_COOKIE, env.token)
+    assert env.client.get("/admin").status_code == 200
+    assert _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"}).status_code == 200
+    assert seen == {"identity.complete": 1, "linker.complete": 1, "linker.revoke": 1, "provider.address": 1}
