@@ -821,9 +821,88 @@ def test_remove_whose_record_fails_says_so(env, monkeypatch, caplog):
     monkeypatch.setattr(env.ctx.book, "record_removed", _raise)
     resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
     assert resp.status_code == 500
-    assert "removed, but its record could not be saved" in resp.text
+    assert "removed, but its removal could not be recorded" in resp.text
     assert "http-equiv" not in resp.text
     assert not _cred_path(env, "pessoal").exists()
     assert "pessoal" not in env.ctx.registry.aliases()
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("alias=pessoal" in r.getMessage() for r in errors)
+
+
+# --- Task 8b fix round 1 ----------------------------------------------------------------------
+
+
+def test_failed_rollback_is_not_reported_as_nothing_changed(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    monkeypatch.setattr(accounts_module, "remove_credential", _raise)  # the undo of the new file fails
+    resp = _link(env, "pessoal")
+    assert resp.status_code == 500
+    assert "Nothing was changed" not in resp.text
+    assert "undo was incomplete" in resp.text and "server log" in resp.text
+    assert _visible(resp.text).count(GRANT_HINT) == 1
+    assert any(r.getMessage().startswith("admin link rollback failed alias=pessoal") for r in caplog.records)
+
+
+def test_failed_registry_restore_on_relink_is_reported(env, monkeypatch):
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    _signed_in(env)
+    real_upsert = env.ctx.registry.upsert
+    calls = []
+
+    def upsert(*a, **k):  # the first upsert (the link) works, the restore fails
+        calls.append(a)
+        if len(calls) > 1:
+            raise OSError("boom")
+        return real_upsert(*a, **k)
+
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    monkeypatch.setattr(env.ctx.registry, "upsert", upsert)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert resp.status_code == 500
+    assert "undo was incomplete" in resp.text and "Nothing was changed" not in resp.text
+
+
+def test_link_failure_page_carries_the_grant_hint(env, monkeypatch):
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    resp = _link(env, "pessoal")
+    assert "Nothing was changed" in resp.text
+    assert _visible(resp.text).count(GRANT_HINT) == 1
+
+
+def test_relink_rollback_restores_the_credential_byte_for_byte(env, monkeypatch):
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    old = b'{"refresh_token": "old"}\r\n\xff'  # CRLF and a byte that is not UTF-8
+    _cred_path(env, "pessoal").write_bytes(old)
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert "Nothing was changed" in resp.text  # the rollback ran, not an early crash
+    assert _cred_path(env, "pessoal").read_bytes() == old
+
+
+def test_done_page_with_address_note_does_not_refresh(env):
+    env.add_account("pessoal")
+    _signed_in(env)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert "address is now recorded" in resp.text
+    assert "http-equiv" not in resp.text
+
+
+def test_remove_whose_record_fails_keeps_the_address_check(env, monkeypatch):
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    _signed_in(env)
+    with monkeypatch.context() as m:
+        m.setattr(env.ctx.book, "record_removed", _raise)
+        resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
+    assert "The mailbox was removed, but its removal could not be recorded; see the server log." in resp.text
+    assert "will not be checked" not in resp.text
+    refused = _relink(env, "pessoal", "other@gmail.com")
+    assert refused.status_code == 400
+    assert "That is a different mailbox than pessoal (expected me@gmail.com)" in refused.text
+    assert not _cred_path(env, "pessoal").exists()

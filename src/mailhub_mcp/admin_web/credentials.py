@@ -25,16 +25,17 @@ def _private_dir(path: Path) -> None:
     path.chmod(0o700)  # mkdir's mode is masked by the umask
 
 
-def write_credential(accounts_dir: Path, provider: str, alias: str, content: str) -> Path:
-    """Write the credential atomically (temp file in the same folder, then replace)."""
+def write_credential(accounts_dir: Path, provider: str, alias: str, content: str | bytes) -> Path:
+    """Write the credential atomically (temp file in the same folder, then replace). Bytes are
+    written as they are (used to restore a previous file exactly); text is written as UTF-8."""
     target = credential_path(accounts_dir, provider, alias)
     _private_dir(accounts_dir)
     _private_dir(target.parent)
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=target.name + ".", suffix=".tmp")
     try:
         os.chmod(tmp, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(content)
+        with os.fdopen(fd, "wb") as f:
+            f.write(content if isinstance(content, bytes) else content.encode("utf-8"))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, target)

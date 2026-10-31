@@ -13,7 +13,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from starlette.concurrency import run_in_threadpool
@@ -61,7 +61,8 @@ RouteFactory = Callable[..., Route]
 @dataclass(frozen=True)
 class _LinkOutcome:
     refusal: str | None = None  # a check refused it; nothing was written
-    failed: bool = False  # a write failed and was rolled back
+    failed: bool = False  # a write failed; the earlier writes were undone
+    rollback_failed: bool = False  # a write failed and undoing the earlier ones failed too
     first_address: bool = False  # a re-link that recorded the address for the first time
 
 
@@ -199,6 +200,8 @@ def account_routes(
         outcome = await run_in_threadpool(
             _commit_link, flow.kind, alias, provider, address, result.credential_json, owner, now
         )
+        if outcome.rollback_failed:
+            return _html(pages.refused_after_grant_page("Not linked", pages.LINK_UNDO_INCOMPLETE_TEXT), 500)
         if outcome.failed:
             return _html(pages.refused_after_grant_page("Not linked", pages.LINK_FAILED_TEXT), 500)
         if outcome.refusal is not None:
@@ -233,18 +236,22 @@ def account_routes(
                 if recorded is None:
                     log.warning("admin relink without recorded address alias=%s provider=%s address=%s by=%s",
                                 alias, provider, address, owner)
-            if not _write_link(kind, alias, provider, address, credential_json, now):
-                return _LinkOutcome(failed=True)
+            written = _write_link(kind, alias, provider, address, credential_json, now)
+            if written != "ok":
+                return _LinkOutcome(failed=True, rollback_failed=written == "rollback-failed")
             log.info("admin %s alias=%s provider=%s address=%s by=%s", kind, alias, provider, address, owner)
             return _LinkOutcome(first_address=kind == "relink" and recorded is None)
 
-    def _write_link(kind: str, alias: str, provider: str, address: str, credential_json: str, now: float) -> bool:
+    def _write_link(
+        kind: str, alias: str, provider: str, address: str, credential_json: str, now: float
+    ) -> Literal["ok", "rolled-back", "rollback-failed"]:
         """Credential file, registry, book, in that order. If a step fails, undo the earlier ones
-        (previous file content or no file, previous registry entry or none) and return False.
-        The book write is atomic, so a failed one leaves the book as it was. Caller holds the lock."""
+        (the previous file byte for byte, or no file; the previous registry entry, or none):
+        "rolled-back" if that worked, "rollback-failed" if the undo raised too. The book write is
+        atomic, so a failed one leaves the book as it was. Caller holds the lock."""
         target = credential_path(ctx.accounts_dir, provider, alias)
         try:
-            previous_file: str | None = target.read_text(encoding="utf-8")
+            previous_file: bytes | None = target.read_bytes()
         except FileNotFoundError:
             previous_file = None
         try:
@@ -258,7 +265,7 @@ def account_routes(
             ctx.registry.upsert(alias, provider, path)
             step = "book"
             ctx.book.record_linked(alias, provider, address, datetime.fromtimestamp(now, UTC))
-            return True
+            return "ok"
         except Exception as exc:
             log.error("admin link failed alias=%s step=%s kind=%s error=%s", alias, step, kind, type(exc).__name__)
         try:
@@ -273,7 +280,8 @@ def account_routes(
                 ctx.registry.remove(alias)
         except Exception as exc:
             log.error("admin link rollback failed alias=%s error=%s", alias, type(exc).__name__)
-        return False
+            return "rollback-failed"
+        return "rolled-back"
 
     # --- remove -----------------------------------------------------------------------------
 

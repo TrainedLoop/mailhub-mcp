@@ -21,6 +21,11 @@ GRANT_HINT_TEXT = "Google still lists mailhub as allowed for that account; you c
 NO_ADDRESS_NOTE = "No address on record: this re-link will accept any mailbox once."
 ADDRESS_RECORDED_TEXT = "Its address is now recorded: later re-links must use this same mailbox."
 LINK_FAILED_TEXT = "Saving the link failed, so it was undone. Nothing was changed."
+LINK_UNDO_INCOMPLETE_TEXT = (
+    "Saving the link failed, and the undo was incomplete: a new credential file or account entry may "
+    "remain. Check the server log before trying again."
+)
+REMOVE_UNRECORDED_TEXT = "The mailbox was removed, but its removal could not be recorded; see the server log."
 
 # `?msg=<code>` on /admin shows one of these fixed texts; unknown codes are ignored.
 MESSAGES: dict[str, str] = {
@@ -193,9 +198,7 @@ def remove_unrecorded_page(alias: str, *, revoked: bool) -> str:
     """The mailbox is gone but the book did not take the removal: no auto-refresh, the owner must know."""
     body = _sheet(
         f"<h1>Removed {e(alias)}</h1>\n"
-        '<p class="notice notice-error">The mailbox was removed, but its record could not be saved: the alias '
-        "no longer remembers its address, so a later re-link will not be checked against it. "
-        "See the server log.</p>\n"
+        f'<p class="notice notice-error">{e(REMOVE_UNRECORDED_TEXT)}</p>\n'
         f"{'' if revoked else _revoke_by_hand()}"
         '<p class="actions"><a class="btn btn-primary" href="/admin">Continue</a></p>'
     )
