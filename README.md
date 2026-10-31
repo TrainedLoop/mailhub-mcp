@@ -45,7 +45,7 @@ The server exposes 18 tools (11 read-only, 7 that change something); see [docs/a
   <img alt="The admin status page: four mailboxes with alias, provider, address, state (ok or credential expired) and Re-link and Remove buttons, plus one removed alias" src="docs/images/admin-status-1280-light.png" width="720">
 </picture>
 
-Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALLOWED_EMAILS`) to see every linked mailbox with its address and state (`ok`, `credential expired`, `error`). From there you link a new mailbox, re-link an expired one and remove one you no longer want; changes take effect at once, without a restart. It is server-rendered HTML with no JavaScript and works on a phone. The safety rules are in the [safety model](#safety-model); setup is in [docs/tutorial.md](docs/tutorial.md#3-link-your-mailboxes-at-public_base_urladmin). `mailhub-authorize` on a workstation remains as a command-line alternative, and `ADMIN=off` turns the page off.
+Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALLOWED_EMAILS`) to see every linked mailbox with its address and state (`ok`, `credential expired`, `different mailbox`, `error`). From there you link a new mailbox, re-link an expired one and remove one you no longer want; changes take effect at once, without a restart. It is server-rendered HTML with no JavaScript and works on a phone. The safety rules are in the [safety model](#safety-model); setup is in [docs/tutorial.md](docs/tutorial.md#3-link-your-mailboxes-at-public_base_urladmin). `mailhub-authorize` on a workstation remains as a command-line alternative, and `ADMIN=off` turns the page off.
 
 ## Safety model
 

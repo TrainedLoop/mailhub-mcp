@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from mailhub_mcp.core.account_book import BookEntry
 
-State = Literal["ok", "credential expired", "error"]
+State = Literal["ok", "credential expired", "different mailbox", "error"]
 
 EXPIRED_TEXT = "This sign-in link expired, start again"
 NOT_ALLOWED_TEXT = "This Google account is not allowed"
@@ -61,7 +61,9 @@ class AccountRow:
 
 
 # (class, text) per state: the text is always shown, the colour only backs it up
-_BADGES: dict[str, str] = {"ok": "badge-ok", "credential expired": "badge-warn", "error": "badge-error"}
+_BADGES: dict[str, str] = {
+    "ok": "badge-ok", "credential expired": "badge-warn", "different mailbox": "badge-warn", "error": "badge-error",
+}
 
 
 def e(value: object) -> str:

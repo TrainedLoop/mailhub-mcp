@@ -368,6 +368,25 @@ def test_status_page_states_and_backfill(env):
     assert env.ctx.book.get("bob") is None
 
 
+def test_status_page_flags_a_different_mailbox_and_keeps_the_book(env, caplog):
+    """A credential placed by the CLI or by hand for another mailbox than the one on record."""
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    env.ctx.book.record_linked("alice", "gmail", "alice@example.test", datetime.now(UTC))
+    env.add_account("alice", "intruder@example.test")
+    env.ctx.book.record_linked("bob", "gmail", "bob@example.test", datetime.now(UTC))
+    env.add_account("bob", "Bob@Example.test")  # same mailbox, other case: ok
+    login(env.client)
+    page = env.client.get("/admin").text.replace("<wbr>", "")
+    alice_row = re.search(r"<tr>\s*<th scope=\"row\">alice<.*?</tr>", page, re.DOTALL).group(0)
+    bob_row = re.search(r"<tr>\s*<th scope=\"row\">bob<.*?</tr>", page, re.DOTALL).group(0)
+    assert '<span class="badge badge-warn">different mailbox</span>' in alice_row
+    assert "alice@example.test" in alice_row
+    assert '<span class="badge badge-ok">ok</span>' in bob_row
+    assert env.ctx.book.get("alice").address == "alice@example.test"
+    warned = [r for r in caplog.records if r.getMessage().startswith("admin status: different mailbox alias=alice")]
+    assert warned and warned[0].levelno == logging.WARNING
+
+
 def test_status_page_logs_error_type_and_alias_only(env, caplog):
     caplog.set_level(logging.INFO, logger="mailhub-mcp")
     env.add_account("carol", error=RuntimeError("boom secret-token"))

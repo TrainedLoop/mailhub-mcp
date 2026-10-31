@@ -517,16 +517,22 @@ async def _check_account(ctx: AdminContext, account: Any) -> pages.AccountRow:
     except Exception as exc:
         log.warning("admin status check failed alias=%s error=%s", account.alias, type(exc).__name__)
         state = "error"
-    if state == "ok" and isinstance(address, str) and address:
-        try:
-            await run_in_threadpool(ctx.book.record_address, account.alias, account.provider_name, address)
-        except Exception as exc:
-            log.error("admin cannot record address alias=%s error=%s", account.alias, type(exc).__name__)
-    else:
-        address = None
-        try:
-            entry = await run_in_threadpool(ctx.book.get, account.alias)
-            address = entry.address if entry else None
-        except Exception as exc:
-            log.error("admin cannot read the account book alias=%s error=%s", account.alias, type(exc).__name__)
+    recorded: str | None = None
+    try:
+        entry = await run_in_threadpool(ctx.book.get, account.alias)
+        recorded = entry.address if entry else None
+    except Exception as exc:
+        log.error("admin cannot read the account book alias=%s error=%s", account.alias, type(exc).__name__)
+    if state != "ok" or not isinstance(address, str) or not address:
+        return pages.AccountRow(account.alias, account.provider_name, recorded, state)
+    if recorded and recorded.lower() != address.lower():
+        # a credential for another mailbox, put there by the CLI or by hand: the book keeps the
+        # recorded address, so a re-link still has to bring back the original mailbox
+        log.warning("admin status: different mailbox alias=%s recorded=%s answers=%s",
+                    account.alias, recorded, address.lower())
+        return pages.AccountRow(account.alias, account.provider_name, recorded, "different mailbox")
+    try:
+        await run_in_threadpool(ctx.book.record_address, account.alias, account.provider_name, address)
+    except Exception as exc:
+        log.error("admin cannot record address alias=%s error=%s", account.alias, type(exc).__name__)
     return pages.AccountRow(account.alias, account.provider_name, address, state)

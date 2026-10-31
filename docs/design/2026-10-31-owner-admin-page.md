@@ -92,7 +92,7 @@ If revocation fails (network, already revoked), steps 2 to 4 still run and the p
 
 ### Status page
 
-`GET /admin` lists every account with its alias, provider, address and state (`ok`, `credential expired`, `error`), with re-link and remove buttons, plus removed aliases with a re-link button. The state comes from a cheap check per account (Gmail `users.getProfile`, 1 quota unit) run when the page loads. The same check fills in `accounts.json` for accounts linked before this design.
+`GET /admin` lists every account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`), with re-link and remove buttons, plus removed aliases with a re-link button. The state comes from a cheap check per account (Gmail `users.getProfile`, 1 quota unit) run when the page loads. The same check fills in `accounts.json` for accounts linked before this design.
 
 ### Accounts directory permissions
 

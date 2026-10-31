@@ -44,7 +44,7 @@ The admin page runs on the server, so you link mailboxes once it is up and reach
 
 The page refuses, and writes nothing, when Google returns no refresh token, the Gmail scope was not granted, the mailbox is already linked under another alias, or the alias was taken meanwhile (for example in another tab). The credential is saved to `secrets/accounts/<provider>/<alias>.json` with mode 600, and the mailbox address is recorded in `data/accounts.json` (the account book).
 
-The status page lists every mailbox with its address and state (`ok`, `credential expired` or `error`), checked when the page loads, plus removed aliases. **Re-link** and **Remove** are covered in step 10.
+The status page lists every mailbox with its address and state (`ok`, `credential expired`, `different mailbox` or `error`), checked when the page loads, plus removed aliases. **Re-link** and **Remove** are covered in step 10.
 
 Linking needs a writable `secrets/accounts`: the compose file mounts it read-write and the container user (uid 10001, step 6) must own it. If the folder is read-only (mounted with `:ro`, or owned by someone else), `/admin` shows "credentials are read-only: linking is disabled" and only lists status; the command-line flow keeps working. To turn the page off entirely, set `ADMIN=off`.
 
@@ -65,6 +65,7 @@ uv run --extra authorize mailhub-authorize gmail client_secret_desktop.json alic
 - The credential is written to `secrets/accounts/<provider>/<alias>.json` with mode 600. The file name is the alias used in the tools. An alias cannot exist under two providers; re-running for the same provider and alias relinks the account. `--accounts-dir` changes the output folder.
 - Link on your workstation, where the browser is. Re-running the command later (re-linking, adding accounts) always happens there, never inside the folder the container user owns; step 5 and the "Add an account" operation copy the result to the server. If the server is the same machine as your workstation, link with `--accounts-dir ./staging` and copy the file into `secrets/accounts/gmail/` with `sudo cp`, then set owner and mode as in step 6.
 - The server reads these files at startup, so restart it after adding one by hand.
+- The command does not check the address recorded for the alias on the admin page. If you link a different mailbox under an alias that is on record, the status page shows it as `different mailbox` and a re-link from the page still expects the recorded one.
 
 ## 4. Configure
 
