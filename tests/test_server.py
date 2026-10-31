@@ -1236,6 +1236,22 @@ def test_run_options_match_what_main_passes(monkeypatch):
     assert {"localhost", "127.0.0.1", "example.test"} <= set(seen["allowed_hosts"])
 
 
+def test_main_turns_off_the_uvicorn_access_log(monkeypatch):
+    """The access log records request paths with their query strings, which would put OAuth codes
+    and states from /admin/oauth/callback and /auth/callback into the container logs."""
+    seen = {}
+    monkeypatch.setattr(server.mcp, "run", lambda **kw: seen.update(kw))
+    server.main()
+    assert seen["uvicorn_config"] == {"access_log": False}
+
+
+def test_uvicorn_accepts_the_config_main_passes():
+    import uvicorn
+
+    config = uvicorn.Config(app=lambda *a: None, access_log=False)
+    assert config.access_log is False
+
+
 def test_health_with_the_configuration_main_uses():
     """Production configuration: protection is off, so /health answers for any Host and /mcp needs login."""
     async def go(host):

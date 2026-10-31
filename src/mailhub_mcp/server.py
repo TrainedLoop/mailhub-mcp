@@ -799,6 +799,9 @@ def main() -> None:
         transport="http",
         host="0.0.0.0",
         port=settings.port,
+        # No access log: it records paths with query strings, so OAuth codes and states from the
+        # callbacks would land in the container logs. Tool calls and admin actions log themselves.
+        uvicorn_config={"access_log": False},
         **run_options(),
     )
 

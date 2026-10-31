@@ -99,7 +99,7 @@ Run a separate instance per person: its own directory, `.env`, linked accounts, 
 
 - Anything the assistant reads through this server (message text, headers, search results) becomes part of your conversation and is sent to the provider of the model you use (for Claude, Anthropic; see [its privacy policy](https://www.anthropic.com/legal/privacy)).
 - The server stores locally, in `data/` and `secrets/`: OAuth tokens, the change journal (including the `query` and `user_request` of each change), your preferences and the account book (each alias's mailbox address).
-- Logs record each tool call with its arguments: tool names, accounts, message ids, search queries, label names, draft recipients and subject, and preference values. Draft bodies are replaced by their length and `user_request` is cut to 80 characters; every other value is capped at 200 characters. Admin page events are logged with the owner email, alias, provider and mailbox address; tokens, codes and cookies never are. Set log retention on the host accordingly.
+- Logs record each tool call with its arguments: tool names, accounts, message ids, search queries, label names, draft recipients and subject, and preference values. Draft bodies are replaced by their length and `user_request` is cut to 80 characters; every other value is capped at 200 characters. Admin page events are logged with the owner email, alias, provider and mailbox address; tokens, codes and cookies never are. The HTTP access log is off, so request URLs, which carry OAuth codes on the sign-in callbacks, are not logged. Set log retention on the host accordingly.
 - Apart from the Google APIs, the server sends nothing anywhere else.
 
 ## Development
