@@ -427,6 +427,14 @@ def test_logout_with_csrf_clears_cookie(env, caplog):
     assert any(r.getMessage() == "admin logout email=me@gmail.com" for r in caplog.records)
 
 
+def test_logout_also_deletes_the_flow_cookie(env):
+    token = login(env.client)
+    resp = env.client.post("/admin/logout", data={"csrf": _csrf(env, token)},
+                           headers={"Origin": PUBLIC}, follow_redirects=False)
+    attrs = _attrs(cookie_header(resp, FLOW_COOKIE))
+    assert attrs["max-age"] == "0" and attrs["path"] == "/admin"
+
+
 def test_logout_without_csrf_is_forbidden(env):
     login(env.client)
     resp = env.client.post("/admin/logout", data={}, headers={"Origin": PUBLIC}, follow_redirects=False)

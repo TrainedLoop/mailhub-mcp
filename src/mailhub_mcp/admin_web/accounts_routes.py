@@ -11,6 +11,7 @@ import hmac
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote
@@ -22,7 +23,7 @@ from starlette.routing import Route
 
 from mailhub_mcp.admin_web import pages
 from mailhub_mcp.admin_web.context import AdminContext
-from mailhub_mcp.admin_web.credentials import remove_credential, write_credential
+from mailhub_mcp.admin_web.credentials import credential_path, remove_credential, write_credential
 from mailhub_mcp.admin_web.routes import (
     LINK_CALLBACK_PATH,
     Endpoint,
@@ -55,6 +56,19 @@ from mailhub_mcp.providers.base import LinkError
 log = logging.getLogger("mailhub-mcp")
 
 RouteFactory = Callable[..., Route]
+
+
+@dataclass(frozen=True)
+class _LinkOutcome:
+    refusal: str | None = None  # a check refused it; nothing was written
+    failed: bool = False  # a write failed and was rolled back
+    first_address: bool = False  # a re-link that recorded the address for the first time
+
+
+@dataclass(frozen=True)
+class _RemoveOutcome:
+    revoked: bool
+    recorded: bool
 
 
 def account_routes(
@@ -141,6 +155,10 @@ def account_routes(
     def _link_refused(text: str, status_code: int = 400) -> Response:
         return _html(pages.message_page("Not linked", text), status_code)
 
+    def _refused_after_grant(text: str) -> Response:
+        """Refused after Google granted access: the grant stays listed at Google, so say where to drop it."""
+        return _html(pages.refused_after_grant_page("Not linked", text), 400)
+
     async def _finish_link(request: Request) -> Response:
         now = ctx.now()
         flow = decode_flow(signer, request.cookies.get(FLOW_COOKIE), now)
@@ -176,46 +194,85 @@ def account_routes(
             return _link_refused(str(exc))
         address = result.address.strip().lower() if isinstance(result.address, str) else ""
         if not address:
-            return _link_refused("Google did not report the mailbox address. Nothing was changed.")
-        refusal = await run_in_threadpool(
+            return _refused_after_grant("Google did not report the mailbox address. Nothing was changed.")
+        outcome = await run_in_threadpool(
             _commit_link, flow.kind, alias, provider, address, result.credential_json, owner, now
         )
-        if refusal is not None:
-            return _link_refused(refusal)
-        return done_page(f"Linked {alias} ({address})")
+        if outcome.failed:
+            return _html(pages.refused_after_grant_page("Not linked", pages.LINK_FAILED_TEXT), 500)
+        if outcome.refusal is not None:
+            return _refused_after_grant(outcome.refusal)
+        note = pages.ADDRESS_RECORDED_TEXT if outcome.first_address else None
+        return done_page(f"Linked {alias} ({address})", note=note)
 
     def _commit_link(
         kind: str, alias: str, provider: str, address: str, credential_json: str, owner: str, now: float
-    ) -> str | None:
-        """Every check, then the writes, under one lock. Returns the refusal text, or None once
-        written. Nothing touches the disk before every check has passed."""
+    ) -> _LinkOutcome:
+        """Every check, then the writes, under one lock. Nothing touches the disk before every check
+        has passed; if a write fails, the earlier ones are undone (see _write_link)."""
         with mutations:
             other = ctx.book.alias_for_address(address)
             if other is not None and other != alias:
                 log.warning("admin %s refused: address linked as %s alias=%s address=%s by=%s",
                             kind, other, alias, address, owner)
-                return pages.MESSAGES["address-taken"]
+                return _LinkOutcome(refusal=pages.MESSAGES["address-taken"])
             entry = ctx.book.get(alias)
             linked = alias in ctx.registry.aliases()
             recorded = entry.address.lower() if entry is not None and entry.address else None
             if kind == "link":
                 if linked or entry is not None:
-                    return pages.MESSAGES["alias-taken"]
+                    return _LinkOutcome(refusal=pages.MESSAGES["alias-taken"])
             else:
                 if not linked and entry is None:
-                    return pages.MESSAGES["unknown-alias"]
+                    return _LinkOutcome(refusal=pages.MESSAGES["unknown-alias"])
                 if recorded is not None and recorded != address:
                     log.warning("admin relink refused: different mailbox alias=%s address=%s by=%s",
                                 alias, address, owner)
-                    return f"That is a different mailbox than {alias} (expected {recorded})"
+                    return _LinkOutcome(refusal=f"That is a different mailbox than {alias} (expected {recorded})")
                 if recorded is None:
                     log.warning("admin relink without recorded address alias=%s provider=%s address=%s by=%s",
                                 alias, provider, address, owner)
-            path = write_credential(ctx.accounts_dir, provider, alias, credential_json)
-            ctx.registry.upsert(alias, provider, path)
-            ctx.book.record_linked(alias, provider, address, datetime.fromtimestamp(now, UTC))
+            if not _write_link(kind, alias, provider, address, credential_json, now):
+                return _LinkOutcome(failed=True)
             log.info("admin %s alias=%s provider=%s address=%s by=%s", kind, alias, provider, address, owner)
-            return None
+            return _LinkOutcome(first_address=kind == "relink" and recorded is None)
+
+    def _write_link(kind: str, alias: str, provider: str, address: str, credential_json: str, now: float) -> bool:
+        """Credential file, registry, book, in that order. If a step fails, undo the earlier ones
+        (previous file content or no file, previous registry entry or none) and return False.
+        The book write is atomic, so a failed one leaves the book as it was. Caller holds the lock."""
+        target = credential_path(ctx.accounts_dir, provider, alias)
+        try:
+            previous_file: str | None = target.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            previous_file = None
+        try:
+            previous_account = ctx.registry.get(alias)
+        except AccountNotFound:
+            previous_account = None
+        step = "credential"
+        try:
+            path = write_credential(ctx.accounts_dir, provider, alias, credential_json)
+            step = "registry"
+            ctx.registry.upsert(alias, provider, path)
+            step = "book"
+            ctx.book.record_linked(alias, provider, address, datetime.fromtimestamp(now, UTC))
+            return True
+        except Exception as exc:
+            log.error("admin link failed alias=%s step=%s kind=%s error=%s", alias, step, kind, type(exc).__name__)
+        try:
+            if step != "credential":
+                if previous_file is None:
+                    remove_credential(ctx.accounts_dir, provider, alias)
+                else:
+                    write_credential(ctx.accounts_dir, provider, alias, previous_file)
+            if previous_account is not None:
+                ctx.registry.upsert(alias, previous_account.provider_name, previous_account.credential_path)
+            elif alias in ctx.registry.aliases():
+                ctx.registry.remove(alias)
+        except Exception as exc:
+            log.error("admin link rollback failed alias=%s error=%s", alias, type(exc).__name__)
+        return False
 
     # --- remove -----------------------------------------------------------------------------
 
@@ -258,17 +315,20 @@ def account_routes(
             return _back_to("/admin", "not-linked")
         if _normalize_alias(act.form.get("confirm")) != alias:
             return _back_to(page, "confirm-mismatch")
-        revoked = await run_in_threadpool(_commit_remove, alias, act.session.email, ctx.now())
-        if revoked is None:
+        outcome = await run_in_threadpool(_commit_remove, alias, act.session.email, ctx.now())
+        if outcome is None:
             return _back_to("/admin", "not-linked")
-        if not revoked:
+        if not outcome.recorded:
+            return _html(pages.remove_unrecorded_page(alias, revoked=outcome.revoked), 500)
+        if not outcome.revoked:
             return _html(pages.revoke_failed_page(alias))
         return done_page(f"Removed {alias}")
 
-    def _commit_remove(alias: str, owner: str, now: float) -> bool | None:
+    def _commit_remove(alias: str, owner: str, now: float) -> _RemoveOutcome | None:
         """Revoke (it needs the refresh token in the file), delete the file, drop the alias from the
         registry, mark it removed in the book. None if the alias is not linked any more; otherwise
-        whether Google confirmed the revocation (a failed revocation does not stop the removal)."""
+        whether Google confirmed the revocation (a failed revocation does not stop the removal) and
+        whether the removal was recorded in the book."""
         with mutations:
             account = _linked_account(alias)
             if account is None:
@@ -283,13 +343,19 @@ def account_routes(
                     log.warning("admin revoke failed alias=%s error=%s", alias, type(exc).__name__)
             remove_credential(ctx.accounts_dir, provider, alias)
             ctx.registry.remove(alias)
-            ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC), provider=provider)
+            try:
+                ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC), provider=provider)
+            except Exception as exc:
+                # the file is gone already: say so rather than pretend nothing happened
+                log.error("admin remove: removed but not recorded alias=%s provider=%s error=%s",
+                          alias, provider, type(exc).__name__)
+                return _RemoveOutcome(revoked=revoked, recorded=False)
             entry = ctx.book.get(alias)
             address = entry.address if entry and entry.address else "unknown"
             log.info("admin remove alias=%s provider=%s address=%s by=%s", alias, provider, address, owner)
             if not revoked:
                 log.warning("admin remove: revocation not confirmed alias=%s", alias)
-            return revoked
+            return _RemoveOutcome(revoked=revoked, recorded=True)
 
     return [
         route("/admin/link", get_or_post(link_form, link_start), ("GET", "POST")),

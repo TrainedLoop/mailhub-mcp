@@ -95,9 +95,9 @@ def _html(body: str, status: int = 200) -> HTMLResponse:
     return HTMLResponse(body, status_code=status)
 
 
-def done_page(message: str, to: str = "/admin") -> HTMLResponse:
+def done_page(message: str, to: str = "/admin", note: str | None = None) -> HTMLResponse:
     """200 page that moves on by <meta http-equiv="refresh"> (never a 302 back into /admin)."""
-    return _html(pages.done_html(message, safe_path(to)))
+    return _html(pages.done_html(message, safe_path(to), note))
 
 
 def _forbidden() -> HTMLResponse:
@@ -418,6 +418,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         log.info("admin logout email=%s", checked.session.email)
         resp = RedirectResponse("/admin", status_code=303)
         resp.delete_cookie(SESSION_COOKIE, path="/admin", secure=True, httponly=True, samesite="Strict")
+        _clear_flow_cookie(resp)  # a link or login started before signing out must not finish after it
         return resp
 
     def route(path: str, fn: Endpoint, methods: tuple[str, ...] = ("GET",)) -> Route:

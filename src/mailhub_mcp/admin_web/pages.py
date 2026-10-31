@@ -16,6 +16,10 @@ NOT_ALLOWED_TEXT = "This Google account is not allowed"
 READ_ONLY_TEXT = "credentials are read-only: linking is disabled"
 CONSENT_REFUSED_TEXT = "Google consent was refused. Nothing was changed."
 PERMISSIONS_URL = "https://myaccount.google.com/permissions"
+GRANT_HINT_TEXT = "Google still lists mailhub as allowed for that account; you can remove it at"
+NO_ADDRESS_NOTE = "No address on record: this re-link will accept any mailbox once."
+ADDRESS_RECORDED_TEXT = "Its address is now recorded: later re-links must use this same mailbox."
+LINK_FAILED_TEXT = "Saving the link failed, so it was undone. Nothing was changed."
 
 # `?msg=<code>` on /admin shows one of these fixed texts; unknown codes are ignored.
 MESSAGES: dict[str, str] = {
@@ -98,21 +102,50 @@ def message_page(title: str, text: str, link_text: str = "Back", to: str = "/adm
     return layout(title, body)
 
 
-def done_html(message: str, to: str) -> str:
-    """A page that moves on by itself. `to` must already be a validated /admin path."""
-    head = f'<meta http-equiv="refresh" content="0;url={e(to)}">\n'
-    body = f'<h1>{e(message)}</h1>\n<p><a href="{e(to)}">Continue</a></p>'
+def done_html(message: str, to: str, note: str | None = None) -> str:
+    """A page that moves on by itself; with a `note` it stays so the note can be read.
+    `to` must already be a validated /admin path."""
+    head = "" if note else f'<meta http-equiv="refresh" content="0;url={e(to)}">\n'
+    shown = f"<p>{e(note)}</p>\n" if note else ""
+    body = f'<h1>{e(message)}</h1>\n{shown}<p><a href="{e(to)}">Continue</a></p>'
     return layout(message, body, head)
+
+
+def _grant_hint() -> str:
+    return f'<p>{e(GRANT_HINT_TEXT)} <a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a>.</p>'
+
+
+def refused_after_grant_page(title: str, text: str) -> str:
+    """A refusal after Google already granted access: the grant stays listed at Google."""
+    body = f"<h1>{e(title)}</h1>\n<p>{e(text)}</p>\n{_grant_hint()}\n" '<p><a href="/admin">Back</a></p>'
+    return layout(title, body)
+
+
+def remove_unrecorded_page(alias: str, *, revoked: bool) -> str:
+    """The mailbox is gone but the book did not take the removal: no auto-refresh, the owner must know."""
+    revoke = "" if revoked else (
+        f"<p>{e(MESSAGES['revoke-failed'])} Revoke the access by hand:</p>\n"
+        f'<p><a href="{e(PERMISSIONS_URL)}">{e(PERMISSIONS_URL)}</a></p>\n'
+    )
+    body = (
+        f"<h1>Removed {e(alias)}</h1>\n"
+        f"<p>The mailbox was removed, but its record could not be saved: the alias no longer remembers "
+        f"its address, so a later re-link will not be checked against it. See the server log.</p>\n"
+        f"{revoke}"
+        '<p><a href="/admin">Continue</a></p>'
+    )
+    return layout(f"Removed {alias}", body)
 
 
 def _csrf_input(csrf: str) -> str:
     return f'<input type="hidden" name="csrf" value="{e(csrf)}">'
 
 
-def _relink_form(alias: str, csrf: str) -> str:
+def _relink_form(alias: str, csrf: str, has_address: bool = True) -> str:
+    note = "" if has_address else f'<span class="note">{e(NO_ADDRESS_NOTE)}</span>'
     return (
         f'<form class="inline" method="post" action="/admin/accounts/{_path_part(alias)}/relink">'
-        f'{_csrf_input(csrf)}<button type="submit">Re-link</button></form>'
+        f'{_csrf_input(csrf)}<button type="submit">Re-link</button>{note}</form>'
     )
 
 
@@ -161,7 +194,7 @@ def status_page(
             actions = ""
             if writable:
                 actions = (
-                    f"<td>{_relink_form(row.alias, csrf)} "
+                    f"<td>{_relink_form(row.alias, csrf, bool(row.address))} "
                     f'<a class="button" href="/admin/accounts/{_path_part(row.alias)}/remove">Remove</a></td>'
                 )
             parts.append(
@@ -181,7 +214,7 @@ def status_page(
         parts.append("<tr><th>Alias</th><th>Address</th><th>Removed</th>"
                      + ("<th></th>" if writable else "") + "</tr>")
         for entry in removed:
-            actions = f"<td>{_relink_form(entry.alias, csrf)}</td>" if writable else ""
+            actions = f"<td>{_relink_form(entry.alias, csrf, bool(entry.address))}</td>" if writable else ""
             parts.append(
                 f"<tr>\n<td>{e(entry.alias)}</td><td>{e(entry.address or '')}</td>"
                 f"<td>{e(entry.removed_at)}</td>{actions}</tr>"

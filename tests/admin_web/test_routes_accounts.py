@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import stat
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -679,3 +680,150 @@ def test_headers_on_every_account_response(env):
     for resp in responses:
         assert resp.headers["content-security-policy"].startswith("default-src 'none'")
         assert resp.headers["cache-control"] == "no-store"
+
+
+# --- Task 8b: no-address note, rollback, Google permissions hint -----------------------------
+
+GRANT_HINT = ("Google still lists mailhub as allowed for that account; you can remove it at "
+              "https://myaccount.google.com/permissions.")
+NO_ADDRESS_NOTE = "No address on record: this re-link will accept any mailbox once."
+
+
+def _visible(html):
+    """Page text without tags, whitespace collapsed."""
+    return " ".join(re.sub(r"<[^>]+>", " ", html).split()).replace(" .", ".")
+
+
+def test_relink_control_without_address_shows_one_time_note(env):
+    env.add_account("pessoal")  # no address on record, and the status check reports none
+    env.providers["pessoal"]._address = None
+    env.ctx.book.record_removed("legacy", datetime.now(UTC), provider="gmail")  # removed, no address
+    env.add_account("work", "work@example.test")
+    _signed_in(env)
+    page = env.client.get("/admin").text
+    assert page.count(NO_ADDRESS_NOTE) == 2
+    work_row = re.search(r"<tr>\s*<td>work</td>.*?</tr>", page, re.DOTALL).group(0)
+    assert NO_ADDRESS_NOTE not in work_row
+
+
+def test_done_page_after_relink_without_address_says_it_is_now_recorded(env):
+    env.add_account("pessoal")
+    _signed_in(env)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert resp.status_code == 200, resp.text
+    assert "address is now recorded" in resp.text
+    resp = _relink(env, "pessoal", "me@gmail.com")  # the second time it was already on record
+    assert "address is now recorded" not in resp.text
+
+
+@pytest.mark.parametrize("make_refusal", ["address-taken", "alias-taken", "different-mailbox"])
+def test_refusals_after_google_exchange_point_to_permissions(env, make_refusal):
+    if make_refusal == "address-taken":
+        env.add_account("work", "box@example.test")
+        env.ctx.book.record_linked("work", "gmail", "box@example.test", datetime.now(UTC))
+        _signed_in(env)
+        resp = _link(env, "pessoal", "box@example.test")
+    elif make_refusal == "alias-taken":
+        _signed_in(env)
+        env.linker.result = LinkResult(credential_json=CRED, address="box@example.test")
+        flow, state = _flow_and_state(_start_link(env, "pessoal"))
+        env.add_account("pessoal", "other@example.test")
+        resp = _oauth_callback(env, flow, state)
+    else:
+        env.add_account("pessoal", "me@gmail.com")
+        env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+        _signed_in(env)
+        resp = _relink(env, "pessoal", "other@gmail.com")
+    assert resp.status_code == 400
+    assert _visible(resp.text).count(GRANT_HINT) == 1
+    assert f'href="{PERMISSIONS}"' in resp.text
+
+
+def _raise(*a, **k):
+    raise OSError("disk full")
+
+
+def _failing_once(real):
+    calls = []
+
+    def wrapper(*a, **k):
+        if not calls:
+            calls.append(a)
+            raise OSError("disk full")
+        return real(*a, **k)
+
+    return wrapper
+
+
+def test_link_rolls_back_when_the_book_write_fails(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    _signed_in(env)
+    book_before = env.ctx.book.path.read_text() if env.ctx.book.path.exists() else None
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    resp = _link(env, "pessoal")
+    assert resp.status_code == 500
+    assert "Nothing was changed" in resp.text
+    assert not _cred_path(env, "pessoal").exists()
+    assert "pessoal" not in env.ctx.registry.aliases()
+    assert (env.ctx.book.path.read_text() if env.ctx.book.path.exists() else None) == book_before
+    messages = [r.getMessage() for r in caplog.records]
+    assert any(m.startswith("admin link failed alias=pessoal step=book") for m in messages)
+    assert "secret-refresh" not in "\n".join(messages)
+
+
+def test_link_rolls_back_when_the_registry_update_fails(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.registry, "upsert", _failing_once(env.ctx.registry.upsert))
+    resp = _link(env, "pessoal")
+    assert resp.status_code == 500 and "Nothing was changed" in resp.text
+    assert not _cred_path(env, "pessoal").exists()
+    assert "pessoal" not in env.ctx.registry.aliases()
+    assert env.ctx.book.get("pessoal") is None
+    assert any(r.getMessage().startswith("admin link failed alias=pessoal step=registry")
+               for r in caplog.records)
+
+
+def test_relink_rolls_back_credential_and_registry_when_the_book_write_fails(env, monkeypatch):
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime(2026, 9, 1, tzinfo=UTC))
+    path = _cred_path(env, "pessoal")
+    path.write_text('{"refresh_token": "old"}')
+    old = env.ctx.registry.get("pessoal")
+    book_before = env.ctx.book.path.read_text()
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert resp.status_code == 500 and "Nothing was changed" in resp.text
+    assert path.read_text() == '{"refresh_token": "old"}'
+    restored = env.ctx.registry.get("pessoal")
+    assert restored.provider_name == old.provider_name and restored.credential_path == old.credential_path
+    assert env.ctx.book.path.read_text() == book_before
+
+
+def test_relink_of_removed_alias_rolls_back_to_removed(env, monkeypatch):
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    env.ctx.book.record_removed("pessoal", datetime.now(UTC))
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
+    resp = _relink(env, "pessoal", "me@gmail.com")
+    assert resp.status_code == 500
+    assert not _cred_path(env, "pessoal").exists()
+    assert "pessoal" not in env.ctx.registry.aliases()
+    assert env.ctx.book.get("pessoal").removed_at
+
+
+def test_remove_whose_record_fails_says_so(env, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="mailhub-mcp")
+    env.add_account("pessoal", "me@gmail.com")
+    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
+    _signed_in(env)
+    monkeypatch.setattr(env.ctx.book, "record_removed", _raise)
+    resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
+    assert resp.status_code == 500
+    assert "removed, but its record could not be saved" in resp.text
+    assert "http-equiv" not in resp.text
+    assert not _cred_path(env, "pessoal").exists()
+    assert "pessoal" not in env.ctx.registry.aliases()
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("alias=pessoal" in r.getMessage() for r in errors)
