@@ -4,8 +4,15 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from mailhub_mcp.core.content import MAX_BODY_CHARS
+
+# Callbacks of claude.ai custom connectors; the default allowlist when ALLOWED_REDIRECT_URIS is unset.
+DEFAULT_REDIRECT_URIS: tuple[str, ...] = (
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+)
 
 
 @dataclass(frozen=True)
@@ -15,6 +22,7 @@ class Settings:
     google_client_secret: str
     allowed_emails: frozenset[str]
     jwt_signing_key: str
+    allowed_redirect_uris: tuple[str, ...]
     accounts_dir: Path
     journal_path: Path
     port: int
@@ -35,6 +43,7 @@ class Settings:
                 e.strip().lower() for e in os.environ["ALLOWED_EMAILS"].split(",") if e.strip()
             ),
             jwt_signing_key=os.environ["JWT_SIGNING_KEY"],
+            allowed_redirect_uris=_redirect_uris_env("ALLOWED_REDIRECT_URIS"),
             accounts_dir=Path(os.environ.get("ACCOUNTS_DIR", "/secrets/accounts")),
             journal_path=Path(os.environ.get("JOURNAL_PATH", "/data/changes.jsonl")),
             port=int(os.environ.get("PORT", "8742")),
@@ -79,3 +88,57 @@ def _tools_mode(raw: str) -> Literal["all", "read-only"]:
     if value == "read-only":
         return "read-only"
     raise ValueError(f"TOOLS must be 'all' or 'read-only', got {raw!r}")
+
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1"})
+
+
+def _check_redirect_uri(name: str, entry: str) -> None:
+    """Accept only exact, unambiguous callbacks.
+
+    FastMCP treats entries as patterns (`*` wildcards; an entry with an empty or "/" path matches every
+    path on that host; a loopback entry without a port matches any port), so entries that would silently
+    widen the allowlist are refused here.
+    """
+    bad = ValueError(
+        f"{name} entry {entry!r} is not valid: use an absolute https:// callback URL with a path "
+        "(or http://localhost / http://127.0.0.1 with an optional port), without wildcards, user info, "
+        "query or fragment"
+    )
+    if any(c in entry for c in "*?[]\\") or any(c.isspace() or ord(c) < 32 for c in entry):
+        raise bad
+    try:
+        parts = urlsplit(entry)
+        host = parts.hostname
+        parts.port  # raises ValueError on a malformed port
+    except ValueError:
+        raise bad from None
+    if not host or parts.username is not None or parts.password is not None or parts.query or parts.fragment:
+        raise bad
+    if "#" in entry or "?" in entry:
+        raise bad
+    if any(seg in (".", "..") for seg in parts.path.split("/")) or "%" in parts.path:
+        raise bad
+    if parts.scheme == "https":
+        if host in _LOOPBACK_HOSTS or parts.path in ("", "/"):
+            raise bad
+    elif parts.scheme == "http":
+        if host not in _LOOPBACK_HOSTS:
+            raise bad
+    else:
+        raise bad
+
+
+def _redirect_uris_env(name: str) -> tuple[str, ...]:
+    raw = os.environ.get(name)
+    if raw is None:
+        return DEFAULT_REDIRECT_URIS
+    entries = tuple(dict.fromkeys(e.strip() for e in raw.split(",") if e.strip()))
+    if not entries:
+        raise ValueError(
+            f"{name} is set but empty, which would lock every MCP client out; list at least one "
+            "callback URL or unset it to use the Claude defaults"
+        )
+    for entry in entries:
+        _check_redirect_uri(name, entry)
+    return entries

@@ -5,8 +5,8 @@
 ```
 src/mailhub_mcp/
   server.py        FastMCP app: tool definitions, audit logging, entry point (mailhub-mcp)
-  auth.py          Google OAuth with an email allowlist; Claude-only redirect URIs
-  config.py        Settings.from_env()
+  auth.py          Google OAuth with an email allowlist; configurable redirect URI allowlist
+  config.py        Settings.from_env() and startup validation of its values
   cli.py           mailhub-authorize: links an account
   admin.py         mailhub-admin: out-of-band approval of preference proposals, `accounts` health check
   prompts.py       Text of the MCP prompts (registered in server.py)

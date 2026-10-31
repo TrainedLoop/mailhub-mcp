@@ -8,14 +8,6 @@ from mailhub_mcp.config import Settings
 
 log = logging.getLogger("mailhub-mcp")
 
-# Callback URLs Claude uses when connecting a custom connector. Any other MCP
-# client trying to register is refused.
-CLAUDE_REDIRECT_URIS = [
-    "https://claude.ai/api/mcp/auth_callback",
-    "https://claude.com/api/mcp/auth_callback",
-]
-
-
 class AllowlistGoogleProvider(GoogleProvider):
     """Google login that only accepts tokens for allowlisted, verified emails.
 
@@ -45,7 +37,7 @@ def build_auth(settings: Settings) -> AllowlistGoogleProvider:
         client_secret=settings.google_client_secret,
         base_url=settings.public_base_url,
         required_scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
-        allowed_client_redirect_uris=CLAUDE_REDIRECT_URIS,
+        allowed_client_redirect_uris=list(settings.allowed_redirect_uris),
         jwt_signing_key=settings.jwt_signing_key,
         extra_authorize_params={"prompt": "select_account"},
         allowed_emails=settings.allowed_emails,

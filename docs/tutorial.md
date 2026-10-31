@@ -210,7 +210,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 |---|---|
 | `redirect_uri_mismatch` from Google | The Web client's redirect URI differs from `<PUBLIC_BASE_URL>/auth/callback` |
 | Connector fails to connect, or every call returns 401 | The Google account is not in `ALLOWED_EMAILS` (look for `rejected token` in the logs) |
-| `invalid_redirect_uri` when connecting | Claude's callback URL changed; update `CLAUDE_REDIRECT_URIS` in `src/mailhub_mcp/auth.py` |
+| `invalid_redirect_uri` when connecting | The client's callback URL is not in `ALLOWED_REDIRECT_URIS` (the default only has the claude.ai and claude.com callbacks); add it to `.env` and restart |
 | `invalid_grant` when reading mail after several days | The app is in *Testing*: publish it (step 2.3) and run `mailhub-authorize` again for that alias |
 | `list_accounts` is empty, log warning mentions `/secrets/accounts` | Folder missing or no `<provider>/<alias>.json`; invalid alias in a file name; unknown provider folder |
 | Startup fails with a duplicate alias error | The same alias exists under two provider folders; rename one file |
@@ -219,6 +219,7 @@ jq -r '.change_id' data/changes.jsonl | tac
 | `create_draft` says drafts are replies only, or lists allowed addresses | The draft needs `reply_to_message_id`, and `to` and `cc` must be people already in that thread |
 | `create_draft` says the thread is flagged as a possible prompt injection | A message in the thread matched the injection heuristics; reply manually in Gmail |
 | A write tool (`modify_emails`, `set_preferences`, ...) does not exist | The server runs with `TOOLS=read-only`; set `TOOLS=all` and restart |
+| Startup fails with `ALLOWED_REDIRECT_URIS entry ... is not valid`, or says it is empty | An entry is not an https URL with a path (or localhost), or contains a wildcard; fix or unset it |
 | Startup fails with `TOOLS must be 'all' or 'read-only'` | Invalid `TOOLS` value in `.env` |
 | `set_preferences` returns `pending` instead of applying | The change lowers attention; approve it with `mailhub-admin preferences approve <id>` |
 | Log warning `ALLOWED_EMAILS has N addresses` | More than one login can use this instance, and each sees every linked mailbox. Keep only the owner's login and give other people their own instance (step 14) |
@@ -241,3 +242,20 @@ mailhub-mcp is designed for one owner per instance: every login in `ALLOWED_EMAI
 5. They add their own custom connector in claude.ai with `<their PUBLIC_BASE_URL>/mcp` and log in with their own Google account.
 
 Run each instance's `docker compose` and `mailhub-admin` commands from its own directory. If the instances get the example firewall, give each its own network and subnet; see [examples/tailscale-funnel/](../examples/tailscale-funnel/#more-than-one-person).
+
+## 15. Connecting other MCP clients
+
+Only Claude (a claude.ai custom connector) is tested. Other clients should work if they support:
+
+- a remote MCP server over streamable HTTP, at `<PUBLIC_BASE_URL>/mcp`;
+- OAuth 2.1 with PKCE and dynamic client registration (the server publishes its metadata under `/.well-known/`).
+
+Add the client's OAuth callback URL (its documentation says what it is) to `ALLOWED_REDIRECT_URIS` in `.env` and restart:
+
+```
+ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback,https://claude.com/api/mcp/auth_callback,<the client's callback URL>
+```
+
+Setting the variable replaces the default list, so keep the Claude entries if you still use claude.ai. Entries are matched exactly (FastMCP treats them as patterns, so the server refuses wildcards, and an entry without a path would let any path on that host register). Each must be an `https://` URL with a path, or `http://localhost` / `http://127.0.0.1` for a client running on the same machine; without a port, a loopback entry accepts any port, as RFC 8252 says. An invalid or empty value stops the server at startup, naming the entry. A client whose callback is not listed gets `invalid_redirect_uri` when it registers.
+
+Then add the connector in the client with the URL `<PUBLIC_BASE_URL>/mcp` and log in with the Google account in `ALLOWED_EMAILS`.
