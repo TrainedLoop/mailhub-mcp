@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from mailhub_mcp.core.content import MAX_BODY_CHARS
+
 
 @dataclass(frozen=True)
 class Settings:
@@ -39,7 +41,7 @@ class Settings:
             max_changes_per_day=_int_env("MAX_CHANGES_PER_DAY", 2000),
             tools_mode=_tools_mode(os.environ.get("TOOLS", "all")),
             gmail_units_per_minute=_positive_int_env("GMAIL_UNITS_PER_MINUTE", 4800),
-            max_body_chars=_int_env("MAX_BODY_CHARS", 2000),
+            max_body_chars=_body_chars_env("MAX_BODY_CHARS", 2000),
         )
 
 
@@ -53,6 +55,13 @@ def _int_env(name: str, default: int) -> int:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}") from None
     if value < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
+    return value
+
+
+def _body_chars_env(name: str, default: int) -> int:
+    value = _int_env(name, default)
+    if value > MAX_BODY_CHARS:
+        raise ValueError(f"{name} must be at most {MAX_BODY_CHARS} (0 means the full body), got {value!r}")
     return value
 
 

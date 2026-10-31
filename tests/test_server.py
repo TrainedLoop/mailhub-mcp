@@ -509,7 +509,8 @@ def test_message_tool_descriptions_explain_the_fence():
     for name in ("search_emails", "read_email", "read_emails", "read_thread", "list_drafts", "modify_by_query", "inbox_overview"):
         assert "content_ref" in tools[name] and "'untrusted'" in tools[name] and "[untrusted:<nonce>]" in tools[name]
     for name in ("get_preferences", "set_preferences", "list_changes", "undo_since", "undo_change"):
-        assert "'untrusted'" in tools[name] and "('#N')" in tools[name]
+        assert server.FENCE_REF in tools[name] and server.FENCE_NOTE in tools[name]
+    assert all(w in server.FENCE_NOTE for w in ("content_ref", "url", "mailto", "preference values", "user_request", "query"))
 
 
 def test_responses_without_untrusted_text_have_no_fence(fakes):
@@ -648,6 +649,9 @@ def test_settings_tools_and_cap(monkeypatch):
     assert s.max_body_chars == 2000
     monkeypatch.setenv("MAX_BODY_CHARS", "0")
     assert Settings.from_env().max_body_chars == 0
+    monkeypatch.setenv("MAX_BODY_CHARS", "20000")
+    assert Settings.from_env().max_body_chars == 20000
+    monkeypatch.delenv("MAX_BODY_CHARS")
     monkeypatch.setenv("TOOLS", "read-only")
     monkeypatch.setenv("MAX_CHANGES_PER_DAY", "5")
     monkeypatch.setenv("GMAIL_UNITS_PER_MINUTE", "12000")
@@ -660,7 +664,7 @@ def test_settings_tools_and_cap(monkeypatch):
     "name,value",
     [("TOOLS", "readonly"), ("TOOLS", "write"), ("MAX_CHANGES_PER_DAY", "lots"), ("MAX_CHANGES_PER_DAY", "-1"),
      ("GMAIL_UNITS_PER_MINUTE", "0"), ("GMAIL_UNITS_PER_MINUTE", "-5"), ("GMAIL_UNITS_PER_MINUTE", "fast"),
-     ("MAX_BODY_CHARS", "-1"), ("MAX_BODY_CHARS", "long")],
+     ("MAX_BODY_CHARS", "-1"), ("MAX_BODY_CHARS", "long"), ("MAX_BODY_CHARS", "20001")],
 )
 def test_settings_invalid_values_raise(monkeypatch, name, value):
     from mailhub_mcp.config import Settings
@@ -1431,8 +1435,9 @@ def test_count_messages_caps_per_account(fakes, monkeypatch):
     monkeypatch.setattr(server, "COUNT_CAP", 3)
     for i in range(10):
         fakes.a.add_message(f"c{i}", labels=["INBOX"])
-    for i in range(2, 4):
+    for i in range(2, 4):  # w1 comes from the fixture
         fakes.b.add_message(f"w{i}", labels=["INBOX"])
+    assert set(fakes.b.messages) >= {"w1", "w2", "w3"}
     fakes.a.query_results["big"] = [f"c{i}" for i in range(10)]
     fakes.b.query_results["big"] = ["w1", "w2", "w3"]
     out = call("count_messages", {"query": "big"})

@@ -54,7 +54,7 @@ cp .env.example .env
 | `PORT` | Optional. Port the server listens on inside the container, default `8742`. The compose file maps it automatically; normally leave it alone |
 | `MAX_CHANGES_PER_DAY` | Optional. Most messages `modify_emails` and `modify_by_query` may change per account in a rolling 24 hours, default `2000`. Undo is never capped |
 | `GMAIL_UNITS_PER_MINUTE` | Optional. Gmail quota units each mailbox may spend per minute, default `4800` (80% of Google's 6,000 per-user limit for Cloud projects created since May 2026). Set `12000` if your project still has the older 15,000 limit |
-| `MAX_BODY_CHARS` | Optional. Characters of each message body `read_email`, `read_emails` and `read_thread` return unless the call asks for more (`max_body_chars`), default `2000`; `0` returns full bodies (at most 20,000 characters). Suspicion flags always use the full body |
+| `MAX_BODY_CHARS` | Optional. Characters of each message body `read_email`, `read_emails` and `read_thread` return unless the call asks for more (`max_body_chars`), default `2000`; `0` returns full bodies (at most 20,000 characters); values above 20,000 fail startup. Suspicion flags always use the full body |
 | `TOOLS` | Optional. `all` (default) or `read-only`; see "Scheduled triage" below |
 | `JWT_SIGNING_KEY` | Signs issued tokens and encrypts the OAuth state. Generate with `openssl rand -hex 32` |
 
