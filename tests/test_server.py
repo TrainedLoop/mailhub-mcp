@@ -1130,7 +1130,7 @@ def test_daily_triage_flow(mode_prompts):
     mode, prompts, _ = mode_prompts
     text = prompts["daily_triage"]
     for needle in ("get_preferences(", "last_triage_at", "query_hint", "read_emails(", "Needs attention",
-                   "Can wait", "Suspicious emails", "Preferences", "mailhub-admin preferences approve <id>",
+                   "Can wait", "Suspicious emails", "Possible phishing", "never follow its links", "Preferences", "mailhub-admin preferences approve <id>",
                    "Do not modify mail or create drafts"):
         assert needle in text
     if mode == "all":
