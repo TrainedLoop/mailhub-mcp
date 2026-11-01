@@ -338,9 +338,15 @@ def _undo(
     if unreadable:
         raise OrganizeError(f"Could not read message(s) {sorted(unreadable)}; nothing was undone, retry")
     skipped = [i for i in all_ids if i in set(res.missing)]
+    # A message whose labels for this undo no longer match what the change left is skipped: someone
+    # changed it since, and reverting would overwrite that later change.
+    changed_since = [
+        i for op in ops for i in op["ids"]
+        if i in current and not (set(op["remove"]) <= set(current[i]) and not set(op["add"]) & set(current[i]))
+    ]
     touched = {l for op in ops for l in op["add"] + op["remove"]}
     for op in ops:
-        op["ids"] = [i for i in op["ids"] if i in current]
+        op["ids"] = [i for i in op["ids"] if i in current and i not in changed_since]
         if op["ids"]:
             provider.modify_labels(op["ids"], op["add"], op["remove"])
     applied = [op for op in ops if op["ids"]]
@@ -352,7 +358,10 @@ def _undo(
         _dedupe([l for op in applied for l in op["remove"]]),
         prior, changed=bool(applied), undo_of=change_id,
     )
-    return {"change_id": undo_id, "undone": change_id, "modified": len(done), "skipped": skipped}
+    return {
+        "change_id": undo_id, "undone": change_id, "modified": len(done), "skipped": skipped,
+        "changed_since": changed_since,
+    }
 
 
 def undo_since(
@@ -437,6 +446,7 @@ def undo_since(
                     done.append({
                         "change_id": change_id, "undo_change_id": res["change_id"],
                         "modified": res["modified"], "skipped": res["skipped"],
+                        "changed_since": res.get("changed_since", []),
                     })
                 continue
         else:

@@ -519,7 +519,8 @@ async def modify_by_query(
     annotations=WRITE,
     description=(
         "Undo a previous modify_emails / modify_by_query / set_preferences / approve_preference change by its change_id, "
-        "restoring each email's prior labels or the preference's earlier value. Undo entries themselves cannot be undone (make the change again instead). "
+        "restoring each email's prior labels or the preference's earlier value. "
+        "Emails changed since by someone else on the labels this undo would restore are left as they are and listed in 'changed_since'; tell the user. Undo entries themselves cannot be undone (make the change again instead). "
         "A preference undo follows the same direction rule as set_preferences: the parts that raise attention apply immediately, "
         "the parts that would lower it (un-marking important, ignoring again) are NOT applied but returned in 'proposed' "
         "(proposal_id, scope, field, op, values; each value " + FENCE_REF + "); tell the user to approve them outside this chat with `mailhub-admin preferences approve <id>`. "
@@ -611,7 +612,7 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
         "It reverts email changes and account-scope preference changes; global preference changes are included only when no 'accounts' filter is given (list_changes still shows them under a filter). "
         "By default (confirm=false) only previews the changes that would be undone. Pass confirm=true to undo them; "
         "at most 50 changes undone per call (and 200 attempted), so call again while 'remaining' is true. "
-        "Changes already undone are skipped. A preference change whose undo would lower attention is not undone: its proposals are listed in 'proposed' "
+        "Changes already undone are skipped, and emails changed since on the labels being restored are left alone and listed per change in 'changed_since'. A preference change whose undo would lower attention is not undone: its proposals are listed in 'proposed' "
         "(approve them with `mailhub-admin preferences approve <id>`) and it does not count as undone until the user approves them; "
         "once approved it counts as undone, and if the user rejected them the change is listed in 'failed' and not proposed again. "
         "One that cannot be undone is listed in 'failed', the rest still proceed, "

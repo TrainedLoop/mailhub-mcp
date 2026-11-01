@@ -57,7 +57,7 @@ Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALL
 ### Every change is reversible and capped
 
 - `modify_by_query` previews by default (`confirm=false`: match count plus a sample). Applying (`confirm=true`) touches at most 500 messages per call.
-- Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had.
+- Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had. Messages whose touched labels were changed again since (for example by hand) are left alone and reported in `changed_since`.
 - `list_changes` shows the journal (newest first, with label names). `undo_since` reverts every change since a time, newest first so overlapping changes restore exactly; it previews by default (`confirm=false`) and handles at most 50 changes per call.
 - Every message the server changes gets the organized label (`mailhub/organized` by default, set with `ORG_LABEL`; existing installs that used `claude/organized` should set it to that value; created automatically in each account), so you can always find what the assistant touched. `modify_emails` and `modify_by_query` refuse to remove it; only `undo_change` and `undo_since` take it off, together with the rest of the reverted change.
 - A daily cap (`MAX_CHANGES_PER_DAY`, default 2000) limits how many messages `modify_emails` and `modify_by_query` can change per account in a rolling 24 hours. Undo is never capped.
