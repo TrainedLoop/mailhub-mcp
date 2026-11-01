@@ -78,6 +78,8 @@ class Draft(_Accounted):
     draft_id: str
     message_id: str
     thread_id: str | None
+    # Set when a recipient appears in the thread only as a Reply-To address.
+    warning: str | None = None
 
 
 class LabelState(_Base):

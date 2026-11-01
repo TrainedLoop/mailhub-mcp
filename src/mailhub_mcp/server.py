@@ -21,7 +21,7 @@ from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, assess, clean_text, truncate_body
-from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
+from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal
@@ -717,7 +717,9 @@ async def set_preferences(
         "Policy: replies only. reply_to_message_id is required (new threads are refused), and 'to' and 'cc' may only contain "
         "addresses already in that thread (From, To, Cc or Reply-To of any message) or the account's own address; "
         "anything else is refused and the error lists the allowed addresses. "
-        "When 'to' is omitted it defaults to the Reply-To of the replied message, else its From. "
+        "When 'to' is omitted it defaults to the From of the replied message; if its Reply-To names a different address, "
+        "the call is refused and you must ask the user which address to reply to, then pass 'to'. "
+        "If a recipient appears in the thread only as a Reply-To, the result carries a 'warning'; show it to the user. "
         "Subject defaults to 'Re: ...' and must be a single line. "
         "Drafting is disabled for a thread containing any message flagged suspicious (possible prompt injection): the user must reply manually in Gmail. "
         "Costs about 140 Gmail quota units (message lookup and thread read) plus the draft."
@@ -755,7 +757,14 @@ async def create_draft(
             to_addr, cc_addr = resolve_recipients(thread, reply_to_message_id, p.address(), to, cc)
         except DraftRefused as exc:
             raise MailhubError(str(exc)) from None
-        return p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
+        draft = p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
+        outsiders = reply_to_only(thread, p.address(), to_addr, cc_addr)
+        if outsiders:
+            draft.warning = (
+                f"{', '.join(outsiders)} only appears in this thread as a Reply-To address, never as a sender or recipient; "
+                "check with the user that the draft should go there before they send it"
+            )
+        return draft
 
     return await one(account, work)
 
