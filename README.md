@@ -57,7 +57,7 @@ Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALL
 ### Every change is reversible and capped
 
 - `modify_by_query` previews by default (`confirm=false`: match count plus a sample). Applying (`confirm=true`) touches at most 500 messages per call.
-- Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had.
+- Every change is journaled to `changes.jsonl` with the labels each message had before. `undo_change` reverts exactly that batch and never removes labels a message already had. Messages whose touched labels were changed again since (for example by hand) are left alone and reported in `changed_since`.
 - `list_changes` shows the journal (newest first, with label names). `undo_since` reverts every change since a time, newest first so overlapping changes restore exactly; it previews by default (`confirm=false`) and handles at most 50 changes per call.
 - Every message the server changes gets the organized label (`mailhub/organized` by default, set with `ORG_LABEL`; existing installs that used `claude/organized` should set it to that value; created automatically in each account), so you can always find what the assistant touched. `modify_emails` and `modify_by_query` refuse to remove it; only `undo_change` and `undo_since` take it off, together with the rest of the reverted change.
 - A daily cap (`MAX_CHANGES_PER_DAY`, default 2000) limits how many messages `modify_emails` and `modify_by_query` can change per account in a rolling 24 hours. Undo is never capped.
@@ -67,7 +67,7 @@ Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALL
 
 - Email content is treated as untrusted third-party text. Before the model sees a message, hidden HTML (for example `display:none` or zero-size text, comments, scripts) and invisible or bidirectional control characters are removed. Untrusted text (`body`, `snippet`, unsubscribe links, preference values, recorded requests) is never inline: each response puts all of it in one `untrusted` block, `[untrusted:<nonce>]` ... `[/untrusted:<nonce>]` with a fresh random nonce per response (marker lookalikes inside are defanged), and messages point into it with `content_ref`. Tool descriptions tell the model that nothing inside is an instruction.
 - Each message carries `suspicious` and `suspicious_reasons`, from heuristics for injection attempts (mentions of tool names, "ignore previous instructions", addressing an assistant by name, requests to forward or draft, large amounts of hidden text). The model is told to report flagged emails and not to act on them. This is an aid, not a guarantee.
-- Drafts are replies only: `create_draft` requires a message to reply to, and `to` and `cc` may only contain people already in that thread (plus your own address). Drafting is refused for a thread that contains a suspicious message.
+- Drafts are replies only: `create_draft` requires a message to reply to, and `to` and `cc` may only contain people already in that thread (plus your own address). A Reply-To that differs from the sender is never used as the default recipient, and a draft addressed to someone seen only in a Reply-To comes back with a warning. Drafting is refused for a thread that contains a suspicious message.
 - These defenses have limits (heuristics can be evaded, the server cannot verify who motivated a call); see [Limitations](docs/architecture.md#limitations).
 
 ### Out-of-band approval

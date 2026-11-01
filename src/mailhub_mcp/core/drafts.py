@@ -24,6 +24,17 @@ def thread_participants(thread: Thread, own_address: str) -> set[str]:
     return people
 
 
+def reply_to_only(thread: Thread, own_address: str, to: str | None, cc: str | None) -> list[str]:
+    """Recipients that appear in the thread only as a Reply-To, never in From, To or Cc.
+
+    Any sender can set Reply-To to an address that never took part in the conversation.
+    """
+    seen = set(_addresses(own_address))
+    for m in thread.messages:
+        seen.update(_addresses(m.from_, m.to, m.cc))
+    return [a for a in dict.fromkeys(_addresses(to or "", cc or "")) if a not in seen]
+
+
 def _allowed_text(allowed: set[str]) -> str:
     return ", ".join(sorted(allowed))
 
@@ -48,7 +59,8 @@ def resolve_recipients(
 ) -> tuple[str, str | None]:
     """Validate to/cc against the thread and return normalized (to, cc).
 
-    Without `to`, the reply goes to the Reply-To of the replied message, else its From.
+    Without `to`, the reply goes to the From of the replied message, or to its Reply-To when that names
+    the same addresses; a Reply-To that differs from From is refused so the user picks the recipient.
     """
     replied = next((m for m in thread.messages if m.id == reply_to_message_id), None)
     if replied is None:
@@ -57,7 +69,13 @@ def resolve_recipients(
     if to and to.strip():
         to_list = _check("to", to, allowed)
     else:
-        default = _addresses(replied.reply_to) or _addresses(replied.from_)
+        reply_to, sender = _addresses(replied.reply_to), _addresses(replied.from_)
+        if reply_to and not set(reply_to) <= set(sender):
+            raise DraftRefused(
+                f"the replied message asks for replies to go to {', '.join(reply_to)} (Reply-To), but it was sent "
+                f"from {', '.join(sender) or 'no address'} (From); ask the user which one to reply to and pass 'to'"
+            )
+        default = reply_to or sender
         if not default:
             raise DraftRefused(
                 f"the replied message has no Reply-To or From address; pass 'to'. Allowed addresses: {_allowed_text(allowed)}"

@@ -1,6 +1,6 @@
 import pytest
 
-from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients, thread_participants
+from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients, thread_participants
 from mailhub_mcp.core.models import Message, Thread
 
 
@@ -29,9 +29,25 @@ def test_participants_normalized_and_include_own(thread):
     }
 
 
-def test_default_recipient_is_reply_to_else_from(thread):
-    assert resolve_recipients(thread, "m1", "me@x.com", None, None) == ("list@example.com", None)
+def test_default_recipient_is_from_without_reply_to(thread):
     assert resolve_recipients(thread, "m2", "me@x.com", None, None) == ("me@x.com", None)
+
+
+def test_default_recipient_is_reply_to_when_it_matches_from():
+    t = Thread(messages=[msg("m1", from_="Bob <bob@example.com>", reply_to="BOB@example.com")], replied_by_me=False)
+    assert resolve_recipients(t, "m1", "me@x.com", None, None) == ("bob@example.com", None)
+
+
+def test_no_default_recipient_when_reply_to_differs_from_from(thread):
+    # Anyone can set Reply-To to an address that never took part in the thread; the user must pick.
+    with pytest.raises(DraftRefused, match="Reply-To") as e:
+        resolve_recipients(thread, "m1", "me@x.com", None, None)
+    assert "list@example.com" in str(e.value) and "bob@example.com" in str(e.value)
+
+
+def test_reply_to_only_lists_addresses_seen_only_in_reply_to(thread):
+    assert reply_to_only(thread, "me@x.com", "List <list@example.com>, bob@example.com", None) == ["list@example.com"]
+    assert reply_to_only(thread, "me@x.com", "bob@example.com", "carol@example.com") == []
 
 
 def test_allowed_variants(thread):
@@ -47,7 +63,7 @@ def test_outsider_refused_and_allowed_listed(thread):
 
 def test_cc_outsider_refused(thread):
     with pytest.raises(DraftRefused, match="evil@attacker.com"):
-        resolve_recipients(thread, "m1", "me@x.com", None, "evil@attacker.com")
+        resolve_recipients(thread, "m1", "me@x.com", "bob@example.com", "evil@attacker.com")
 
 
 def test_unknown_message_in_thread(thread):

@@ -200,6 +200,25 @@ def test_undo_skips_missing_messages_and_reports_them(fake, provider, journal):
     assert "INBOX" in fake.messages["m1"]["labelIds"]
 
 
+def test_undo_skips_messages_changed_by_hand_since_and_reports_them(fake, provider, journal):
+    r = modify(provider, journal, "a", ["m1", "m2"], [], [], archive=True, mark_read=None, star=True)
+    # The owner moves m2 back to the inbox by hand: undoing would also un-star it behind their back.
+    fake.set_labels("m2", fake.messages["m2"]["labelIds"] + ["INBOX"])
+    after_hand_edit = list(fake.messages["m2"]["labelIds"])
+    u = undo(provider, journal, "a", r["change_id"])
+    assert u["changed_since"] == ["m2"] and u["modified"] == 1
+    assert fake.messages["m2"]["labelIds"] == after_hand_edit
+    assert "INBOX" in fake.messages["m1"]["labelIds"]
+
+
+def test_undo_ignores_hand_edits_to_labels_the_change_did_not_touch(fake, provider, journal):
+    r = modify(provider, journal, "a", ["m1"], [], [], archive=True, mark_read=None, star=None)
+    fake.set_labels("m1", fake.messages["m1"]["labelIds"] + ["Label_9"])
+    u = undo(provider, journal, "a", r["change_id"])
+    assert u["changed_since"] == [] and u["modified"] == 1
+    assert "INBOX" in fake.messages["m1"]["labelIds"] and "Label_9" in fake.messages["m1"]["labelIds"]
+
+
 def test_modify_transient_read_failure_refused_without_writes(fake, provider, journal):
 
     fake.get_errors["m2"] = http_error(503, "Unavailable")
@@ -872,3 +891,15 @@ def test_undo_of_older_entries_survives_changing_the_org_label(fake, provider, j
     for m in ("m1", "m2"):
         labels = fake.messages[m]["labelIds"]
         assert old_id not in labels and new_id not in labels and "INBOX" in labels
+
+
+def test_undo_since_reports_messages_changed_by_hand_since(fake, provider, journal):
+    from datetime import datetime, timezone
+
+    from mailhub_mcp.core.organize import undo_since
+
+    r = modify(provider, journal, "a", ["m1", "m2"], [], [], True, None, None)
+    fake.set_labels("m2", fake.messages["m2"]["labelIds"] + ["INBOX"])
+    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=timezone.utc), None, True)
+    assert out["undone"] == [ANY] and out["undone"][0]["changed_since"] == ["m2"]
+    assert out["undone"][0]["change_id"] == r["change_id"]

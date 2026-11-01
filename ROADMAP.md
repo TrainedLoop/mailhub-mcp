@@ -37,6 +37,10 @@ Known gaps from the review of the admin page (v0.2.0). None of them can attach t
 - **Search-index lag mitigation.** Take a second history marker right before a write and drop prior-state entries that history shows were no-ops.
 - **Host/Origin protection.** Evaluate FastMCP's host/origin protection behind common reverse proxies and tunnels.
 - **More providers.** Outlook (Microsoft Graph) and generic IMAP behind the existing `MailProvider` interface and contract suite.
+  - Both organize mail with folders and flags instead of labels. The provider maps that state to label-like tokens (`folder:Inbox`, `unread`, `flagged`, `category:<name>`), so the journal, undo and the `changed_since` check in core stay as they are; archiving becomes removing `folder:Inbox` and adding `folder:Archive`, applied as one move.
+  - Stable ids across moves: Graph can return a new id when a message moves, so request immutable ids (`Prefer: IdType="ImmutableId"`). IMAP assigns a new UID on move; use MOVE with UIDPLUS to learn it and update the journal, and treat servers without it as limited (undo may not find moved messages).
+  - Folders are exclusive: refuse a change that would leave a message in two folders or in none, and apply a folder swap as a single move.
+  - A folder the change moved mail into may be deleted later: undo must detect it and report the affected messages instead of failing halfway.
 - **"Alternatives" section in the README.** Point to Google's official Gmail MCP server and other open-source Gmail MCP servers, and explain when mailhub is the better fit.
 - **Login providers.** Microsoft and generic OIDC (covers self-hosted identity such as Pocket ID or Authelia) for the MCP connector and the admin page together.
 - **Quarantine label for deletion candidates.** A tool (or a mode of `modify_by_query`) that applies `mailhub/to-trash` and archives, journaled and undoable like any label change. The owner opens that label in their mail client and deletes in bulk. The model sorts; the person deletes.

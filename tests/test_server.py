@@ -239,6 +239,18 @@ def test_create_draft_outsider_refused(fakes):
     assert not fakes.a.drafts
 
 
+def test_create_draft_reply_to_mismatch_needs_explicit_recipient_and_warns(fakes):
+    fakes.a.add_message(
+        "r1", labels=["INBOX"], internal_date=6,
+        headers={"Subject": "Invoice", "From": "Billing <billing@vendor.com>", "Reply-To": "pay@elsewhere.net"},
+    )
+    with pytest.raises(ToolError, match=r"pay@elsewhere\.net \(Reply-To\)"):
+        call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "r1"})
+    assert not fakes.a.drafts
+    out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "r1", "to": "pay@elsewhere.net"})
+    assert out["draft_id"] and "pay@elsewhere.net" in out["warning"]
+
+
 def test_create_draft_allows_participant_variants(fakes):
     out = call("create_draft", {"account": "alice-personal", "body": "hi", "reply_to_message_id": "m1", "to": "X Y <X@Y.com>"})
     assert out["draft_id"]

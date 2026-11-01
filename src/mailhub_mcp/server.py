@@ -21,7 +21,7 @@ from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, assess, clean_text, truncate_body
-from mailhub_mcp.core.drafts import DraftRefused, resolve_recipients
+from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal
@@ -519,7 +519,8 @@ async def modify_by_query(
     annotations=WRITE,
     description=(
         "Undo a previous modify_emails / modify_by_query / set_preferences / approve_preference change by its change_id, "
-        "restoring each email's prior labels or the preference's earlier value. Undo entries themselves cannot be undone (make the change again instead). "
+        "restoring each email's prior labels or the preference's earlier value. "
+        "Emails changed since by someone else on the labels this undo would restore are left as they are and listed in 'changed_since'; tell the user. Undo entries themselves cannot be undone (make the change again instead). "
         "A preference undo follows the same direction rule as set_preferences: the parts that raise attention apply immediately, "
         "the parts that would lower it (un-marking important, ignoring again) are NOT applied but returned in 'proposed' "
         "(proposal_id, scope, field, op, values; each value " + FENCE_REF + "); tell the user to approve them outside this chat with `mailhub-admin preferences approve <id>`. "
@@ -611,7 +612,7 @@ async def list_changes(accounts: list[str] | None = None, since: str | None = No
         "It reverts email changes and account-scope preference changes; global preference changes are included only when no 'accounts' filter is given (list_changes still shows them under a filter). "
         "By default (confirm=false) only previews the changes that would be undone. Pass confirm=true to undo them; "
         "at most 50 changes undone per call (and 200 attempted), so call again while 'remaining' is true. "
-        "Changes already undone are skipped. A preference change whose undo would lower attention is not undone: its proposals are listed in 'proposed' "
+        "Changes already undone are skipped, and emails changed since on the labels being restored are left alone and listed per change in 'changed_since'. A preference change whose undo would lower attention is not undone: its proposals are listed in 'proposed' "
         "(approve them with `mailhub-admin preferences approve <id>`) and it does not count as undone until the user approves them; "
         "once approved it counts as undone, and if the user rejected them the change is listed in 'failed' and not proposed again. "
         "One that cannot be undone is listed in 'failed', the rest still proceed, "
@@ -716,7 +717,9 @@ async def set_preferences(
         "Policy: replies only. reply_to_message_id is required (new threads are refused), and 'to' and 'cc' may only contain "
         "addresses already in that thread (From, To, Cc or Reply-To of any message) or the account's own address; "
         "anything else is refused and the error lists the allowed addresses. "
-        "When 'to' is omitted it defaults to the Reply-To of the replied message, else its From. "
+        "When 'to' is omitted it defaults to the From of the replied message; if its Reply-To names a different address, "
+        "the call is refused and you must ask the user which address to reply to, then pass 'to'. "
+        "If a recipient appears in the thread only as a Reply-To, the result carries a 'warning'; show it to the user. "
         "Subject defaults to 'Re: ...' and must be a single line. "
         "Drafting is disabled for a thread containing any message flagged suspicious (possible prompt injection): the user must reply manually in Gmail. "
         "Costs about 140 Gmail quota units (message lookup and thread read) plus the draft."
@@ -754,7 +757,14 @@ async def create_draft(
             to_addr, cc_addr = resolve_recipients(thread, reply_to_message_id, p.address(), to, cc)
         except DraftRefused as exc:
             raise MailhubError(str(exc)) from None
-        return p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
+        draft = p.create_draft(to_addr, subject, body, cc_addr, reply_to_message_id)
+        outsiders = reply_to_only(thread, p.address(), to_addr, cc_addr)
+        if outsiders:
+            draft.warning = (
+                f"{', '.join(outsiders)} only appears in this thread as a Reply-To address, never as a sender or recipient; "
+                "check with the user that the draft should go there before they send it"
+            )
+        return draft
 
     return await one(account, work)
 
