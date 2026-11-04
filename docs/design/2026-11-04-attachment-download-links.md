@@ -51,7 +51,7 @@ One core function, `download_block_reason(spam: bool, suspicious: bool, filename
 
 - `spam` when the message is in spam;
 - `suspicious` when the message's suspicion assessment returns any reason;
-- `blocked_type` when the file name's extension is on the list of types Gmail blocks (`.ade .adp .apk .appx .appxbundle .bat .cab .chm .cmd .com .cpl .diagcab .diagcfg .diagpack .dll .dmg .ex .ex_ .exe .hta .ins .isp .iso .jar .jnlp .js .jse .lib .lnk .mde .mjs .msc .msi .msix .msixbundle .msp .mst .nsh .pif .ps1 .scr .sct .shb .sys .vb .vbe .vbs .vhd .vxd .wsc .wsf .wsh .xll`), compared case-insensitively on the last extension;
+- `blocked_type` when the file name's extension is on the list of types Gmail blocks (`.ade .adp .apk .appx .appxbundle .bat .cab .chm .cmd .com .cpl .diagcab .diagcfg .diagpack .dll .dmg .ex .ex_ .exe .hta .ins .isp .iso .jar .jnlp .js .jse .lib .lnk .mde .mjs .msc .msi .msix .msixbundle .msp .mst .nsh .pif .ps1 .scr .sct .shb .sys .vb .vbe .vbs .vhd .vxd .wsc .wsf .wsh .xll`), compared case-insensitively on the last extension, after NFKC and with trailing dots, whitespace and invisible characters ignored, on the original name and on both names the download would be served under (`core.attachments.served_filename` and its ASCII fallback), so a served name never ends in a blocked extension unless this rule fired;
 - `None` otherwise.
 
 The suspicion assessment of a message moves from `server.py` into core (`message_suspicion(message, tool_names)`) so that the read tools and the download endpoint compute `suspicious` the same way. It still takes the server's tool names, which the admin context receives when it is built.
@@ -88,7 +88,7 @@ Network calls run through the admin `CapacityLimiter`. The file is held in memor
 The response carries:
 
 - `Content-Type: application/octet-stream`, never the type declared in the email;
-- `Content-Disposition: attachment; filename="<ascii fallback>"; filename*=UTF-8''<percent-encoded name>`, where the name has control characters, path separators, quotes and leading dots removed and is cut to 150 characters, with `attachment` as the fallback when nothing is left;
+- `Content-Disposition: attachment; filename="<ascii fallback>"; filename*=UTF-8''<percent-encoded name>`, where the name (`core.attachments.served_filename`) is NFKC-normalized, has control characters, path separators, quotes and leading and trailing dots and whitespace removed, and is cut to 150 characters keeping the last extension, with `attachment` as the fallback when nothing is left;
 - `X-Content-Type-Options: nosniff`;
 - the `/admin` security headers (CSP `default-src 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cache-Control: no-store`).
 

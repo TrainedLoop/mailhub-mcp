@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from urllib.parse import unquote
 
 import pytest
@@ -12,6 +13,7 @@ from mailhub_mcp.admin_web.attachment_links import (
     derive_link_key,
 )
 from mailhub_mcp.admin_web.session import Signer, derive_key
+from mailhub_mcp.core.attachments import GMAIL_BLOCKED_EXTENSIONS, download_block_reason
 
 SECRET = "test-signing-secret"
 NOW = 1_800_000_000.0
@@ -72,6 +74,8 @@ def test_malformed_tokens(bad):
         {"a": "x", "m": "y", "p": "2", "exp": True},
         {"a": "x", "m": "y", "exp": 9e9},
         {"a": "x", "m": "y", "p": "2", "exp": 9e9, "extra": 1},
+        {"a": "x", "m": "y", "p": "2", "exp": float("nan")},
+        {"a": "x", "m": "y", "p": "2", "exp": float("inf")},
     ],
 )
 def test_wrong_shape_under_valid_signature(payload):
@@ -99,6 +103,11 @@ def test_content_disposition_hostile_name():
     assert '"' not in quoted
 
 
+def test_content_disposition_semicolon_and_apostrophe():
+    header = content_disposition("a;b'c.pdf")
+    assert header == "attachment; filename=\"a_b_c.pdf\"; filename*=UTF-8''a%3Bb%27c.pdf"
+
+
 @pytest.mark.parametrize("name", ["...", '"\x00'])
 def test_content_disposition_empty_after_sanitizing(name):
     assert 'filename="attachment"' in content_disposition(name)
@@ -108,3 +117,41 @@ def test_content_disposition_truncates():
     header = content_disposition("a" * 300)
     star = header.split("filename*=UTF-8''")[1]
     assert len(unquote(star)) == 150
+
+
+def test_content_disposition_truncation_keeps_last_extension():
+    header = content_disposition("A" * 146 + ".exe" + "B" * 20 + ".pdf")
+    assert header.split("filename*=UTF-8''")[1] == "A" * 146 + ".pdf"
+
+
+def _saved_names(header: str) -> list[str]:
+    """The names a browser could save: the filename* value and the ASCII fallback."""
+    quoted = re.search(r'filename="([^"]*)"', header).group(1)
+    return [unquote(header.split("filename*=UTF-8''")[1]), quoted]
+
+
+def _saved_extension(name: str) -> str:
+    name = unicodedata.normalize("NFKC", name)
+    while name and (name[-1] == "." or name[-1].isspace() or unicodedata.category(name[-1])[0] in "CZ"):
+        name = name[:-1]
+    return name.rpartition(".")[2].lower() if "." in name else ""
+
+
+@pytest.mark.parametrize("name", [
+    "invoice.exe\u00a0",
+    "invoice.exe\u3000",
+    "invoice.exe\u2003",
+    "invoice.exe\u00a0.",
+    "A" * 146 + ".exe" + "B" * 20 + ".pdf",
+    "a.\uff45\uff58\uff45",
+    "a\u2024exe",
+    "a.exe\u4e2d",
+    "a.ex\u00e9",
+    "invoice.pdf",
+    "fatura março.pdf",
+])
+def test_served_names_never_end_in_a_blocked_type_unless_blocked(name):
+    if download_block_reason(False, False, name) == "blocked_type":
+        return
+    for saved in _saved_names(content_disposition(name)):
+        assert _saved_extension(saved) not in GMAIL_BLOCKED_EXTENSIONS, saved

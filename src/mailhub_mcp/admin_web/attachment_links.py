@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import re
+import math
 import time
-import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -13,13 +12,12 @@ from urllib.parse import quote
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from mailhub_mcp.core.attachments import ascii_filename, served_filename
+
 from .session import Signer
 
 LINK_SECONDS = 14 * 24 * 3600
 FILES_PATH = "/admin/files/"
-
-_MAX_NAME = 150
-_FALLBACK_NAME = "attachment"
 _KEYS = frozenset({"a", "m", "p", "exp"})
 
 
@@ -40,7 +38,7 @@ class LinkTarget:
 
 
 def _is_number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 class AttachmentLinks:
@@ -75,17 +73,7 @@ class AttachmentLinks:
         return LinkTarget(data["a"], data["m"], data["p"])
 
 
-def _sanitize(filename: str) -> str:
-    kept = "".join(
-        c
-        for c in filename
-        if unicodedata.category(c)[0] != "C" and c not in '/\\"'
-    )
-    return kept.strip().lstrip(".").strip()[:_MAX_NAME] or _FALLBACK_NAME
-
-
 def content_disposition(filename: str) -> str:
-    name = _sanitize(filename)
-    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode("ascii")
-    ascii_name = re.sub(r"[^A-Za-z0-9._ ()-]", "_", ascii_name) or _FALLBACK_NAME
-    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
+    """Header naming the file exactly as `download_block_reason` checked it (see core.attachments)."""
+    name = served_filename(filename)
+    return f"attachment; filename=\"{ascii_filename(name)}\"; filename*=UTF-8''{quote(name, safe='')}"
