@@ -20,7 +20,7 @@ from mailhub_mcp import prompts
 from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, assess, clean_text, truncate_body
+from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, clean_text, message_suspicion, truncate_body
 from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
@@ -150,16 +150,6 @@ def tool(**kwargs):
     return decorator
 
 
-def _assess_fields(m: MessageSummary) -> list[str]:
-    """Every sender-controlled text field of a message that feeds the suspicion heuristics."""
-    fields = [m.subject, m.from_, m.to, m.reply_to, m.snippet]
-    if m.unsubscribe is not None:
-        fields += [v for v in (m.unsubscribe.url, m.unsubscribe.mailto) if v]
-    if isinstance(m, Message):
-        fields += [m.cc, m.body, *(a.filename for a in m.attachments)]
-    return fields
-
-
 def _fence_unsubscribe(u, fence: Fence):
     """url and mailto are sender-controlled text: replace them with references into the response's fence."""
     if isinstance(u, BaseModel):
@@ -179,7 +169,7 @@ def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = 
     Each message becomes a dict whose snippet (and body) are replaced by 'content_ref'.
     """
     if isinstance(value, MessageSummary):  # also Message and DraftSummary
-        reasons = assess(_assess_fields(value), getattr(value, "hidden_removed", 0), tool_names)
+        reasons = message_suspicion(value, tool_names)
         out = value.model_dump(mode="json", exclude={"snippet", "body"})
         content = {"snippet": value.snippet}
         if isinstance(value, Message):
@@ -746,9 +736,7 @@ async def create_draft(
         if not found.found:
             raise MessageNotFound([reply_to_message_id])
         thread = p.get_thread(found.found[0].thread_id)
-        if any(
-            assess(_assess_fields(m), m.hidden_removed, names) for m in thread.messages
-        ):
+        if any(message_suspicion(m, names) for m in thread.messages):
             raise MailhubError(
                 "this thread contains a message flagged as a possible prompt injection; "
                 "drafting is disabled for it — reply manually in Gmail"

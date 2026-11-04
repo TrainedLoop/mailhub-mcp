@@ -48,6 +48,8 @@ class Attachment(_Base):
     filename: str
     mime_type: str
     size: int
+    # Gmail part id, internal input to download links; never serialized.
+    part_id: str = Field(default="", exclude=True)
 
 
 class Message(MessageSummary):
@@ -57,6 +59,14 @@ class Message(MessageSummary):
     # Characters of hidden HTML text removed while parsing; internal input to
     # the server's suspicion assessment, never serialized.
     hidden_removed: int = Field(default=0, exclude=True)
+    # Whether the message sits in spam; internal input to download rules, never serialized.
+    spam: bool = Field(default=False, exclude=True)
+
+
+class AttachmentDownload(_Base):
+    message: Message
+    attachment: Attachment
+    data: bytes
 
 
 class Thread(_Accounted):
