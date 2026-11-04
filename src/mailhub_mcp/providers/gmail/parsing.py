@@ -30,9 +30,12 @@ def _extract_body(payload: dict) -> tuple[str, list[dict], int]:
         mime = part.get("mimeType", "")
         body = part.get("body", {})
         if part.get("filename"):
-            attachments.append(
-                {"filename": clean_text(part["filename"]), "mime_type": clean_text(mime), "size": body.get("size", 0)}
-            )
+            attachments.append({
+                "filename": clean_text(part["filename"]),
+                "mime_type": clean_text(mime),
+                "size": body.get("size", 0),
+                "part_id": clean_text(part.get("partId", "")),
+            })
         elif mime == "text/plain" and body.get("data"):
             plain.append(_decode(body["data"]))
         elif mime == "text/html" and body.get("data"):
@@ -83,4 +86,13 @@ def full(msg: dict) -> dict:
         "body": body,
         "hidden_removed": hidden_removed,
         "attachments": attachments,
+        "spam": "SPAM" in msg.get("labelIds", []),
     }
+
+
+def find_attachment_part(payload: dict, part_id: str) -> dict | None:
+    """The file part with this partId (a part without a filename is body text, not an attachment)."""
+    for part in _walk_parts(payload):
+        if part.get("partId") == part_id and part.get("filename"):
+            return part
+    return None

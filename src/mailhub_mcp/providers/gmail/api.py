@@ -11,7 +11,8 @@ from email.message import EmailMessage
 import httplib2
 from googleapiclient.errors import HttpError
 
-from mailhub_mcp.providers.gmail.parsing import METADATA_HEADERS, _headers, full, summarize
+from mailhub_mcp.core.errors import MessageNotFound
+from mailhub_mcp.providers.gmail.parsing import METADATA_HEADERS, _headers, find_attachment_part, full, summarize
 
 BATCH_SIZE = 50
 LIST_PAGE_SIZE = 500
@@ -27,6 +28,7 @@ MESSAGE_GET_FULL_UNITS = 60  # format=full or raw
 MESSAGE_LIST_UNITS = 5
 THREAD_GET_UNITS = 120  # format=full, the only format used here
 LABELS_LIST_UNITS = 1
+ATTACHMENT_GET_UNITS = 5
 BATCH_MODIFY_UNITS = 50
 DRAFT_LIST_UNITS = 5
 PROFILE_UNITS = 1
@@ -307,6 +309,26 @@ def get_message(svc, message_id: str, limiter: RateLimiter | None = None) -> dic
     request = svc.users().messages().get(userId="me", id=message_id, format="full")
     msg = _execute(request, limiter, MESSAGE_GET_FULL_UNITS)
     return full(msg)
+
+
+def get_attachment(svc, message_id: str, part_id: str, limiter: RateLimiter | None = None) -> tuple[dict, dict, bytes]:
+    """(parsed message, attachment dict, bytes). attachmentIds change on every message get, so the part
+    is looked up by its stable partId in a fresh get; small parts carry their bytes inline."""
+    request = svc.users().messages().get(userId="me", id=message_id, format="full")
+    msg = _execute(request, limiter, MESSAGE_GET_FULL_UNITS)
+    part = find_attachment_part(msg.get("payload", {}), part_id)
+    if part is None:
+        raise MessageNotFound([message_id])
+    body = part.get("body", {})
+    data = body.get("data")
+    if data is None:
+        request = svc.users().messages().attachments().get(
+            userId="me", messageId=message_id, id=body["attachmentId"]
+        )
+        data = _execute(request, limiter, ATTACHMENT_GET_UNITS).get("data", "")
+    parsed = full(msg)
+    attachment = next(a for a in parsed["attachments"] if a["part_id"] == part_id)
+    return parsed, attachment, base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
 def get_thread(svc, thread_id: str, limiter: RateLimiter | None = None) -> dict:

@@ -367,3 +367,58 @@ def test_change_detection_reraises_rate_limits(gmail, fake):
     fake.fail = http_error(429, "Too many concurrent requests for user")
     with pytest.raises(RateLimited):
         gmail.change_marker()
+
+
+def _mail_with_files(fake, id="ma", labels=("INBOX",)):
+    fake.add_message(
+        id, labels=list(labels), body="see attached",
+        attachments=[
+            {"filename": "note.txt", "mime_type": "text/plain", "data": b"hello", "inline": True},
+            {"filename": "big.bin", "mime_type": "application/octet-stream", "data": b"\x00\xffbytes", "inline": False},
+        ],
+    )
+
+
+def test_full_message_lists_part_ids_and_spam(gmail, fake):
+    _mail_with_files(fake, labels=["SPAM"])
+    msg = gmail.get_messages(["ma"], "full").found[0]
+    assert msg.spam is True
+    assert [a.part_id for a in msg.attachments] == ["1", "2"]
+
+
+def test_get_attachment_inline(gmail, fake):
+    _mail_with_files(fake)
+    dl = gmail.get_attachment("ma", "1")
+    assert dl.data == b"hello"
+    assert dl.attachment.filename == "note.txt" and dl.message.id == "ma"
+    assert not [c for c in fake.calls if c[0] == "messages.attachments.get"]
+
+
+def test_get_attachment_by_attachment_id(gmail, fake):
+    _mail_with_files(fake)
+    dl = gmail.get_attachment("ma", "2")
+    assert dl.data == b"\x00\xffbytes"
+    gets = [c for c in fake.calls if c[0] == "messages.attachments.get"]
+    assert len(gets) == 1
+    assert gets[0][1]["messageId"] == "ma" and gets[0][1]["id"].startswith("att")
+
+
+def test_get_attachment_unknown_part_or_message(gmail, fake):
+    _mail_with_files(fake)
+    for message_id, part_id in [("ma", "9"), ("ma", "0"), ("nope", "1")]:
+        with pytest.raises(MessageNotFound):
+            gmail.get_attachment(message_id, part_id)
+
+
+def test_get_attachment_counts_units(tmp_path):
+    fake = FakeGmail()
+    _mail_with_files(fake)
+    provider = GmailProvider("a", tmp_path / "a.json", build_service=lambda creds: fake)
+    provider._creds = object()
+    units = []
+    provider._limiter = SimpleNamespace(acquire=units.append)
+    provider.get_attachment("ma", "2")
+    assert units == [60, 5]
+    units.clear()
+    provider.get_attachment("ma", "1")
+    assert units == [60]

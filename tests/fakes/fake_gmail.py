@@ -86,6 +86,8 @@ class FakeGmail:
         self.query_results: dict[str, list[str]] = {}
         self.page_size = 500
         self._ids = itertools.count(1)
+        self._attachment_data: dict[tuple[str, str], bytes] = {}  # (message id, partId) -> bytes
+        self._attachment_ids: dict[str, bytes] = {}  # attachmentId handed out by a get -> bytes
         # History log: label changes and message adds, each with an increasing history id.
         self.history: list[dict] = []
         self.history_id = 1000
@@ -97,7 +99,7 @@ class FakeGmail:
 
     def add_message(
         self, id, thread_id=None, labels=(), headers=None, body="", html=None,
-        internal_date=0, snippet="",
+        internal_date=0, snippet="", attachments=(),
     ):
         parts = []
         if body or html is None:
@@ -109,6 +111,25 @@ class FakeGmail:
             payload.update(parts[0])
         else:
             payload.update({"mimeType": "multipart/alternative", "parts": parts})
+        if attachments:
+            # Body is part "0"; each attachment follows as "1", "2", ... Non-inline ones keep only a
+            # placeholder attachmentId: _get_message hands out a fresh one on every get, like Gmail.
+            body_part = {"partId": "0", "mimeType": payload.pop("mimeType"), "headers": []}
+            for key in ("body", "parts"):
+                if key in payload:
+                    body_part[key] = payload.pop(key)
+            file_parts = []
+            for n, att in enumerate(attachments, start=1):
+                data = att["data"]
+                if att.get("inline"):
+                    body = {"size": len(data), "data": base64.urlsafe_b64encode(data).decode()}
+                else:
+                    body = {"size": len(data), "attachmentId": f"stale{n}"}
+                file_parts.append({
+                    "partId": str(n), "filename": att["filename"], "mimeType": att["mime_type"], "body": body,
+                })
+                self._attachment_data[(id, str(n))] = data
+            payload.update({"mimeType": "multipart/mixed", "parts": [body_part, *file_parts]})
         self.messages[id] = {
             "id": id,
             "threadId": thread_id or id,
@@ -166,7 +187,19 @@ class FakeGmail:
             raise self.get_errors[id]
         if id not in self.messages:
             raise http_error(404, "Not Found")
-        return self._shape(self.messages[id], fmt, metadata_headers)
+        out = self._shape(self.messages[id], fmt, metadata_headers)
+        if fmt == "full":
+            self._issue_attachment_ids(id, out.get("payload", {}))
+        return out
+
+    def _issue_attachment_ids(self, message_id: str, part: dict) -> None:
+        body = part.get("body", {})
+        if "attachmentId" in body and (message_id, part.get("partId")) in self._attachment_data:
+            fresh = f"att{next(self._ids)}"
+            self._attachment_ids[fresh] = self._attachment_data[(message_id, part["partId"])]
+            body["attachmentId"] = fresh
+        for child in part.get("parts", []):
+            self._issue_attachment_ids(message_id, child)
 
     def _page(self, items: list, max_results, page_token):
         size = min(max_results or self.page_size, self.page_size)
@@ -219,9 +252,28 @@ class _Users:
         return self._fake.getProfile(userId)
 
 
+class _Attachments:
+    def __init__(self, fake):
+        self.f = fake
+
+    def get(self, userId="me", messageId=None, id=None):
+        kwargs = {"userId": userId, "messageId": messageId, "id": id}
+
+        def run():
+            if id not in self.f._attachment_ids:
+                raise http_error(404, "Not Found")
+            data = self.f._attachment_ids[id]
+            return {"data": base64.urlsafe_b64encode(data).decode(), "size": len(data)}
+
+        return self.f._request("messages.attachments.get", kwargs, run)
+
+
 class _Messages:
     def __init__(self, fake):
         self.f = fake
+
+    def attachments(self):
+        return _Attachments(self.f)
 
     def get(self, userId="me", id=None, format="full", metadataHeaders=None):
         kwargs = {"userId": userId, "id": id, "format": format}

@@ -17,7 +17,7 @@ from mailhub_mcp.core.errors import (
     AuthExpired, MailhubError, MessageNotFound, RateLimited, TransientError,
 )
 from mailhub_mcp.core.models import (
-    Draft, DraftSummary, Label, LabelState, Message, MessageSummary, Thread,
+    Attachment, AttachmentDownload, Draft, DraftSummary, Label, LabelState, Message, MessageSummary, Thread,
 )
 from mailhub_mcp.providers.base import GetResult, SearchResult
 from mailhub_mcp.providers.gmail import api
@@ -176,6 +176,11 @@ class GmailProvider:
     def get_thread(self, thread_id: str) -> Thread:
         with self._translate(not_found=[thread_id]):
             return Thread(**api.get_thread(self._service(), thread_id, self._limiter))
+
+    def get_attachment(self, message_id: str, part_id: str) -> AttachmentDownload:
+        with self._translate(not_found=[message_id]):
+            msg, attachment, data = api.get_attachment(self._service(), message_id, part_id, self._limiter)
+        return AttachmentDownload(message=Message(**msg), attachment=Attachment(**attachment), data=data)
 
     def list_labels(self) -> list[Label]:
         with self._translate():
