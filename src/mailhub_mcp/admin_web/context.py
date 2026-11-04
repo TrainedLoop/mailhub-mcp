@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from mailhub_mcp.admin_web.attachment_links import AttachmentLinks, derive_link_key
 from mailhub_mcp.admin_web.credentials import credentials_writable
 from mailhub_mcp.admin_web.identity import GoogleIdentity, OwnerIdentity
 from mailhub_mcp.admin_web.session import derive_key
@@ -33,6 +34,8 @@ class AdminContext:
     identity: OwnerIdentity
     linkers: dict[str, Linker]
     writable: bool
+    tool_names: frozenset[str]  # MCP tool names, for the download endpoint's suspicion check
+    links: AttachmentLinks
     now: Callable[[], float] = time.time
 
     def __setattr__(self, name: str, value: object) -> None:
@@ -43,9 +46,12 @@ class AdminContext:
         super().__setattr__(name, value)
 
 
-def build_admin_context(settings: Settings, registry: AccountRegistry, journal: Journal) -> AdminContext:
+def build_admin_context(
+    settings: Settings, registry: AccountRegistry, journal: Journal, tool_names: frozenset[str]
+) -> AdminContext:
     """The admin page's context for a running server: Google sign-in and linking on the Web client,
-    the account book next to the journal, and a probe of whether credentials can be written."""
+    the account book next to the journal, a probe of whether credentials can be written, and the
+    attachment links the download endpoint checks."""
     writable = credentials_writable(settings.accounts_dir, PROVIDERS)
     if not writable:
         log.warning(
@@ -63,4 +69,6 @@ def build_admin_context(settings: Settings, registry: AccountRegistry, journal: 
         identity=GoogleIdentity(settings.google_client_id, settings.google_client_secret),
         linkers=linkers(settings.google_client_id, settings.google_client_secret),
         writable=writable,
+        tool_names=tool_names,
+        links=AttachmentLinks(derive_link_key(settings.jwt_signing_key), settings.public_base_url),
     )

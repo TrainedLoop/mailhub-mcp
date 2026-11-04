@@ -13,7 +13,9 @@ src/mailhub_mcp/
   admin_web/       Owner admin page at /admin (see "Admin page")
     routes.py      admin_routes(ctx): sign-in, sign-out, status page, security headers, catch-all 404
     accounts_routes.py  Link, re-link and remove
-    context.py     AdminContext and build_admin_context(settings, registry, journal)
+    files_routes.py     Attachment download route
+    context.py     AdminContext and build_admin_context(settings, registry, journal, tool_names)
+    attachment_links.py  Signed attachment link tokens and Content-Disposition
     session.py     Signed session and flow cookies, CSRF, re-authentication window, PKCE
     identity.py    Owner sign-in (Google OpenID Connect)
     credentials.py Credential file writes and the writability probe
@@ -25,6 +27,7 @@ src/mailhub_mcp/
     organize.py    Guarded, journaled label changes, daily cap and undo
     content.py     Sanitizing, untrusted markers and suspicion heuristics
     drafts.py      Thread participants and draft recipient rules
+    attachments.py Download block rules and the served attachment file name
     preferences.py Triage preferences, proposals, approval and undo
     history.py     Journal entry summaries for list_changes
     journal.py     Append-only JSONL change journal
@@ -37,11 +40,11 @@ src/mailhub_mcp/
     gmail/         Gmail implementation, its authorize flow (CLI) and its web Linker
 ```
 
-**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse. Providers may import only `core.models`, `core.errors` and `core.content` from it. `admin_web` is imported only by its own modules and `server.py` (which uses only `build_admin_context` and `admin_routes`), and `admin_web.credentials`, the only code that writes credential files, only by `admin_web/routes.py`, `admin_web/accounts_routes.py` and `admin_web/context.py`; `tests/admin_web/test_boundary.py` enforces it, so no MCP tool module can reach those writes.
+**Dependency rule.** `core/` must not import `mailhub_mcp.providers`, `google`, `googleapiclient` or `fastmcp`. `tests/core/test_boundary.py` enforces it. Providers and the server depend on the core, never the reverse. Providers may import only `core.models`, `core.errors` and `core.content` from it. `admin_web` is imported only by its own modules and `server.py` (which uses only `build_admin_context`, `admin_routes` and `admin_web.attachment_links` for signing download links), and `admin_web.credentials`, the only code that writes credential files, only by `admin_web/routes.py`, `admin_web/accounts_routes.py` and `admin_web/context.py`; `tests/admin_web/test_boundary.py` enforces it, so no MCP tool module can reach those writes.
 
 ## Models
 
-`core/models.py` defines pydantic models: `MessageSummary` (id, thread_id, from, to, subject, date, snippet, labels, internal_date, unread, starred, is_important, category, is_newsletter, reply_to, unsubscribe), `Message` (adds cc, body, attachments), `Thread`, `Label`, `Draft`, `DraftSummary`, `Attachment`, `LabelState`. Models that report their origin carry an `account` alias, stamped by `with_account` or by the fan-out.
+`core/models.py` defines pydantic models: `MessageSummary` (id, thread_id, from, to, subject, date, snippet, labels, internal_date, unread, starred, is_important, category, is_newsletter, reply_to, unsubscribe), `Message` (adds cc, body, attachments), `Thread`, `Label`, `Draft`, `DraftSummary`, `Attachment`, `AttachmentDownload` (the message, the attachment and its bytes, from `get_attachment`), `LabelState`. Models that report their origin carry an `account` alias, stamped by `with_account` or by the fan-out.
 
 ## Errors
 
@@ -59,7 +62,7 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 
 ## Admin page
 
-`ADMIN=on|off` (default `on`). When on, `server.py` builds an `AdminContext` with `build_admin_context(settings, registry, journal)` and registers every route of `admin_routes(ctx)` with `mcp.custom_route(..., include_in_schema=False)`, like `/health`. When off, nothing under `/admin` exists and every path answers 404.
+`ADMIN=on|off` (default `on`). When on, `server.py` builds an `AdminContext` with `build_admin_context(settings, registry, journal, tool_names)` and registers every route of `admin_routes(ctx)` with `mcp.custom_route(..., include_in_schema=False)`, like `/health`. When off, nothing under `/admin` exists and every path answers 404.
 
 - **Owner sign-in.** A separate OpenID Connect authorization-code flow on the existing Google Web client (not the connector's OAuth proxy): redirect `<PUBLIC_BASE_URL>/admin/auth/callback`, scopes `openid email`, `state`, `nonce` and PKCE. The ID token is verified (signature, `aud`, `iss`, expiry with 10 seconds of clock skew, `nonce`), and `email_verified` plus an email in `ALLOWED_EMAILS` are required. The request asks for the `auth_time` claim, which Google sends only when the session age claim is enabled in the Google Auth Platform console; without it the time of the Google round trip counts as the last authentication, and the status page recommends the option.
 - **Session.** A cookie (`HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/admin`) signed with HMAC-SHA256 under a key derived from `JWT_SIGNING_KEY` with HKDF (label `mailhub-admin-session`, so it never equals the connector's key). It holds the email, the login time and the last authentication time and expires 8 hours after login. There is no server-side session state; every request re-checks the signature, the expiry and that the email is still allowed. Rotating `JWT_SIGNING_KEY` ends every session.
@@ -67,6 +70,7 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 - **Writable credentials.** At startup `credentials_writable` creates and removes a probe file in each provider folder. If that fails, the server logs a warning and `/admin` shows status only ("credentials are read-only: linking is disabled"); the command-line flow keeps working.
 - **Status.** `GET /admin` lists each account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`) from one cheap check per account (Gmail `users.getProfile`, 10 seconds at most), plus removed aliases. `different mailbox` means the credential answers for another address than the one recorded (a file placed by `mailhub-authorize` or by hand); the book is not changed.
 - **Browser hardening.** Server-rendered HTML, a small stylesheet at `/admin/style.css`, no JavaScript, every value HTML-escaped. Every response under `/admin`, including unknown paths (404), unlisted methods (405) and errors (no stack traces), carries `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. `same-origin` rather than `no-referrer`, because under `no-referrer` browsers send `Origin: null` on the page's own form POSTs and the same-origin check refuses it.
+- **Attachment downloads.** `read_email`, `read_emails` and `read_thread` add a signed `download_url` (14 days) or a `download_blocked` reason to each attachment when `ADMIN=on`. `GET /admin/files/<token>` requires the owner session (not the 5-minute re-authentication), bounces once with `?b=1` when the `SameSite=Strict` cookie is missing, re-checks the block rules on the freshly fetched message, and sends the bytes from `MailProvider.get_attachment` (held in memory, sent in one response) as a forced download (`application/octet-stream`, `nosniff`). Nothing is written to disk; each download costs about 65 Gmail quota units. A test allows only `admin_web/files_routes.py` to call `get_attachment`.
 - **Audit log.** Sign-ins (accepted, refused, failed with a fixed reason code such as `unverified-email`, and cancelled), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
 
 ## The MailProvider interface
@@ -87,6 +91,7 @@ Methods:
 | `list_labels()` / `ensure_label(name)` | Labels; create-or-return by name, case-insensitive |
 | `modify_labels(ids, add, remove)` | Apply label IDs |
 | `list_drafts(limit)` / `create_draft(...)` | Drafts; replies only, to thread participants; creation never sends |
+| `get_attachment(message_id, part_id)` | One attachment's bytes with its message, as an `AttachmentDownload`; used only by the admin download route |
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 

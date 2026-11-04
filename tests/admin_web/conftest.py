@@ -11,18 +11,22 @@ import pytest
 from starlette.applications import Starlette
 from starlette.testclient import TestClient
 
+from mailhub_mcp.admin_web.attachment_links import AttachmentLinks
 from mailhub_mcp.admin_web.context import AdminContext
 from mailhub_mcp.admin_web.identity import LoginError, OwnerLogin
 from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.admin_web.session import FLOW_COOKIE, SESSION_COOKIE, derive_key
 from mailhub_mcp.core.account_book import AccountBook
 from mailhub_mcp.core.accounts import AccountRegistry
+from mailhub_mcp.core.errors import MessageNotFound
 from mailhub_mcp.core.journal import Journal
+from mailhub_mcp.core.models import Attachment, AttachmentDownload, Message
 from mailhub_mcp.providers.base import LinkError, LinkResult
 
 PUBLIC = "https://example.test"
 CLIENT_BASE = "http://testserver:8742"
 GOOGLE_AUTH = "https://accounts.google.com/o/oauth2/v2/auth"
+TOOL_NAMES = frozenset({"read_message", "trash_messages"})
 
 
 class FakeIdentity:
@@ -91,11 +95,43 @@ class FakeProvider:
         self.alias = alias
         self._address = address
         self._error = error
+        # (message_id, part_id) -> download; anything else raises MessageNotFound
+        self.attachments: dict[tuple[str, str], AttachmentDownload] = {}
+        self.attachment_error: Exception | None = None
+        self.attachment_calls: list[tuple[str, str]] = []
 
     def address(self) -> str:
         if self._error is not None:
             raise self._error
         return self._address
+
+    def get_attachment(self, message_id: str, part_id: str) -> AttachmentDownload:
+        self.attachment_calls.append((message_id, part_id))
+        if self.attachment_error is not None:
+            raise self.attachment_error
+        try:
+            return self.attachments[(message_id, part_id)]
+        except KeyError:
+            raise MessageNotFound([message_id]) from None
+
+
+def attachment_download(
+    message_id: str = "m1",
+    part_id: str = "1",
+    filename: str = "report.pdf",
+    data: bytes = b"%PDF-1.7 file bytes",
+    *,
+    spam: bool = False,
+    body: str = "Here is the report.",
+) -> AttachmentDownload:
+    attachment = Attachment(filename=filename, mime_type="application/pdf", size=len(data), part_id=part_id)
+    message = Message(
+        id=message_id, thread_id="t1", **{"from": "sender@example.com"}, to="me@example.com",
+        subject="Report", date="2026-11-04", snippet="", labels=["INBOX"], internal_date=0,
+        unread=False, starred=False, is_important=None, category=None, is_newsletter=False,
+        cc="", body=body, attachments=[attachment], spam=spam,
+    )
+    return AttachmentDownload(message=message, attachment=attachment, data=data)
 
 
 @dataclass
@@ -123,7 +159,7 @@ class Env:
         self.ctx.registry.upsert(alias, "gmail", path)
 
 
-def make_env(tmp_path: Path, writable: bool = True) -> Env:
+def make_env(tmp_path: Path, writable: bool = True, tool_names: frozenset[str] = TOOL_NAMES) -> Env:
     accounts_dir = tmp_path / "accounts"
     accounts_dir.mkdir()
     providers: dict[str, FakeProvider] = {}
@@ -145,6 +181,8 @@ def make_env(tmp_path: Path, writable: bool = True) -> Env:
         identity=identity,
         linkers={"gmail": linker},
         writable=writable,
+        tool_names=tool_names,
+        links=AttachmentLinks(b"l" * 32, PUBLIC, now=clock),
         now=clock,
     )
     client = TestClient(Starlette(routes=admin_routes(ctx)), base_url=CLIENT_BASE)

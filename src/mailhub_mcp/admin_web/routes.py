@@ -313,6 +313,7 @@ def _alias_rule_problem(alias: str) -> str | None:
 
 def admin_routes(ctx: AdminContext) -> list[Route]:
     from mailhub_mcp.admin_web.accounts_routes import account_routes  # it imports helpers from here
+    from mailhub_mcp.admin_web.files_routes import file_routes  # likewise
 
     # Separate stores: anonymous sign-in attempts can churn the login one, never the link one
     # (that one lives in account_routes).
@@ -472,6 +473,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
         route(LOGIN_CALLBACK_PATH, auth_callback),
         route("/admin/logout", logout, ("POST",)),
         *account_routes(ctx, route, get_or_post),
+        *file_routes(ctx, route),
         # Last: any other path under /admin/ gets a 404 page with the security headers, whatever
         # the method, instead of the host app's bare 404.
         _any_method_route("/admin/{rest:path}", admin_endpoint(ctx, not_found, None)),

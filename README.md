@@ -36,6 +36,7 @@ The server exposes 18 tools (11 read-only, 7 that change something); see [docs/a
 ### Run it
 
 - **Admin page**: `<PUBLIC_BASE_URL>/admin` lists your mailboxes and their state, and links, re-links and removes them through Google's web sign-in, without SSH, file copying or a restart. See [Admin page](#admin-page).
+- **Attachment download links**: with `ADMIN=on` (the default), each listed attachment gets a 14-day link that opens only after you sign in to `/admin`.
 - **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
 
 ## Admin page
@@ -78,6 +79,7 @@ Sign in at `<PUBLIC_BASE_URL>/admin` with your own Google login (the one in `ALL
 
 - Access to the server requires a Google login, restricted to the addresses in `ALLOWED_EMAILS`, and checked on every request. Only the OAuth redirect URIs in `ALLOWED_REDIRECT_URIS` (by default Claude's own) can register as clients. Every allowed login sees every linked mailbox, so `ALLOWED_EMAILS` should hold only the owner's login; the server logs a warning at startup when it lists more than one address.
 - The admin page has its own sign-in: a separate Google OpenID Connect login on the same Web client, accepted only for a verified email in `ALLOWED_EMAILS`. The session is a signed cookie (`HttpOnly`, `Secure`, `SameSite=Strict`) that lasts 8 hours. Linking, re-linking and removing a mailbox require a Google sign-in from the last 5 minutes, a CSRF token and a same-origin request. A re-link only accepts the mailbox already recorded for that alias, and a mailbox already linked under another alias is refused. Credentials are written only by the admin code path; no MCP tool can reach it (a test enforces this). Every response carries a strict Content-Security-Policy and no-framing, no-cross-site-referrer and no-store headers, and every sign-in, link and removal is logged. Keeping `secrets/accounts` read-only disables linking, and `ADMIN=off` removes the page.
+- Attachment links need the owner's `/admin` session and are forced downloads, never shown in the browser. Attachments on spam, those flagged suspicious and Gmail-blocked file types get no link.
 
 ### The lethal trifecta
 

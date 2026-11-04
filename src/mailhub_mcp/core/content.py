@@ -11,6 +11,8 @@ from collections import defaultdict
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
+from mailhub_mcp.core.models import Message, MessageSummary
+
 HIDDEN_TEXT_THRESHOLD = 200
 
 # Zero-width, bidi controls, soft hyphen, Arabic letter mark, Mongolian vowel
@@ -481,3 +483,18 @@ def assess(fields: list[str], hidden_removed: int, tool_names: frozenset[str]) -
     if hidden_removed > HIDDEN_TEXT_THRESHOLD:
         reasons.append("hidden_text")
     return reasons
+
+
+def _assess_fields(m: MessageSummary) -> list[str]:
+    """Every sender-controlled text field of a message that feeds the suspicion heuristics."""
+    fields = [m.subject, m.from_, m.to, m.reply_to, m.snippet]
+    if m.unsubscribe is not None:
+        fields += [v for v in (m.unsubscribe.url, m.unsubscribe.mailto) if v]
+    if isinstance(m, Message):
+        fields += [m.cc, m.body, *(a.filename for a in m.attachments)]
+    return fields
+
+
+def message_suspicion(m: MessageSummary, tool_names: frozenset[str]) -> list[str]:
+    """Reason codes for a whole message, shared by the read tools and the download endpoint."""
+    return assess(_assess_fields(m), getattr(m, "hidden_removed", 0), tool_names)

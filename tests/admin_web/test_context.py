@@ -5,6 +5,7 @@ import logging
 
 import pytest
 
+from mailhub_mcp.admin_web.attachment_links import FILES_PATH, AttachmentLinks, LinkTarget
 from mailhub_mcp.admin_web.context import build_admin_context
 from mailhub_mcp.admin_web.identity import GoogleIdentity
 from mailhub_mcp.admin_web.session import derive_key
@@ -26,7 +27,7 @@ def _settings(tmp_path):
 def _build(settings):
     registry = AccountRegistry(settings.accounts_dir, provider_factories())
     journal = Journal(settings.journal_path)
-    return build_admin_context(settings, registry, journal), registry, journal
+    return build_admin_context(settings, registry, journal, frozenset()), registry, journal
 
 
 def test_context_is_built_from_settings(tmp_path):
@@ -61,3 +62,16 @@ def test_writable_accounts_dir_logs_no_warning(tmp_path, caplog):
     with caplog.at_level(logging.WARNING, logger="mailhub-mcp"):
         _build(_settings(tmp_path))
     assert not [r for r in caplog.records if "read-only" in r.getMessage()]
+
+
+def test_context_carries_tool_names_and_working_links(tmp_path):
+    settings = _settings(tmp_path)
+    registry = AccountRegistry(settings.accounts_dir, provider_factories())
+    ctx = build_admin_context(settings, registry, Journal(settings.journal_path), frozenset({"x"}))
+    assert ctx.tool_names == frozenset({"x"})
+    url = ctx.links.url("work", "m1", "2")
+    assert url.startswith(settings.public_base_url.rstrip("/") + FILES_PATH)
+    assert ctx.links.decode(url.rsplit("/", 1)[1]) == LinkTarget("work", "m1", "2")
+    # signed with the link key, not the session key
+    assert AttachmentLinks(derive_key(settings.jwt_signing_key), settings.public_base_url).decode(
+        url.rsplit("/", 1)[1]) is None

@@ -224,7 +224,7 @@ def test_date_and_attachment_mime_type_are_cleaned():
     }
     m = full(msg)
     assert m["date"] == "Mon, 1 Jan 2024 10:00 +0000"
-    assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3}]
+    assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3, "part_id": ""}]
 
 
 def _rate_limited(status=403, reason="rateLimitExceeded"):
@@ -853,3 +853,28 @@ def test_changed_message_ids_retries_transient_errors(fake, _sleeps):
     fake.history_errors = [http_error(503, "Unavailable")]
     assert api.changed_message_ids(fake, marker) == {"m1"}
     assert _sleeps == [1]
+
+
+def test_get_attachment_returns_message_attachment_and_bytes(fake):
+    from mailhub_mcp.providers.gmail.api import get_attachment
+
+    fake.add_message(
+        "ma", body="b",
+        attachments=[{"filename": "a.bin", "mime_type": "application/pdf", "data": b"%PDF", "inline": False}],
+    )
+    msg, att, data = get_attachment(fake, "ma", "1")
+    assert msg["id"] == "ma" and att["filename"] == "a.bin" and att["part_id"] == "1"
+    assert data == b"%PDF"
+
+
+def test_get_attachment_zero_byte_part_gives_empty_bytes(fake):
+    from mailhub_mcp.providers.gmail.api import get_attachment
+
+    message = fake.add_message(
+        "mz", body="b",
+        attachments=[{"filename": "empty.txt", "mime_type": "text/plain", "data": b"", "inline": False}],
+    )
+    message["payload"]["parts"][1]["body"] = {"size": 0}  # Gmail sends neither data nor attachmentId
+    _, att, data = get_attachment(fake, "mz", "1")
+    assert att["filename"] == "empty.txt"
+    assert data == b""

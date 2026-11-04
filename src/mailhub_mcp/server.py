@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mailhub_mcp.admin_web.attachment_links import AttachmentLinks, derive_link_key
 from mailhub_mcp.admin_web.context import build_admin_context
 from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.auth import build_auth
@@ -19,8 +20,9 @@ from mailhub_mcp.config import Settings
 from mailhub_mcp import prompts
 from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
+from mailhub_mcp.core.attachments import download_block_reason
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, assess, clean_text, truncate_body
+from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, clean_text, message_suspicion, truncate_body
 from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients
 from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
@@ -61,6 +63,14 @@ def _body_note() -> str:
         f" at most {MAX_BODY_CHARS:,}); a cut body ends with '[... truncated ...]'. Ask for more only when needed."
     )
 
+
+ATTACHMENT_LINKS: AttachmentLinks | None = (
+    AttachmentLinks(derive_link_key(settings.jwt_signing_key), settings.public_base_url) if settings.admin else None
+)
+ATTACHMENT_NOTE = (
+    " Each attachment has a download_url (opens only after the owner signs in to the admin page; valid 14 days;"
+    " give it to the user unchanged) or download_blocked (spam, suspicious or blocked_type)."
+) if settings.admin else ""
 
 MAX_LOGGED_ARG = 200
 MAX_LOGGED_USER_REQUEST = 80
@@ -150,16 +160,6 @@ def tool(**kwargs):
     return decorator
 
 
-def _assess_fields(m: MessageSummary) -> list[str]:
-    """Every sender-controlled text field of a message that feeds the suspicion heuristics."""
-    fields = [m.subject, m.from_, m.to, m.reply_to, m.snippet]
-    if m.unsubscribe is not None:
-        fields += [v for v in (m.unsubscribe.url, m.unsubscribe.mailto) if v]
-    if isinstance(m, Message):
-        fields += [m.cc, m.body, *(a.filename for a in m.attachments)]
-    return fields
-
-
 def _fence_unsubscribe(u, fence: Fence):
     """url and mailto are sender-controlled text: replace them with references into the response's fence."""
     if isinstance(u, BaseModel):
@@ -167,6 +167,14 @@ def _fence_unsubscribe(u, fence: Fence):
     if isinstance(u, dict):
         return {k: fence.ref(v) if k in ("url", "mailto") and v else v for k, v in u.items()}
     return u
+
+
+def _link_attachment(message: Message, attachment, suspicious: bool) -> dict:
+    out = attachment.model_dump(mode="json")
+    blocked = download_block_reason(message.spam, suspicious, attachment.filename)
+    if blocked:
+        return {**out, "download_blocked": blocked}
+    return {**out, "download_url": ATTACHMENT_LINKS.url(message.account, message.id, attachment.part_id)}
 
 
 def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = MAX_BODY_CHARS):
@@ -179,11 +187,13 @@ def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = 
     Each message becomes a dict whose snippet (and body) are replaced by 'content_ref'.
     """
     if isinstance(value, MessageSummary):  # also Message and DraftSummary
-        reasons = assess(_assess_fields(value), getattr(value, "hidden_removed", 0), tool_names)
+        reasons = message_suspicion(value, tool_names)
         out = value.model_dump(mode="json", exclude={"snippet", "body"})
         content = {"snippet": value.snippet}
         if isinstance(value, Message):
             content["body"] = truncate_body(value.body, body_limit)
+            if ATTACHMENT_LINKS is not None:
+                out["attachments"] = [_link_attachment(value, a, bool(reasons)) for a in value.attachments]
         return {**out, "content_ref": fence.ref(content), "unsubscribe": _fence_unsubscribe(value.unsubscribe, fence),
                 "suspicious": bool(reasons), "suspicious_reasons": reasons}
     if isinstance(value, Thread):
@@ -378,7 +388,7 @@ async def count_messages(query: str, accounts: list[str] | None = None) -> dict:
     )
 
 
-@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units." + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_email(account: str, message_id: str, max_body_chars: int | None = None) -> dict:
     limit = resolve_body_limit(max_body_chars)
 
@@ -392,7 +402,7 @@ async def read_email(account: str, message_id: str, max_body_chars: int | None =
     return await one(account, work, limit)
 
 
-@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'. Costs about 60 Gmail quota units per message (full format)." + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'. Costs about 60 Gmail quota units per message (full format)." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_emails(account: str, message_ids: list[str], max_body_chars: int | None = None) -> dict:
     if len(message_ids) > MAX_READ_IDS:
         raise ToolError(f"At most {MAX_READ_IDS} message IDs per call")
@@ -406,7 +416,7 @@ async def read_emails(account: str, message_ids: list[str], max_body_chars: int 
     return await one(account, work, limit)
 
 
-@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first. Costs about 120 Gmail quota units per thread." + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first. Costs about 120 Gmail quota units per thread." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_thread(account: str, thread_id: str, max_body_chars: int | None = None) -> dict:
     limit = resolve_body_limit(max_body_chars)
     return await one(account, lambda p: with_account(p.get_thread(thread_id), account), limit)
@@ -746,9 +756,7 @@ async def create_draft(
         if not found.found:
             raise MessageNotFound([reply_to_message_id])
         thread = p.get_thread(found.found[0].thread_id)
-        if any(
-            assess(_assess_fields(m), m.hidden_removed, names) for m in thread.messages
-        ):
+        if any(message_suspicion(m, names) for m in thread.messages):
             raise MailhubError(
                 "this thread contains a message flagged as a possible prompt injection; "
                 "drafting is disabled for it — reply manually in Gmail"
@@ -786,7 +794,7 @@ async def health(request: Request) -> JSONResponse:
 # The owner admin page (ADMIN=on): sign-in, account status, linking and removal. With ADMIN=off no
 # route under /admin exists and every /admin path answers 404.
 if settings.admin:
-    for admin_route in admin_routes(build_admin_context(settings, registry, journal)):
+    for admin_route in admin_routes(build_admin_context(settings, registry, journal, ALL_TOOL_NAMES)):
         # methods=None (every method) reaches the admin wrapper, which answers 405 itself.
         mcp.custom_route(
             admin_route.path,
