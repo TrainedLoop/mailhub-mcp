@@ -63,6 +63,8 @@ def test_only_admin_web_and_server_import_admin_web():
 def test_server_imports_only_the_admin_entry_points():
     admin = {m for m in _imports(PKG / "server.py") if m.startswith("mailhub_mcp.admin_web")}
     assert admin <= {
+        "mailhub_mcp.admin_web.attachment_links", "mailhub_mcp.admin_web.attachment_links.AttachmentLinks",
+        "mailhub_mcp.admin_web.attachment_links.derive_link_key",
         "mailhub_mcp.admin_web.context", "mailhub_mcp.admin_web.context.build_admin_context",
         "mailhub_mcp.admin_web.routes", "mailhub_mcp.admin_web.routes.admin_routes",
     }, admin
