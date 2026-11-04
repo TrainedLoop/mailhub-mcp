@@ -1381,13 +1381,13 @@ def test_admin_off_removes_every_admin_route():
     code = (
         "import json\n"
         "from tests.test_server import _http\n"
-        "print(json.dumps([_http('GET', p)[0] for p in ('/admin', '/admin/login', '/admin/style.css', '/health')]))"
+        "print(json.dumps([_http('GET', p)[0] for p in ('/admin', '/admin/login', '/admin/style.css', '/admin/files/anything', '/health')]))"
     )
     out = subprocess.run(
         [sys.executable, "-c", code], env={**os.environ, "ADMIN": "off"},
         capture_output=True, text=True, check=True,
     ).stdout.strip().splitlines()[-1]
-    assert json.loads(out) == [404, 404, 404, 200]
+    assert json.loads(out) == [404, 404, 404, 404, 200]
 
 
 # --- prompt argument validation, unsubscribe suspicion ---

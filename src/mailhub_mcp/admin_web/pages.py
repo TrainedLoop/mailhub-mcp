@@ -26,6 +26,17 @@ LINK_UNDO_INCOMPLETE_TEXT = (
     "remain. Check the server log before trying again."
 )
 REMOVE_UNRECORDED_TEXT = "The mailbox was removed, but its removal could not be recorded; see the server log."
+LINK_EXPIRED_TEXT = "This download link has expired. Ask for the message to be read again to get a new link."
+LINK_INVALID_TEXT = "This download link is not valid."
+MAILBOX_GONE_TEXT = "This mailbox is no longer linked."
+ATTACHMENT_GONE_TEXT = "This message or attachment no longer exists."
+DOWNLOAD_BLOCKED_TEXT = {
+    "spam": "This message is in spam, so it cannot be downloaded here. You can still download it in Gmail.",
+    "suspicious": "This message was flagged as suspicious, so it cannot be downloaded here. "
+    "You can still download it in Gmail.",
+    "blocked_type": "This file type is blocked. You can still download it in Gmail.",
+}
+OPENING_DOWNLOAD_TEXT = "Opening the download"
 
 # `?msg=<code>` on /admin shows one of these fixed texts; unknown codes are ignored.
 MESSAGES: dict[str, str] = {

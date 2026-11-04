@@ -794,7 +794,7 @@ async def health(request: Request) -> JSONResponse:
 # The owner admin page (ADMIN=on): sign-in, account status, linking and removal. With ADMIN=off no
 # route under /admin exists and every /admin path answers 404.
 if settings.admin:
-    for admin_route in admin_routes(build_admin_context(settings, registry, journal)):
+    for admin_route in admin_routes(build_admin_context(settings, registry, journal, ALL_TOOL_NAMES)):
         # methods=None (every method) reaches the admin wrapper, which answers 405 itself.
         mcp.custom_route(
             admin_route.path,
