@@ -43,22 +43,22 @@ Gmail's `attachmentId` changes on every read of a message, so it cannot go in a 
 
 ### Provider interface
 
-`MailProvider` gains `get_attachment(message_id: str, part_id: str) -> bytes`. The Gmail provider fetches the message, finds the part, and either decodes its inline `body.data` (small attachments) or calls `messages.attachments.get` with the part's current `attachmentId`. An unknown message or part raises the existing not-found error. The core/provider boundary test keeps covering the new code.
+`MailProvider` gains `get_attachment(message_id: str, part_id: str) -> AttachmentDownload`, where `AttachmentDownload` (in `core/models.py`) holds the full `message`, the matching `attachment` and its `data` bytes. Returning the message with the bytes lets the endpoint re-check the blocking rules without a second full read. The Gmail provider reads the message in full, finds the part, and either decodes its inline `body.data` (small attachments) or calls `messages.attachments.get` with the part's current `attachmentId`. An unknown message or part raises the existing `MessageNotFound`. The core/provider boundary test keeps covering the new code.
 
 ### Blocking rules
 
-One core function, `download_block_reason(message, attachment, tool_names) -> str | None`, returns:
+One core function, `download_block_reason(spam: bool, suspicious: bool, filename: str) -> str | None`, returns:
 
 - `spam` when the message is in spam;
 - `suspicious` when the message's suspicion assessment returns any reason;
 - `blocked_type` when the file name's extension is on the list of types Gmail blocks (`.ade .adp .apk .appx .appxbundle .bat .cab .chm .cmd .com .cpl .diagcab .diagcfg .diagpack .dll .dmg .ex .ex_ .exe .hta .ins .isp .iso .jar .jnlp .js .jse .lib .lnk .mde .mjs .msc .msi .msix .msixbundle .msp .mst .nsh .pif .ps1 .scr .sct .shb .sys .vb .vbe .vbs .vhd .vxd .wsc .wsf .wsh .xll`), compared case-insensitively on the last extension;
 - `None` otherwise.
 
-The suspicion assessment moves from `server.py` into core so that the read tools and the download endpoint share it. It still takes the server's tool names, which the admin context receives when it is built.
+The suspicion assessment of a message moves from `server.py` into core (`message_suspicion(message, tool_names)`) so that the read tools and the download endpoint compute `suspicious` the same way. It still takes the server's tool names, which the admin context receives when it is built.
 
 ### Links in read results
 
-Wherever the server presents a full message (the `_present` step used by `read_email`, `read_emails` and `get_thread`), each attachment gains either:
+Wherever the server presents a full message (the `_present` step used by `read_email`, `read_emails` and `read_thread`), each attachment gains either:
 
 - `download_url`: `<PUBLIC_BASE_URL>/admin/files/<token>`, or
 - `download_blocked`: one of `spam`, `suspicious`, `blocked_type`.
@@ -79,9 +79,9 @@ The token is a payload `{"a": alias, "m": message_id, "p": part_id, "exp": unix_
    - The session cookie is `SameSite=Strict`, so a click from claude.ai arrives without it. When the request has no session cookie and was not already bounced, the server answers with the same-site refresh page used after the OAuth callbacks, pointing to the same URL with a `bounced=1` marker. Only after that second, same-site request finds no session does it start the login.
    - Downloading does not require the 5-minute recent re-authentication; that rule stays for link, re-link and remove.
 3. Look up the alias in the account registry. A removed alias gives 404, "this mailbox is no longer linked".
-4. Fetch the message in full and find the part. A missing message or part gives 404, "this message or attachment no longer exists".
-5. Apply `download_block_reason` again. A message that moved to spam or is now suspicious is refused with 403 and the reason, plus a note that the file can still be downloaded in Gmail.
-6. Call `get_attachment` and send the bytes.
+4. Call `get_attachment`. A missing message or part gives 404, "this message or attachment no longer exists".
+5. Apply `download_block_reason` to the returned message (spam flag and `message_suspicion`) and attachment name. A message that moved to spam or is now suspicious is refused with 403 and the reason, plus a note that the file can still be downloaded in Gmail; the bytes already fetched are dropped.
+6. Send the bytes.
 
 Network calls run through the admin `CapacityLimiter`. The file is held in memory only while it is sent; Gmail limits attachments to 25 MB.
 
@@ -92,7 +92,7 @@ The response carries:
 - `X-Content-Type-Options: nosniff`;
 - the `/admin` security headers (CSP `default-src 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`, `Cache-Control: no-store`).
 
-Each download costs about 25 Gmail quota units (a full message read and an attachment read), counted against the account's budget like any other call.
+Each download costs about 65 Gmail quota units (a full message read, 60, and an attachment read, 5), counted against the account's budget like any other call.
 
 ### Audit log
 
