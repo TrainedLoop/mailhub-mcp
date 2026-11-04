@@ -2,6 +2,7 @@
 path, and no MCP tool code (core/, providers/, prompts.py) can reach the admin package."""
 
 import ast
+import re
 from pathlib import Path
 
 PKG = Path(__file__).resolve().parents[2] / "src" / "mailhub_mcp"
@@ -90,3 +91,13 @@ def test_import_scanner_sees_every_import_shape():
     assert CREDENTIALS in _imports_in("from ..admin_web import credentials", pkg)
     assert CREDENTIALS in _imports_in("def f():\n    from mailhub_mcp.admin_web.credentials import x\n", pkg)
     assert _package(PKG / "core" / "accounts.py") == pkg
+
+
+def test_only_the_download_route_fetches_attachments():
+    """Attachment bytes are fetched only by the owner-session download route; providers implement it."""
+    callers = [
+        _rel(p)
+        for p in PKG.rglob("*.py")
+        if (PKG / "providers") not in p.parents and re.search(r"\bget_attachment\b", p.read_text())
+    ]
+    assert sorted(set(callers) - {"providers/base.py"}) == ["admin_web/files_routes.py"]

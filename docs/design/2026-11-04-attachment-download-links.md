@@ -1,6 +1,6 @@
 # Attachment download links
 
-Status: proposed
+Status: implemented
 Date: 2026-11-04
 
 ## Context
@@ -76,7 +76,7 @@ The token is a payload `{"a": alias, "m": message_id, "p": part_id, "exp": unix_
 1. Verify the token's signature and expiry. On failure: a short page, "this link has expired or is invalid; ask for the message to be read again", status 410 for expired and 404 for invalid.
 2. Require the owner session.
    - With no valid session, go through the Google login and return to the same path. The return path is checked by the existing `safe_path`.
-   - The session cookie is `SameSite=Strict`, so a click from claude.ai arrives without it. When the request has no session cookie and was not already bounced, the server answers with the same-site refresh page used after the OAuth callbacks, pointing to the same URL with a `bounced=1` marker. Only after that second, same-site request finds no session does it start the login.
+   - The session cookie is `SameSite=Strict`, so a click from claude.ai arrives without it. When the request has no session cookie and was not already bounced, the server answers with the same-site refresh page used after the OAuth callbacks, pointing to the same URL with a `b=1` marker. Only after that second, same-site request finds no session does it start the login.
    - Downloading does not require the 5-minute recent re-authentication; that rule stays for link, re-link and remove.
 3. Look up the alias in the account registry. A removed alias gives 404, "this mailbox is no longer linked".
 4. Call `get_attachment`. A missing message or part gives 404, "this message or attachment no longer exists".

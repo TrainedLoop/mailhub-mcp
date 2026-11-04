@@ -13,6 +13,7 @@ src/mailhub_mcp/
   admin_web/       Owner admin page at /admin (see "Admin page")
     routes.py      admin_routes(ctx): sign-in, sign-out, status page, security headers, catch-all 404
     accounts_routes.py  Link, re-link and remove
+    files_routes.py     Attachment download route
     context.py     AdminContext and build_admin_context(settings, registry, journal)
     session.py     Signed session and flow cookies, CSRF, re-authentication window, PKCE
     identity.py    Owner sign-in (Google OpenID Connect)
@@ -67,6 +68,7 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 - **Writable credentials.** At startup `credentials_writable` creates and removes a probe file in each provider folder. If that fails, the server logs a warning and `/admin` shows status only ("credentials are read-only: linking is disabled"); the command-line flow keeps working.
 - **Status.** `GET /admin` lists each account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`) from one cheap check per account (Gmail `users.getProfile`, 10 seconds at most), plus removed aliases. `different mailbox` means the credential answers for another address than the one recorded (a file placed by `mailhub-authorize` or by hand); the book is not changed.
 - **Browser hardening.** Server-rendered HTML, a small stylesheet at `/admin/style.css`, no JavaScript, every value HTML-escaped. Every response under `/admin`, including unknown paths (404), unlisted methods (405) and errors (no stack traces), carries `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. `same-origin` rather than `no-referrer`, because under `no-referrer` browsers send `Origin: null` on the page's own form POSTs and the same-origin check refuses it.
+- **Attachment downloads.** `read_email`, `read_emails` and `read_thread` add a signed `download_url` (14 days) or a `download_blocked` reason to each attachment when `ADMIN=on`. `GET /admin/files/<token>` requires the owner session (not the 5-minute re-authentication), bounces once with `?b=1` when the `SameSite=Strict` cookie is missing, re-checks the block rules on the freshly fetched message, and streams `MailProvider.get_attachment` as a forced download (`application/octet-stream`, `nosniff`). Nothing is written to disk; each download costs about 65 Gmail quota units. A test allows only `admin_web/files_routes.py` to call `get_attachment`.
 - **Audit log.** Sign-ins (accepted, refused, failed with a fixed reason code such as `unverified-email`, and cancelled), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
 
 ## The MailProvider interface
