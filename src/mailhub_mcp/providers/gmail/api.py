@@ -321,11 +321,12 @@ def get_attachment(svc, message_id: str, part_id: str, limiter: RateLimiter | No
         raise MessageNotFound([message_id])
     body = part.get("body", {})
     data = body.get("data")
-    if data is None:
+    if data is None and "attachmentId" in body:
         request = svc.users().messages().attachments().get(
             userId="me", messageId=message_id, id=body["attachmentId"]
         )
         data = _execute(request, limiter, ATTACHMENT_GET_UNITS).get("data", "")
+    data = data or ""  # a zero-byte part carries neither data nor an attachmentId
     parsed = full(msg)
     attachment = next(a for a in parsed["attachments"] if a["part_id"] == part_id)
     return parsed, attachment, base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))

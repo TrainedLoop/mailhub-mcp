@@ -865,3 +865,16 @@ def test_get_attachment_returns_message_attachment_and_bytes(fake):
     msg, att, data = get_attachment(fake, "ma", "1")
     assert msg["id"] == "ma" and att["filename"] == "a.bin" and att["part_id"] == "1"
     assert data == b"%PDF"
+
+
+def test_get_attachment_zero_byte_part_gives_empty_bytes(fake):
+    from mailhub_mcp.providers.gmail.api import get_attachment
+
+    message = fake.add_message(
+        "mz", body="b",
+        attachments=[{"filename": "empty.txt", "mime_type": "text/plain", "data": b"", "inline": False}],
+    )
+    message["payload"]["parts"][1]["body"] = {"size": 0}  # Gmail sends neither data nor attachmentId
+    _, att, data = get_attachment(fake, "mz", "1")
+    assert att["filename"] == "empty.txt"
+    assert data == b""

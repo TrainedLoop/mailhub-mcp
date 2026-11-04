@@ -1733,10 +1733,13 @@ def test_read_email_blocked_attachments(fakes, monkeypatch):
 def test_read_thread_and_read_emails_carry_links(fakes, monkeypatch):
     _links_on(monkeypatch)
     fakes.a.add_message("t1", thread_id="th1", labels=["INBOX"], attachments=[PDF])
+    expected = LinkTarget("alice-personal", "t1", "1")
     thread = call("read_thread", {"account": "alice-personal", "thread_id": "th1"})
-    assert "download_url" in thread["messages"][0]["attachments"][0]
+    url = thread["messages"][0]["attachments"][0]["download_url"]
+    assert LINKS.decode(url.rsplit("/", 1)[-1]) == expected
     many = call("read_emails", {"account": "alice-personal", "message_ids": ["t1"]})
-    assert "download_url" in many["messages"][0]["attachments"][0]
+    url = many["messages"][0]["attachments"][0]["download_url"]
+    assert LINKS.decode(url.rsplit("/", 1)[-1]) == expected
 
 
 def test_no_links_when_admin_off(fakes):

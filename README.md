@@ -36,7 +36,7 @@ The server exposes 18 tools (11 read-only, 7 that change something); see [docs/a
 ### Run it
 
 - **Admin page**: `<PUBLIC_BASE_URL>/admin` lists your mailboxes and their state, and links, re-links and removes them through Google's web sign-in, without SSH, file copying or a restart. See [Admin page](#admin-page).
-- **Attachment download links**: each listed attachment gets a 14-day link that opens only after you sign in to `/admin`.
+- **Attachment download links**: with `ADMIN=on` (the default), each listed attachment gets a 14-day link that opens only after you sign in to `/admin`.
 - **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
 
 ## Admin page
