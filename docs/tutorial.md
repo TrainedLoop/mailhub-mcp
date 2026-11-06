@@ -130,7 +130,7 @@ claude.ai connects from the internet, so the server needs:
 - HTTPS at the root of a host name (the OAuth discovery endpoints live under `/.well-known/`, and they must be reachable there);
 - `PUBLIC_BASE_URL` set to exactly that URL, and the same value used in the Google redirect URI.
 
-Options: [examples/tailscale-funnel/](../examples/tailscale-funnel/) (a complete example, including a firewall for the container), or any reverse proxy or tunnel with TLS that forwards to `127.0.0.1:8742` (or your `HOST_PORT`).
+Options: [examples/tailscale-funnel/](../examples/tailscale-funnel/) (a complete example, including a firewall for the container), [examples/tailscale-sidecar/](../examples/tailscale-sidecar/) (the same with a Tailscale sidecar: its own hostname, no host port), or any reverse proxy or tunnel with TLS that forwards to `127.0.0.1:8742` (or your `HOST_PORT`).
 
 Once the server answers at its public URL, link your mailboxes at `<PUBLIC_BASE_URL>/admin` (step 3).
 
