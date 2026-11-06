@@ -91,7 +91,7 @@ Note on scope: Gmail's `gmail.modify` scope technically also permits sending and
 
 1. Follow [docs/tutorial.md](docs/tutorial.md) for the Google Cloud setup, configuration, account linking on the admin page and the claude.ai connector (or another client, step 15).
 2. Copy `.env.example` to `.env`, fill it in, and run `docker compose up -d`. This pulls the published image `ghcr.io/trainedloop/mailhub-mcp` (linux/amd64 and linux/arm64); to build from source instead, add `-f docker-compose.build.yml` (see the comment in that file). The server listens on `127.0.0.1:8742` (set `HOST_PORT` in `.env` to change the host port); it needs HTTPS at a public URL in front of it.
-3. [examples/tailscale-funnel/](examples/tailscale-funnel/) shows one complete way to publish it, including a firewall that isolates the container.
+3. [examples/tailscale-funnel/](examples/tailscale-funnel/) shows one complete way to publish it, including a firewall that isolates the container. [examples/tailscale-sidecar/](examples/tailscale-sidecar/) is the same with a Tailscale sidecar container: its own hostname on port 443 and no port published on the host.
 
 ## More than one person
 

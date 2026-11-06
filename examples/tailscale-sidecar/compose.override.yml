@@ -1,0 +1,60 @@
+# Tailscale sidecar: a tailscale container joins the tailnet as its own machine
+# (https://<TS_HOSTNAME>.<tailnet>.ts.net, Funnel on 443) and mailhub-mcp shares
+# its network namespace. No port is published on the host. Use together with the
+# root compose file:
+#   docker compose -f docker-compose.yml -f examples/tailscale-sidecar/compose.override.yml up -d
+# Paths are relative to the first -f file (the repo root).
+#
+# The sidecar sits on the named network with the fixed subnet that
+# ../tailscale-funnel/firewall/mailhub-mcp-firewall.sh targets, so the firewall
+# still keeps the internet-facing container away from the host, the LAN and the
+# tailnet. Keep that unit enabled.
+services:
+  tailscale:
+    image: tailscale/tailscale:stable
+    container_name: ${TS_CONTAINER_NAME:-mailhub-mcp-tailscale}
+    hostname: ${TS_HOSTNAME:-mailhub}
+    restart: unless-stopped
+    environment:
+      # "file:" makes tailscale read the key from the file. Only used on first
+      # login; afterwards the node identity lives in the state volume.
+      TS_AUTHKEY: file:/run/secrets/ts-authkey
+      TS_HOSTNAME: ${TS_HOSTNAME:-mailhub}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Userspace networking: no tun device, so mailhub-mcp cannot open
+      # connections into the tailnet; serve/Funnel still proxy inbound HTTPS.
+      TS_USERSPACE: "true"
+      # ${TS_CERT_DOMAIN} in serve.json is filled in by the container itself.
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./examples/tailscale-sidecar/serve.json:/config/serve.json:ro
+      - ./secrets/ts-authkey:/run/secrets/ts-authkey:ro
+    networks:
+      - mcp
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  mailhub-mcp:
+    network_mode: service:tailscale
+    # The root file publishes 127.0.0.1:8742; the sidecar replaces that.
+    ports: !reset []
+    depends_on:
+      - tailscale
+
+networks:
+  mcp:
+    name: ${NETWORK_NAME:-mailhub_mcp}
+    ipam:
+      config:
+        - subnet: ${SUBNET:-172.31.0.0/24}
+
+volumes:
+  tailscale-state:
+    name: ${TS_STATE_VOLUME:-mailhub-mcp-tailscale}
