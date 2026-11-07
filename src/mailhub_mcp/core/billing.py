@@ -19,11 +19,14 @@ _LOOKS_LIKE_BILL = re.compile(
     r"|\bsegunda\s+via\b|\b2[ªa]\s+via\b|\binvoice\b|\bpayment\s+due\b",
     re.IGNORECASE,
 )
-# Runs of digits with the separators a slip line is printed with.
-_DIGIT_RUN = re.compile(r"\d[\d .\-]{40,90}\d")
+# Runs of digits with the separators a slip line is printed with, and the printed groups inside one.
+_DIGIT_RUN = re.compile(r"\d[\d .\-]{40,}\d")
+_DIGIT_GROUP = re.compile(r"\d+")
 _PIX_START = re.compile(r"000201")
-_PIX_END = re.compile(r"6304([0-9A-Fa-f]{4})")
 _MAX_PIX_CHARS = 512
+# Bounds on the work one text can cause: candidate slip windows and PIX starts tried.
+_MAX_SLIP_WINDOWS = 5000
+_MAX_PIX_STARTS = 50
 _AMOUNT_LABEL = re.compile(
     r"(?:total\s+da\s+fatura|valor\s+do\s+documento|valor\s+a\s+pagar|total\s+a\s+pagar|valor\s+total|valor\s+cobrado)"
     r"[^\d]{0,40}?(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})",
@@ -164,7 +167,8 @@ def parse_pix(code: str) -> BillingItem | None:
     if f"{_crc16(code[:-4]):04X}" != code[-4:].upper():
         return None
     fields = _tlv(code)
-    if fields is None or "br.gov.bcb.pix" not in fields.get("26", "").lower():
+    accounts = (fields or {}).get
+    if fields is None or not any("br.gov.bcb.pix" in accounts(str(t), "").lower() for t in range(26, 52)):
         return None
     amount = None
     if re.fullmatch(r"\d{1,10}(?:\.\d{1,2})?", fields.get("54", "")):
@@ -175,31 +179,64 @@ def parse_pix(code: str) -> BillingItem | None:
 # --- finding codes in text ---
 
 def _slip_lines(text: str, near: date) -> list[BillingItem]:
+    """Slip lines in printed digit runs. A line starts and ends on a printed group boundary, so only those
+    windows are tried, at most _MAX_SLIP_WINDOWS per text."""
     found: list[BillingItem] = []
+    budget = _MAX_SLIP_WINDOWS
     for run in _DIGIT_RUN.finditer(text):
-        digits = re.sub(r"\D", "", run.group())
-        for size, parse in ((48, lambda s: parse_arrecadacao(s)), (47, lambda s: parse_boleto(s, near))):
-            for start in range(len(digits) - size + 1):
-                item = parse(digits[start:start + size])
-                if item is not None:
-                    found.append(item)
-                    break
+        groups = _DIGIT_GROUP.findall(run.group())
+        digits = "".join(groups)
+        starts, pos = [], 0
+        for g in groups:
+            starts.append(pos)
+            pos += len(g)
+        ends = {*starts[1:], len(digits)}
+        i = 0
+        while i < len(starts) and budget > 0:
+            start = starts[i]
+            item = None
+            for size in (48, 47):
+                if start + size in ends:
+                    budget -= 1
+                    chunk = digits[start:start + size]
+                    item = parse_arrecadacao(chunk) if size == 48 else parse_boleto(chunk, near)
+                    if item is not None:
+                        break
+            if item is not None:
+                found.append(item)
+                end = start + len(item.line)
+                while i < len(starts) and starts[i] < end:
+                    i += 1
             else:
-                continue
-            break
+                i += 1
     return found
+
+
+def _pix_at(text: str, start: int) -> BillingItem | None:
+    """The BR Code starting at `start`: walk its TLV fields to the CRC field and check it once."""
+    i = start
+    limit = min(len(text), start + _MAX_PIX_CHARS)
+    while i + 4 <= limit:
+        tag, size = text[i:i + 2], text[i + 2:i + 4]
+        if not (tag.isdigit() and size.isdigit()):
+            return None
+        if tag == "63":
+            return parse_pix(text[start:i + 8]) if size == "04" else None
+        i += 4 + int(size)
+    return None
 
 
 def _pix_codes(text: str) -> list[BillingItem]:
     found: list[BillingItem] = []
+    seen: set[str] = set()
     for candidate in (text, re.sub(r"[\r\n]+", "", text)):
-        for start in _PIX_START.finditer(candidate):
-            window = candidate[start.start():start.start() + _MAX_PIX_CHARS]
-            for end in _PIX_END.finditer(window):
-                item = parse_pix(window[:end.end()])
-                if item is not None:
-                    found.append(item)
-                    break
+        for n, start in enumerate(_PIX_START.finditer(candidate)):
+            if n >= _MAX_PIX_STARTS:
+                break
+            item = _pix_at(candidate, start.start())
+            if item is not None and item.pix_code not in seen:
+                seen.add(item.pix_code)
+                found.append(item)
     return found
 
 

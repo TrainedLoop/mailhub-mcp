@@ -119,3 +119,29 @@ def test_impossible_labelled_date_is_dropped():
 ])
 def test_looks_like_bill(text, expected):
     assert looks_like_bill(text) is expected
+
+
+@pytest.mark.parametrize("text", [
+    "0002016304ABCD" * 14_300,
+    "1 " * 100_000,
+    "1" * 200_000,
+    "000201" * 33_000,
+])
+def test_hostile_text_is_scanned_quickly(text):
+    import time
+    start = time.monotonic()
+    extract(text, "body", NEAR, labelled=True)
+    assert time.monotonic() - start < 2
+
+
+def test_slip_line_after_other_printed_numbers():
+    line = boleto(due=date(2026, 11, 15))
+    printed = f"{line[:5]}.{line[5:10]} {line[10:15]}.{line[15:21]} {line[21:26]}.{line[26:32]} {line[32]} {line[33:]}"
+    text = f"Agencia 1234-5 0012345-6 07.11.2026 100.00 0001234 5678 {printed} {arrecadacao()}"
+    assert [i.kind for i in extract(text, "body", NEAR, labelled=False)] == ["boleto", "arrecadacao"]
+
+
+def test_pix_followed_by_more_text_and_a_second_code():
+    a, b = pix(amount="1.00"), pix(amount="2.00", name="OUTRA")
+    items = extract(f"{a}6304FFFF lixo {b}", "body", NEAR, labelled=False)
+    assert [i.amount for i in items] == [Decimal("1.00"), Decimal("2.00")]

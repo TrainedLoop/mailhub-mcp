@@ -19,7 +19,7 @@ def load_passwords(secrets_dir: Path) -> list[str]:
     def read(name: str) -> str:
         try:
             return (secrets_dir / name).read_text(encoding="utf-8")
-        except (FileNotFoundError, NotADirectoryError):
+        except OSError:  # missing or unreadable: run without those passwords
             return ""
 
     extra = [line.strip() for line in read("passwords").splitlines() if line.strip()]
@@ -60,7 +60,10 @@ def collect(provider, messages: list[Message], passwords: list[str]) -> dict[str
             data = provider.attachment_data(m.id, a)
         except MailhubError:
             return m.id, [], "fetch_failed"
-        out = pdf_text(data, passwords)
+        try:
+            out = pdf_text(data, passwords)
+        except Exception:  # noqa: BLE001 - a PDF that cannot be read never makes the email unreadable
+            return m.id, [], "pdf_unreadable"
         if out.error:
             return m.id, [], out.error
         return m.id, billing.extract(out.text, a.filename, _near(m), labelled=True), None
