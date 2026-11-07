@@ -16,7 +16,7 @@ import secrets
 import tempfile
 import unicodedata
 from collections.abc import Collection, Iterator
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -332,11 +332,11 @@ class PreferenceStore:
 
 
 def _now(now: datetime | None) -> datetime:
-    return now or datetime.now(timezone.utc)
+    return now or datetime.now(UTC)
 
 
 def _aware(moment: datetime) -> datetime:
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def _rules(state: dict, scope: str) -> dict:
@@ -425,8 +425,8 @@ def _validate_user_request(value: Any) -> str:
 def _parse_triage_time(value: Any, now: datetime) -> str:
     try:
         if not isinstance(value, str):
-            raise ValueError
-        moment = _aware(datetime.fromisoformat(value.strip())).astimezone(timezone.utc)
+            raise ValueError  # noqa: TRY004 - caught below and reported as PreferenceError, like a bad format
+        moment = _aware(datetime.fromisoformat(value.strip())).astimezone(UTC)
     except (ValueError, OverflowError):
         raise PreferenceError(f"Invalid last_triage_at {_quote(value)}: expected an ISO 8601 timestamp") from None
     if moment > now + CLOCK_SKEW:
@@ -526,7 +526,7 @@ def set_preferences(
     change_id = None
     # Lock order everywhere: journal.lock -> store flock -> journal's internal write lock. The journal
     # entry is written while the flock is held so journal order matches commit order across processes.
-    with journal.lock:
+    with journal.lock:  # noqa: SIM117 - lock order is explicit: journal.lock -> store flock
         with store.transaction() as state:
             _prune(state, now)
             rules = _rules(state, scope)
@@ -668,7 +668,7 @@ def approve(
 ) -> dict:
     now = _now(now)
     change_id = None
-    with journal.lock:
+    with journal.lock:  # noqa: SIM117 - lock order is explicit: journal.lock -> store flock
         with store.transaction() as state:
             others = [p for p in state["proposals"] if p.get("id") != proposal_id]
             proposal = _find(state, proposal_id, now)

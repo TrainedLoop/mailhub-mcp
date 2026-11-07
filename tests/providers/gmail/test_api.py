@@ -214,10 +214,10 @@ def test_date_and_attachment_mime_type_are_cleaned():
         "id": "m1", "threadId": "t1", "labelIds": [], "snippet": "", "internalDate": "0",
         "payload": {
             "mimeType": "multipart/mixed",
-            "headers": [{"name": "Date", "value": "Mon, 1 Jan 2024‮ 10:00\U000e0041 +0000"}],
+            "headers": [{"name": "Date", "value": "Mon, 1 Jan 2024\u202e 10:00\U000e0041 +0000"}],
             "parts": [
                 {"mimeType": "text/plain", "body": {"data": base64.urlsafe_b64encode(b"hi").decode()}},
-                {"mimeType": "application/pdf​\U000e0049", "filename": "a⁦.pdf",
+                {"mimeType": "application/pdf\u200b\U000e0049", "filename": "a\u2066.pdf",
                  "body": {"size": 3, "attachmentId": "x"}},
             ],
         },
@@ -228,9 +228,10 @@ def test_date_and_attachment_mime_type_are_cleaned():
 
 
 def _rate_limited(status=403, reason="rateLimitExceeded"):
-    from googleapiclient.errors import HttpError
-    import httplib2
     import json
+
+    import httplib2
+    from googleapiclient.errors import HttpError
 
     body = {"error": {"code": status, "message": "Rate Limit Exceeded",
                       "errors": [{"reason": reason, "domain": "usageLimits"}]}}
@@ -474,8 +475,9 @@ def test_single_request_rate_limit_retries_with_long_backoff(fake, _sleeps):
 
 
 def test_single_request_gives_up_after_backoff_schedule(fake, _sleeps):
-    from mailhub_mcp.providers.gmail import api
     from googleapiclient.errors import HttpError
+
+    from mailhub_mcp.providers.gmail import api
 
     fake.fail = _rate_limited()
     with pytest.raises(HttpError):
@@ -486,8 +488,9 @@ def test_single_request_gives_up_after_backoff_schedule(fake, _sleeps):
 
 
 def test_single_request_non_rate_limit_error_is_not_retried_by_us(fake, _sleeps):
-    from mailhub_mcp.providers.gmail import api
     from googleapiclient.errors import HttpError
+
+    from mailhub_mcp.providers.gmail import api
 
     fake.fail = http_error(403, "forbidden")
     with pytest.raises(HttpError):
@@ -496,7 +499,6 @@ def test_single_request_non_rate_limit_error_is_not_retried_by_us(fake, _sleeps)
 
 
 def test_draft_create_is_never_retried_even_when_rate_limited(fake, _sleeps):
-    from mailhub_mcp.providers.gmail import api
     from googleapiclient.errors import HttpError
 
     fake.fail = _rate_limited()

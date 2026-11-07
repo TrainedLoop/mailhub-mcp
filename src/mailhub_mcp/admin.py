@@ -10,11 +10,11 @@ import os
 import sys
 from pathlib import Path
 
+from mailhub_mcp.core import preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.content import clean_text
 from mailhub_mcp.core.errors import MailhubError
 from mailhub_mcp.core.journal import Journal
-from mailhub_mcp.core import preferences
 from mailhub_mcp.core.preferences import PreferenceStore
 
 DEFAULT_JOURNAL = "/data/changes.jsonl"
@@ -70,7 +70,7 @@ def _check_accounts(providers=None) -> int:
     Exit 0 when all are ok, 1 when any failed, 2 when the accounts cannot be loaded."""
     accounts_dir = Path(os.environ.get("ACCOUNTS_DIR", DEFAULT_ACCOUNTS_DIR))
     if providers is None:
-        from mailhub_mcp.providers import PROVIDERS as providers  # noqa: N811
+        from mailhub_mcp.providers import PROVIDERS as providers
     try:
         if not accounts_dir.is_dir():
             print(f"error: accounts directory not found: {_safe(accounts_dir)}", file=sys.stderr)
@@ -91,7 +91,7 @@ def _check_accounts(providers=None) -> int:
         prefix = f"{_safe(account.alias)}  {_safe(account.provider_name)}"
         try:
             print(f"{prefix}  ok  {_safe(account.provider.address())}")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one account failing never blocks the others; report only the message
             failed += 1
             print(f"{prefix}  ERROR  {_safe(exc) or type(exc).__name__}")
     return 1 if failed else 0

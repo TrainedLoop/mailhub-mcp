@@ -33,7 +33,13 @@ mailhub-admin = "mailhub_mcp.admin:main"
 package = true
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+src = ["src", "tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mailhub_mcp"]

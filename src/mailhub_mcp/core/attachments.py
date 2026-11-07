@@ -13,9 +13,7 @@ BlockReason = Literal["spam", "suspicious", "blocked_type"]
 
 # File types Gmail itself refuses to send or receive, without the dot.
 GMAIL_BLOCKED_EXTENSIONS: frozenset[str] = frozenset(
-    "ade adp apk appx appxbundle bat cab chm cmd com cpl diagcab diagcfg diagpack dll dmg ex ex_ exe "
-    "hta ins isp iso jar jnlp js jse lib lnk mde mjs msc msi msix msixbundle msp mst nsh pif ps1 scr "
-    "sct shb sys vb vbe vbs vhd vxd wsc wsf wsh xll".split()
+    ["ade", "adp", "apk", "appx", "appxbundle", "bat", "cab", "chm", "cmd", "com", "cpl", "diagcab", "diagcfg", "diagpack", "dll", "dmg", "ex", "ex_", "exe", "hta", "ins", "isp", "iso", "jar", "jnlp", "js", "jse", "lib", "lnk", "mde", "mjs", "msc", "msi", "msix", "msixbundle", "msp", "mst", "nsh", "pif", "ps1", "scr", "sct", "shb", "sys", "vb", "vbe", "vbs", "vhd", "vxd", "wsc", "wsf", "wsh", "xll"]
 )
 
 MAX_NAME = 150

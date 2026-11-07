@@ -1,6 +1,11 @@
 import pytest
 
-from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients, thread_participants
+from mailhub_mcp.core.drafts import (
+    DraftRefused,
+    reply_to_only,
+    resolve_recipients,
+    thread_participants,
+)
 from mailhub_mcp.core.models import Message, Thread
 
 

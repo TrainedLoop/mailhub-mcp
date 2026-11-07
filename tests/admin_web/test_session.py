@@ -31,7 +31,7 @@ def _session(email="me@gmail.com", sid="sid1", login_at=1000.0, auth_at=1000.0):
 
 
 def _flow(**kw):
-    base = dict(kind="login", state="s", nonce="n", code_verifier="v", created_at=1000.0)
+    base = {"kind": "login", "state": "s", "nonce": "n", "code_verifier": "v", "created_at": 1000.0}
     base.update(kw)
     return Flow(**base)
 

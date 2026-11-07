@@ -23,7 +23,11 @@ from starlette.routing import Route
 
 from mailhub_mcp.admin_web import pages
 from mailhub_mcp.admin_web.context import AdminContext
-from mailhub_mcp.admin_web.credentials import credential_path, remove_credential, write_credential
+from mailhub_mcp.admin_web.credentials import (
+    credential_path,
+    remove_credential,
+    write_credential,
+)
 from mailhub_mcp.admin_web.routes import (
     LINK_CALLBACK_PATH,
     Endpoint,
@@ -66,7 +70,7 @@ async def _probe_address(account: Any) -> str | None:
     (expired, failing or slower than ADDRESS_PROBE_SECONDS)."""
     try:
         address = await _in_thread(lambda: account.provider.address(), ADDRESS_PROBE_SECONDS)
-    except Exception as exc:  # TimeoutError included
+    except Exception as exc:  # noqa: BLE001 - TimeoutError included
         log.info("admin address probe failed alias=%s error=%s", account.alias, type(exc).__name__)
         return None
     return address.strip().lower() if isinstance(address, str) and address.strip() else None
@@ -293,7 +297,7 @@ def account_routes(
             step = "book"
             ctx.book.record_linked(alias, provider, address, datetime.fromtimestamp(now, UTC))
             return "ok"
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin link failed alias=%s step=%s kind=%s error=%s", alias, step, kind, type(exc).__name__)
         try:
             if step != "credential":
@@ -305,7 +309,7 @@ def account_routes(
                 ctx.registry.upsert(alias, previous_account.provider_name, previous_account.credential_path)
             elif alias in ctx.registry.aliases():
                 ctx.registry.remove(alias)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin link rollback failed alias=%s error=%s", alias, type(exc).__name__)
             return "rollback-failed"
         return "rolled-back"
@@ -379,7 +383,7 @@ def account_routes(
             address = await _probe_address(account)
             if address:
                 await run_in_threadpool(ctx.book.record_address, alias, account.provider_name, address)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin remove: cannot record the address alias=%s error=%s", alias, type(exc).__name__)
 
     def _commit_remove(alias: str, owner: str, now: float) -> _RemoveOutcome | None:
@@ -397,12 +401,12 @@ def account_routes(
             if linker is not None:
                 try:
                     revoked = linker.revoke(account.credential_path) is True
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
                     log.warning("admin revoke failed alias=%s error=%s", alias, type(exc).__name__)
             file_removed = True
             try:
                 remove_credential(ctx.accounts_dir, provider, alias)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
                 # the token may be revoked already: finish the removal so registry and book agree,
                 # and tell the owner to delete the file before a restart loads it again
                 file_removed = False
@@ -411,7 +415,7 @@ def account_routes(
             ctx.registry.remove(alias)
             try:
                 ctx.book.record_removed(alias, datetime.fromtimestamp(now, UTC), provider=provider)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
                 # the account is gone from the server already: say so rather than pretend nothing happened
                 log.error("admin remove: removed but not recorded alias=%s provider=%s error=%s",
                           alias, provider, type(exc).__name__)

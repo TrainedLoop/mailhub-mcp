@@ -11,7 +11,7 @@ import os
 import tempfile
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from mailhub_mcp.core.errors import MailhubError
@@ -29,7 +29,7 @@ class BookEntry:
 
 
 def _iso(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).isoformat()
+    return moment.astimezone(UTC).isoformat()
 
 
 class AccountBook:

@@ -2,7 +2,14 @@
 
 import pytest
 
-from mailhub_mcp.core.models import Draft, Label, LabelState, Message, MessageSummary, Thread
+from mailhub_mcp.core.models import (
+    Draft,
+    Label,
+    LabelState,
+    Message,
+    MessageSummary,
+    Thread,
+)
 
 ATTRIBUTES = [
     "name", "protected_labels", "inbox_label", "unread_label", "starred_label",

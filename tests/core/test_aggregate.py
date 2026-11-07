@@ -3,10 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.errors import AccountNotFound, AuthExpired, MailhubError
 from mailhub_mcp.core.models import MessageSummary
-from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-
 
 HINT = "mailhub-authorize gmail <client_secret.json> {alias}"
 

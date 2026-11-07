@@ -2,7 +2,13 @@
 
 import base64
 
-from mailhub_mcp.core.content import MAX_BODY_CHARS, clean_text, html_to_safe_text, parse_unsubscribe, truncate_body
+from mailhub_mcp.core.content import (
+    MAX_BODY_CHARS,
+    clean_text,
+    html_to_safe_text,
+    parse_unsubscribe,
+    truncate_body,
+)
 
 METADATA_HEADERS = ["From", "To", "Subject", "Date", "List-Unsubscribe", "List-Unsubscribe-Post", "Reply-To"]
 CATEGORIES = {

@@ -290,9 +290,8 @@ def test_journal_failure_after_write_logs_full_entry_at_error(fake, provider, jo
         raise OSError("disk full")
 
     monkeypatch.setattr(journal, "record", boom)
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(OSError):
-            modify(provider, journal, "a", ["m1"], [], [], True, None, None)
+    with caplog.at_level(logging.ERROR), pytest.raises(OSError):
+        modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     errors = [r.getMessage() for r in caplog.records if r.levelno == logging.ERROR]
     assert errors and "m1" in errors[0] and "INBOX" in errors[0] and "prior" in errors[0]
     assert "INBOX" not in fake.messages["m1"]["labelIds"]
@@ -379,9 +378,8 @@ def test_journal_failure_after_noop_undo_does_not_claim_labels_changed(
         raise OSError("disk full")
 
     monkeypatch.setattr(journal, "record", boom)
-    with caplog.at_level(logging.ERROR):
-        with pytest.raises(OSError):
-            undo(provider, journal, "a", r["change_id"])
+    with caplog.at_level(logging.ERROR), pytest.raises(OSError):
+        undo(provider, journal, "a", r["change_id"])
     errors = [rec.getMessage() for rec in caplog.records if rec.levelno == logging.ERROR]
     assert errors
     assert "no label changes" in errors[0]
@@ -397,7 +395,7 @@ def test_modify_refusal_for_unreadable_ids_does_not_claim_failure_is_temporary(f
 
 # --- daily change cap ---
 
-from datetime import datetime, timedelta, timezone  # noqa: E402
+from datetime import UTC, datetime, timedelta
 
 
 def _seed(journal, account, count, age_hours=1.0, undo_of=None):
@@ -406,7 +404,7 @@ def _seed(journal, account, count, age_hours=1.0, undo_of=None):
     lines = journal.path.read_text().splitlines()
     import json
     entry = json.loads(lines[-1])
-    entry["timestamp"] = (datetime.now(timezone.utc) - timedelta(hours=age_hours)).isoformat()
+    entry["timestamp"] = (datetime.now(UTC) - timedelta(hours=age_hours)).isoformat()
     lines[-1] = json.dumps(entry)
     journal.path.write_text("\n".join(lines) + "\n")
 
@@ -831,13 +829,13 @@ def test_undo_rate_limited_read_gives_advice_and_stays_undoable(fake, provider, 
 
 
 def test_undo_since_reports_rate_limit_advice_without_double_alias(fake, provider, journal):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from mailhub_mcp.core.organize import undo_since
 
     r = modify(provider, journal, "a", ["m1"], [], [], True, None, None)
     fake.get_error_seq["m1"] = [_rate_limit_error() for _ in range(9)]
-    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=timezone.utc), None, True)
+    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=UTC), None, True)
     assert out["failed"][r["change_id"]].startswith("a: Gmail rate limit reached for this mailbox; wait about")
 
 
@@ -894,12 +892,12 @@ def test_undo_of_older_entries_survives_changing_the_org_label(fake, provider, j
 
 
 def test_undo_since_reports_messages_changed_by_hand_since(fake, provider, journal):
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     from mailhub_mcp.core.organize import undo_since
 
     r = modify(provider, journal, "a", ["m1", "m2"], [], [], True, None, None)
     fake.set_labels("m2", fake.messages["m2"]["labelIds"] + ["INBOX"])
-    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=timezone.utc), None, True)
+    out = undo_since(lambda alias: provider, journal, datetime(2000, 1, 1, tzinfo=UTC), None, True)
     assert out["undone"] == [ANY] and out["undone"][0]["changed_since"] == ["m2"]
     assert out["undone"][0]["change_id"] == r["change_id"]

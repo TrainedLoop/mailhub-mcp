@@ -3,7 +3,7 @@
 import json
 import logging
 from collections.abc import Callable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -11,7 +11,12 @@ from mailhub_mcp.core.aggregate import describe_error
 from mailhub_mcp.core.errors import OrganizeError, RateLimited
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal, inverse_ops
-from mailhub_mcp.core.preferences import GLOBAL, PreferenceStore, UndoRejectedError, undo_entry
+from mailhub_mcp.core.preferences import (
+    GLOBAL,
+    PreferenceStore,
+    UndoRejectedError,
+    undo_entry,
+)
 
 DEFAULT_ORG_LABEL = "mailhub/organized"  # label added to every change; server.py passes the configured ORG_LABEL
 MAX_IDS = 1000
@@ -106,7 +111,7 @@ def _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_lab
 
 def changes_in_window(journal: Journal, account: str, now: datetime | None = None) -> int:
     """Messages changed on `account` by label entries (undo excluded) in the last 24 hours."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
     entries = journal.entries(now - CAP_WINDOW)
     return sum(
         len(e.get("prior") or {})
@@ -148,7 +153,7 @@ def modify(
         raise OrganizeError(f"At most {MAX_IDS} message IDs per call")
     _validate_change(add_labels, remove_labels, archive, mark_read, star)
 
-    labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_label)
+    _labels, add, remove = _plan(provider, add_labels, remove_labels, archive, mark_read, star, org_label)
 
     # The journal lock makes check -> read -> write -> record atomic, so parallel calls cannot overshoot
     # the cap and `prior` cannot go stale between the read and the write.
@@ -403,7 +408,7 @@ def undo_since(
             if label_names_for and e.get("kind") != "preferences" and e["account"] not in names:
                 try:
                     names[e["account"]] = label_names_for(e["account"])
-                except Exception:
+                except Exception:  # noqa: BLE001 - label names are best-effort; fall back to empty
                     names[e["account"]] = {}
             changes.append(summarize_entry(e, False, names.get(e["account"], {})))
         return {"changes": changes, "total": len(candidates), "remaining": len(candidates) > MAX_UNDO_SINCE}
@@ -432,7 +437,7 @@ def undo_since(
                         res = _undo_preferences(journal, entry, store, now)
                 else:
                     res = undo(provider_for(account), journal, account, change_id)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one failed undo never blocks the others; recorded per change
                 # A rate-limit message already names the account.
                 failed[change_id] = str(exc) if isinstance(exc, RateLimited) else f"{account}: {describe_error(exc, account)}"
                 log.warning("undo_since: change %s not undone: %s", change_id, failed[change_id])
