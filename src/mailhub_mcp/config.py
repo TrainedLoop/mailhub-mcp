@@ -45,7 +45,7 @@ class Settings:
     admin: bool = True
     # Add billing data (payment codes, amounts, due dates) to read results, reading bill PDFs (BILLING=on|off).
     billing: bool = True
-    # Optional PDF passwords: `cpf` and `passwords` (one per line).
+    # Optional PDF passwords: `cpf`, `cnpj` and `passwords` (one entry per line).
     billing_secrets_dir: Path = Path("/secrets/billing")
 
     @classmethod

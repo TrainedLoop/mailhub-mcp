@@ -36,7 +36,7 @@ The server exposes 18 tools (11 read-only, 7 that change something); see [docs/a
 ### Run it
 
 - **Admin page**: `<PUBLIC_BASE_URL>/admin` lists your mailboxes and their state, and links, re-links and removes them through Google's web sign-in, without SSH, file copying or a restart. See [Admin page](#admin-page).
-- **Billing data**: read results carry a `billing` field with payment codes (bank slip line, collection line, PIX copy-and-paste) whose check digits match, with amount and due date, read from the body and from the PDFs of messages that look like bills, including password-protected ones (a CPF file in `secrets/billing`). Only numbers, dates and codes reach the model, never text from the PDF.
+- **Billing data**: read results carry a `billing` field with payment codes (bank slip line, collection line, PIX copy-and-paste) whose check digits match, with amount and due date, read from the body and from the PDFs of messages that look like bills, including password-protected ones (CPF and CNPJ files in `secrets/billing`). Only numbers, dates and codes reach the model, never text from the PDF.
 - **Attachment download links**: with `ADMIN=on` (the default), each listed attachment gets a 14-day link that opens only after you sign in to `/admin`.
 - **Health**: `GET /health` returns `{"status":"ok"}` (no auth, nothing else), the Docker image has a `HEALTHCHECK`, and `mailhub-admin accounts` checks that every linked mailbox still answers.
 
