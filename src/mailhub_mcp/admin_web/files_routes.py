@@ -94,5 +94,5 @@ async def _send(ctx: AdminContext, email: str, target: LinkTarget) -> Response:
     return Response(
         dl.data,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": content_disposition(filename), "X-Content-Type-Options": "nosniff"},
+        headers={"Content-Disposition": content_disposition(filename)},
     )

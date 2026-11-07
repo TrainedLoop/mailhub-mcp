@@ -65,6 +65,7 @@ SECURITY_HEADERS = {
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "same-origin",  # not no-referrer: browsers then send "Origin: null" on form POSTs
     "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
 }
 
 STYLE_CSS = (Path(__file__).parent / "style.css").read_text(encoding="utf-8")
