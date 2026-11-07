@@ -12,11 +12,11 @@ from mailhub_mcp.core.models import (
     with_account,
 )
 
-base = dict(
-    id="m1", thread_id="t1", to="", subject="", date="", snippet="", labels=[],
-    internal_date=1, unread=False, starred=False, is_important=None, category=None,
-    is_newsletter=False,
-)
+base = {
+    "id": "m1", "thread_id": "t1", "to": "", "subject": "", "date": "", "snippet": "", "labels": [],
+    "internal_date": 1, "unread": False, "starred": False, "is_important": None, "category": None,
+    "is_newsletter": False,
+}
 
 
 def test_summary_serializes_from_alias():

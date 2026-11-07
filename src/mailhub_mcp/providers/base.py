@@ -5,7 +5,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, Literal, Protocol
 
-from mailhub_mcp.core.models import AttachmentDownload, Draft, DraftSummary, Label, MessageSummary, Thread
+from mailhub_mcp.core.models import (
+    AttachmentDownload,
+    Draft,
+    DraftSummary,
+    Label,
+    MessageSummary,
+    Thread,
+)
 
 
 @dataclass

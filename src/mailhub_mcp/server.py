@@ -12,24 +12,35 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mailhub_mcp import prompts
 from mailhub_mcp.admin_web.attachment_links import AttachmentLinks, derive_link_key
 from mailhub_mcp.admin_web.context import build_admin_context
 from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
-from mailhub_mcp import prompts
 from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
-from mailhub_mcp.core.attachments import download_block_reason
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-from mailhub_mcp.core.content import MAX_BODY_CHARS, Fence, clean_text, message_suspicion, truncate_body
+from mailhub_mcp.core.attachments import download_block_reason
+from mailhub_mcp.core.content import (
+    MAX_BODY_CHARS,
+    Fence,
+    clean_text,
+    message_suspicion,
+    truncate_body,
+)
 from mailhub_mcp.core.drafts import DraftRefused, reply_to_only, resolve_recipients
-from mailhub_mcp.core.errors import AccountNotFound, MailhubError, MessageNotFound, RateLimited
+from mailhub_mcp.core.errors import (
+    AccountNotFound,
+    MailhubError,
+    MessageNotFound,
+    RateLimited,
+)
 from mailhub_mcp.core.history import summarize_entry, undone_ids
 from mailhub_mcp.core.journal import Journal
 from mailhub_mcp.core.models import Message, MessageSummary, Thread, with_account
-from mailhub_mcp.core.preferences import PreferenceStore
 from mailhub_mcp.core.overview import build_overview
+from mailhub_mcp.core.preferences import PreferenceStore
 from mailhub_mcp.providers import provider_factories
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -273,7 +284,7 @@ def quota_of(accounts) -> dict[str, dict[str, int]]:
         try:
             q = status()
             out[account.alias] = {k: int(q[k]) for k in ("used_last_minute", "budget_per_minute")}
-        except Exception as exc:  # quota is informational: never fail a response over it
+        except Exception as exc:  # noqa: BLE001 - quota is informational: never fail a response over it
             log.warning("quota status failed for %s: %s", account.alias, describe_error(exc, account.alias))
     return out
 
@@ -335,7 +346,7 @@ async def list_accounts() -> dict:
         item = {"alias": account.alias, "provider": account.provider_name, "query_hint": p.query_hint}
         try:
             return {**item, "email": p.address(), "status": "ok"}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one account failing never blocks the others
             return {**item, "email": None, "status": describe_error(exc, account.alias)}
 
     accounts = registry.all()

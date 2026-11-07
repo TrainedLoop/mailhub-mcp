@@ -3,9 +3,11 @@
 import dataclasses
 import logging
 
-import pytest
-
-from mailhub_mcp.admin_web.attachment_links import FILES_PATH, AttachmentLinks, LinkTarget
+from mailhub_mcp.admin_web.attachment_links import (
+    FILES_PATH,
+    AttachmentLinks,
+    LinkTarget,
+)
 from mailhub_mcp.admin_web.context import build_admin_context
 from mailhub_mcp.admin_web.identity import GoogleIdentity
 from mailhub_mcp.admin_web.session import derive_key

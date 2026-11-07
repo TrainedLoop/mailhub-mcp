@@ -40,12 +40,10 @@ def clean_text(s: str) -> str:
 
 
 _VOID = frozenset(
-    "area base br col embed hr img input link meta param source track wbr".split()
+    ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]
 )
 _BLOCK = frozenset(
-    "address article aside blockquote body dd div dl dt fieldset figcaption figure "
-    "footer form h1 h2 h3 h4 h5 h6 header hr li main nav ol p pre section table "
-    "tbody td tfoot th thead tr ul br".split()
+    ["address", "article", "aside", "blockquote", "body", "dd", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul", "br"]
 )
 _ALWAYS_DROPPED = frozenset({"head", "script", "style", "template", "noscript"})
 _NUM = re.compile(r"^([+-]?(?:[0-9]*\.?[0-9]+)(?:e[+-]?[0-9]+)?)([a-z%]*)$")
@@ -149,9 +147,7 @@ def _style_hides(style: str) -> bool:
         if size == 0 or (size > 0 and unit in _PX_PER and size * _PX_PER[unit] <= 1):
             return True
     m = _NUM.match(props.get("max-height", ""))
-    if m and float(m.group(1)) == 0 and props.get("overflow") == "hidden":
-        return True
-    return False
+    return bool(m and float(m.group(1)) == 0 and props.get("overflow") == "hidden")
 
 
 def _attr_hides(attrs: list[tuple[str, str | None]]) -> bool:
@@ -175,20 +171,18 @@ _SAME_KIND_CLOSES = {
 # Start tags that implicitly close an open <p> (HTML spec; table parts, body and
 # table are deliberately absent).
 _CLOSES_P = frozenset(
-    "address article aside blockquote center details dialog dir div dl fieldset "
-    "figcaption figure footer header hgroup main menu nav ol p pre section summary "
-    "ul h1 h2 h3 h4 h5 h6 li dd dt form hr".split()
+    ["address", "article", "aside", "blockquote", "center", "details", "dialog", "dir", "div", "dl", "fieldset", "figcaption", "figure", "footer", "header", "hgroup", "main", "menu", "nav", "ol", "p", "pre", "section", "summary", "ul", "h1", "h2", "h3", "h4", "h5", "h6", "li", "dd", "dt", "form", "hr"]
 )
 
 
 # Browsers keep these on the list of active formatting elements and re-create
 # them (with their attributes) after implied closes and stray end tags.
 _FORMATTING = frozenset(
-    "a b big code em font i nobr s small strike strong tt u".split()
+    ["a", "b", "big", "code", "em", "font", "i", "nobr", "s", "small", "strike", "strong", "tt", "u"]
 )
 
 _SCOPE_STOP = frozenset(
-    "applet caption html table td th marquee object template button".split()
+    ["applet", "caption", "html", "table", "td", "th", "marquee", "object", "template", "button"]
 )
 
 

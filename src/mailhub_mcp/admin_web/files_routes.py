@@ -21,9 +21,19 @@ from starlette.responses import RedirectResponse, Response
 from starlette.routing import Route
 
 from mailhub_mcp.admin_web import pages
-from mailhub_mcp.admin_web.attachment_links import FILES_PATH, LinkTarget, content_disposition
+from mailhub_mcp.admin_web.attachment_links import (
+    FILES_PATH,
+    LinkTarget,
+    content_disposition,
+)
 from mailhub_mcp.admin_web.context import AdminContext
-from mailhub_mcp.admin_web.routes import _current_session, _error_page, _html, admin_io, done_page
+from mailhub_mcp.admin_web.routes import (
+    _current_session,
+    _error_page,
+    _html,
+    admin_io,
+    done_page,
+)
 from mailhub_mcp.core.attachments import download_block_reason
 from mailhub_mcp.core.content import message_suspicion
 from mailhub_mcp.core.errors import AccountNotFound, MessageNotFound
@@ -51,7 +61,7 @@ def file_routes(ctx: AdminContext, route: RouteFactory) -> list[Route]:
 
         try:
             return await _send(ctx, s.email, target)
-        except Exception as exc:  # the admin wrapper would log the path, and with it the token
+        except Exception as exc:  # noqa: BLE001 - the admin wrapper would log the path, and with it the token
             log.error(
                 "admin download failed email=%s alias=%s message=%s error=%s",
                 s.email, target.alias, target.message_id, type(exc).__name__,

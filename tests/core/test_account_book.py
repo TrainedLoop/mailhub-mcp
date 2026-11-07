@@ -1,15 +1,15 @@
 import json
 import os
 import stat
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from mailhub_mcp.core.account_book import AccountBook, BookEntry
 from mailhub_mcp.core.errors import MailhubError
 
-NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
-LATER = datetime(2026, 2, 3, 4, 5, 6, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+LATER = datetime(2026, 2, 3, 4, 5, 6, tzinfo=UTC)
 
 
 def test_round_trip_of_every_field(tmp_path):

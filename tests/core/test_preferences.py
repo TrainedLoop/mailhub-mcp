@@ -1,7 +1,7 @@
 import json
 import multiprocessing
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -11,11 +11,20 @@ from mailhub_mcp.core.history import summarize_entry
 from mailhub_mcp.core.journal import Journal
 from mailhub_mcp.core.organize import undo, undo_since
 from mailhub_mcp.core.preferences import (
-    FIELDS, RAISING, PreferenceError, PreferenceStore, approve, list_proposals, normalize_keyword,
-    normalize_sender, reject, set_preferences, view,
+    FIELDS,
+    RAISING,
+    PreferenceError,
+    PreferenceStore,
+    approve,
+    list_proposals,
+    normalize_keyword,
+    normalize_sender,
+    reject,
+    set_preferences,
+    view,
 )
 
-T0 = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 10, 30, 12, 0, tzinfo=UTC)
 SCOPES = ["a", "b"]
 
 
@@ -61,7 +70,7 @@ def test_sender_invalid(bad):
 def test_keyword_rules():
     assert normalize_keyword("  Invoice due ") == "Invoice due"
     assert normalize_keyword("x" * 40)
-    for bad in ["", "   ", "x" * 41, "a\nb", "a\x00b", "a​b", None]:
+    for bad in ["", "   ", "x" * 41, "a\nb", "a\x00b", "a\u200bb", None]:
         with pytest.raises(PreferenceError):
             normalize_keyword(bad)
 
@@ -363,10 +372,9 @@ def test_atomic_save_and_corrupt_file(store, journal, tmp_path):
     put(store, journal, add={"important_keywords": ["a"]})
     assert store.lock_path == tmp_path / "preferences.lock" and store.lock_path.exists()
     assert not list(tmp_path.glob("*.tmp"))
-    with pytest.raises(RuntimeError):
-        with store.transaction() as s:
-            s["global"]["important_keywords"] = ["zzz"]
-            raise RuntimeError
+    with pytest.raises(RuntimeError), store.transaction() as s:
+        s["global"]["important_keywords"] = ["zzz"]
+        raise RuntimeError
     assert store.load()["global"]["important_keywords"] == ["a"]
     store.path.write_text("{not json")
     with pytest.raises(PreferenceError):
@@ -610,7 +618,7 @@ def test_journal_recorded_while_store_lock_held(store, journal, monkeypatch):
     real = journal.record
 
     def spy(*a, **k):
-        fd = open(store.lock_path, "a")
+        fd = open(store.lock_path, "a")  # noqa: SIM115 - the fd is closed in the finally below
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             held.append(False)
@@ -836,12 +844,12 @@ def test_malformed_rejected_undos_ignored(store, caplog):
 
 def test_conflict_message_quotes_one_cleaned_stored_value(store, journal):
     with store.transaction() as s:  # an old or hand-edited file with invisible characters
-        s["global"]["important_keywords"] = ["evil​ one", "b", "c"]
-        s["global"]["ignored_keywords"] = ["Evil​ one", "B", "C"]
+        s["global"]["important_keywords"] = ["evil\u200b one", "b", "c"]
+        s["global"]["ignored_keywords"] = ["Evil\u200b one", "B", "C"]
     with pytest.raises(PreferenceError) as e:
         put(store, journal, add={"important_keywords": ["new"]})
     msg = str(e.value)
-    assert "Conflict" in msg and "​" not in msg
+    assert "Conflict" in msg and "\u200b" not in msg
     assert "'b'" in msg and "and 2 more" in msg  # sorted: the first offending value only
     assert "evil" not in msg
 
@@ -864,21 +872,21 @@ def test_add_and_remove_clash_quotes_one_value(store, journal):
 
 @pytest.mark.parametrize("field", ["important_keywords", "important_senders"])
 def test_invalid_value_echo_is_cleaned_and_short(store, journal, field):
-    bad = "SYSTEM​: " + "x" * 500 + "‮"
+    bad = "SYSTEM\u200b: " + "x" * 500 + "\u202e"
     with pytest.raises(PreferenceError) as e:
         put(store, journal, add={field: [bad]})
     msg = str(e.value)
-    assert "​" not in msg and "‮" not in msg and "x" * 100 not in msg
+    assert "\u200b" not in msg and "\u202e" not in msg and "x" * 100 not in msg
     assert "SYSTEM" in msg  # still says which value was refused
 
 
 def test_unknown_field_and_scope_echo_is_cleaned(store, journal):
     with pytest.raises(PreferenceError) as e:
-        put(store, journal, add={"no​pe" + "z" * 300: ["x"]})
-    assert "​" not in str(e.value) and "z" * 100 not in str(e.value)
+        put(store, journal, add={"no\u200bpe" + "z" * 300: ["x"]})
+    assert "\u200b" not in str(e.value) and "z" * 100 not in str(e.value)
     with pytest.raises(PreferenceError) as e:
-        put(store, journal, scope="zz‮z" + "q" * 300, add={"important_keywords": ["x"]})
-    assert "‮" not in str(e.value) and "q" * 100 not in str(e.value)
+        put(store, journal, scope="zz\u202ez" + "q" * 300, add={"important_keywords": ["x"]})
+    assert "\u202e" not in str(e.value) and "q" * 100 not in str(e.value)
 
 
 def test_undo_since_says_when_blocker_undo_was_rejected_by_owner(store, journal):

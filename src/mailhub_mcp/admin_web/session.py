@@ -167,7 +167,7 @@ def is_fresh(s: Session, now: float) -> bool:
 
 
 def csrf_token(key: bytes, s: Session) -> str:
-    return _b64e(hmac.new(key, f"csrf:{s.sid}".encode("utf-8"), hashlib.sha256).digest())
+    return _b64e(hmac.new(key, f"csrf:{s.sid}".encode(), hashlib.sha256).digest())
 
 
 def check_csrf(key: bytes, s: Session, token: str | None) -> bool:

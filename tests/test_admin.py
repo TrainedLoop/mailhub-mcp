@@ -1,4 +1,3 @@
-import json
 
 import pytest
 
@@ -82,9 +81,9 @@ def test_show_cannot_forge_lines(tmp_path, monkeypatch, capsys):
     store = PreferenceStore(tmp_path / "preferences.json")
     res = set_preferences(store, Journal(tmp_path / "changes.jsonl"), "global",
                           add={"ignored_keywords": ["promo"]},
-                          user_request="ok\nExpires:      never ‮evil", valid_scopes=[])
+                          user_request="ok\nExpires:      never \u202eevil", valid_scopes=[])
     code, out, _ = run(capsys, "preferences", "show", res["pending"][0]["proposal_id"])
-    assert code == 0 and "‮" not in out
+    assert code == 0 and "\u202e" not in out
     assert [l for l in out.splitlines() if l.startswith("Expires:")] == [l for l in out.splitlines() if l.startswith("Expires:")][:1]
     assert len([l for l in out.splitlines() if l.startswith("Expires:")]) == 1
 

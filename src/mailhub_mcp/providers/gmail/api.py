@@ -12,7 +12,13 @@ import httplib2
 from googleapiclient.errors import HttpError
 
 from mailhub_mcp.core.errors import MessageNotFound
-from mailhub_mcp.providers.gmail.parsing import METADATA_HEADERS, _headers, find_attachment_part, full, summarize
+from mailhub_mcp.providers.gmail.parsing import (
+    METADATA_HEADERS,
+    _headers,
+    find_attachment_part,
+    full,
+    summarize,
+)
 
 BATCH_SIZE = 50
 LIST_PAGE_SIZE = 500
@@ -159,9 +165,9 @@ def _retry_wait(exc: Exception, server_retries: int, rate_retries: int) -> tuple
     """('rate' | 'server', base wait) for the next retry of a failed call, or None to give up."""
     if isinstance(exc, HttpError) and is_rate_limited(exc):
         return ("rate", RATE_LIMIT_BACKOFF[rate_retries]) if rate_retries < len(RATE_LIMIT_BACKOFF) else None
-    if isinstance(exc, _NETWORK_ERRORS) or (isinstance(exc, HttpError) and is_retryable(exc)):
-        if server_retries < len(SERVER_ERROR_BACKOFF):
-            return "server", SERVER_ERROR_BACKOFF[server_retries]
+    if (isinstance(exc, _NETWORK_ERRORS) or (isinstance(exc, HttpError) and is_retryable(exc))) \
+            and server_retries < len(SERVER_ERROR_BACKOFF):
+        return "server", SERVER_ERROR_BACKOFF[server_retries]
     return None
 
 
@@ -233,7 +239,7 @@ def _run_batches(
             chunk = pending[start : start + BATCH_SIZE]
             # A failure of the whole batch request is retried like a single request; every attempt
             # is charged for all its calls.
-            _with_retries(lambda: send(chunk), limiter, len(chunk) * units_per_id)
+            _with_retries(lambda: send(chunk), limiter, len(chunk) * units_per_id)  # noqa: B023 - called within this iteration
         # Each failed id follows its own schedule (rate limit or server error); a round waits for
         # the longest wait among the ids it retries.
         waits = {}

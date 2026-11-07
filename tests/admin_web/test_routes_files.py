@@ -8,7 +8,13 @@ import pytest
 from mailhub_mcp.admin_web import pages
 from mailhub_mcp.admin_web.attachment_links import FILES_PATH, LINK_SECONDS
 from mailhub_mcp.admin_web.session import REAUTH_SECONDS, SESSION_COOKIE
-from tests.admin_web.conftest import attachment_download, callback, cookie_value, login, start_login
+from tests.admin_web.conftest import (
+    attachment_download,
+    callback,
+    cookie_value,
+    login,
+    start_login,
+)
 
 DATA = b"%PDF-1.7 the exact bytes \x00\xff"
 

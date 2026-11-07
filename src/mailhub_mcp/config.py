@@ -133,7 +133,7 @@ def _check_redirect_uri(name: str, entry: str) -> None:
     try:
         parts = urlsplit(entry)
         host = parts.hostname
-        parts.port  # raises ValueError on a malformed port
+        _ = parts.port  # raises ValueError on a malformed port
     except ValueError:
         raise bad from None
     if not host or parts.username is not None or parts.password is not None or parts.query or parts.fragment:

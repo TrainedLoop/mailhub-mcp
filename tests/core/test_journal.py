@@ -1,3 +1,5 @@
+from datetime import UTC
+
 import pytest
 
 from mailhub_mcp.core.journal import Journal, inverse_ops
@@ -111,7 +113,7 @@ def test_entries_since_is_inclusive_and_handles_naive_and_aware(tmp_path):
     ])
     j = Journal(p)
     assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2))] == ["c", "b"]  # naive = UTC
-    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2, tzinfo=timezone.utc))] == ["c", "b"]
+    assert [e["change_id"] for e in j.entries(datetime(2026, 1, 2, tzinfo=UTC))] == ["c", "b"]
     east = timezone(timedelta(hours=2))
     # 03T01:00+02:00 is 02T23:00Z (after b, before c); 03T02:00+02:00 is exactly c
     assert [e["change_id"] for e in j.entries(datetime(2026, 1, 3, 1, tzinfo=east))] == ["c"]

@@ -223,7 +223,7 @@ def admin_endpoint(ctx: AdminContext, fn: Endpoint, methods: tuple[str, ...] | N
                 resp.headers["Allow"] = ", ".join(sorted(allowed))
             else:
                 resp = await fn(request)
-        except Exception as exc:  # never show a stack trace; log only the type
+        except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin request failed path=%s error=%s", request.url.path, type(exc).__name__)
             resp = _error_page()
         for name, value in SECURITY_HEADERS.items():
@@ -289,7 +289,7 @@ async def _clearing_flow_cookie(request: Request, finish: Endpoint) -> Response:
     """Run an OAuth callback; whatever it returns, a 500 included, deletes the flow cookie."""
     try:
         resp = await finish(request)
-    except Exception as exc:  # never show a stack trace; log only the type
+    except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
         log.error("admin request failed path=%s error=%s", request.url.path, type(exc).__name__)
         resp = _error_page()
     _clear_flow_cookie(resp)
@@ -313,7 +313,9 @@ def _alias_rule_problem(alias: str) -> str | None:
 
 
 def admin_routes(ctx: AdminContext) -> list[Route]:
-    from mailhub_mcp.admin_web.accounts_routes import account_routes  # it imports helpers from here
+    from mailhub_mcp.admin_web.accounts_routes import (
+        account_routes,  # it imports helpers from here
+    )
     from mailhub_mcp.admin_web.files_routes import file_routes  # likewise
 
     # Separate stores: anonymous sign-in attempts can churn the login one, never the link one
@@ -338,7 +340,7 @@ def admin_routes(ctx: AdminContext) -> list[Route]:
             removed = [en for en in entries if en.alias not in linked]
             since = {en.alias: en.linked_at for en in entries}
             rows = [dataclasses.replace(r, linked_at=since.get(r.alias)) for r in rows]
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
             log.error("admin cannot read the account book error=%s", type(exc).__name__)
             book_unreadable = True
         return _html(pages.status_page(
@@ -531,14 +533,14 @@ async def _check_account(ctx: AdminContext, account: Any) -> pages.AccountRow:
     except TimeoutError:
         log.warning("admin status check timed out alias=%s", account.alias)
         state = "error"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
         log.warning("admin status check failed alias=%s error=%s", account.alias, type(exc).__name__)
         state = "error"
     recorded: str | None = None
     try:
         entry = await run_in_threadpool(ctx.book.get, account.alias)
         recorded = entry.address if entry else None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
         log.error("admin cannot read the account book alias=%s error=%s", account.alias, type(exc).__name__)
     if state != "ok" or not isinstance(address, str) or not address:
         return pages.AccountRow(account.alias, account.provider_name, recorded, state)
@@ -550,6 +552,6 @@ async def _check_account(ctx: AdminContext, account: Any) -> pages.AccountRow:
         return pages.AccountRow(account.alias, account.provider_name, recorded, "different mailbox")
     try:
         await run_in_threadpool(ctx.book.record_address, account.alias, account.provider_name, address)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - never show a stack trace; log only the type
         log.error("admin cannot record address alias=%s error=%s", account.alias, type(exc).__name__)
     return pages.AccountRow(account.alias, account.provider_name, address, state)

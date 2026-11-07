@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -8,7 +8,7 @@ from mailhub_mcp.core.organize import MAX_UNDO_SINCE, modify, undo, undo_since
 from mailhub_mcp.providers.gmail.provider import GmailProvider
 from tests.fakes.fake_gmail import FakeGmail, http_error
 
-EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
+EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def test_summarize_entry_names_fallback_counts_and_flags():
@@ -90,7 +90,7 @@ def test_excludes_undone_and_undo_entries_and_second_run_is_empty(fake, provider
 
 def test_since_filters_old_entries(fake, provider, journal):
     modify(provider, journal, "a", ["m1"], [], [], True, None, None)
-    future = datetime.now(timezone.utc) + timedelta(hours=1)
+    future = datetime.now(UTC) + timedelta(hours=1)
     assert undo_since(lambda a: provider, journal, future, None, False)["total"] == 0
 
 

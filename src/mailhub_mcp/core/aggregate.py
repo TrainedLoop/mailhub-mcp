@@ -30,7 +30,7 @@ async def fan_out(accounts: list[Account], fn: Callable[[Account], list]) -> dic
     async def worker(account: Account) -> None:
         try:
             results[account.alias] = await to_thread.run_sync(fn, account)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one account failing never blocks the others
             errors[account.alias] = describe_error(exc, account.alias)
 
     async with anyio.create_task_group() as tg:

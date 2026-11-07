@@ -2,9 +2,8 @@ import json
 import logging
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
 
 log = logging.getLogger("mailhub-mcp.journal")
 
@@ -36,7 +35,7 @@ class Journal:
         change_id = uuid.uuid4().hex[:12]
         entry = {
             "change_id": change_id,
-            "timestamp": (timestamp or datetime.now(timezone.utc)).isoformat(),
+            "timestamp": (timestamp or datetime.now(UTC)).isoformat(),
             "account": account,
             "tool": tool,
             "added": added,
@@ -121,7 +120,7 @@ class Journal:
 
 
 def _aware(moment: datetime) -> datetime:
-    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    return moment if moment.tzinfo else moment.replace(tzinfo=UTC)
 
 
 def inverse_ops(entry: dict) -> list[dict]:

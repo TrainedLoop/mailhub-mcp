@@ -60,7 +60,7 @@ class _Batch:
         for request_id, request in self._requests:
             try:
                 response = request._fn()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - mimics googleapiclient: any call error goes to the batch callback
                 self._callback(request_id, None, exc)
             else:
                 self._callback(request_id, response, None)

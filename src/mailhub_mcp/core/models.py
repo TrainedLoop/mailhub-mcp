@@ -100,7 +100,7 @@ class LabelState(_Base):
 M = TypeVar("M", bound=_Accounted)
 
 
-def with_account(model: M, alias: str) -> M:
+def with_account(model: M, alias: str) -> M:  # noqa: UP047 - keep the TypeVar form used across the models
     if not isinstance(model, _Accounted):
         raise TypeError(f"{type(model).__name__} has no account field")
     update: dict = {"account": alias}

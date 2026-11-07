@@ -14,10 +14,22 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 from mailhub_mcp.core.errors import (
-    AuthExpired, MailhubError, MessageNotFound, RateLimited, TransientError,
+    AuthExpired,
+    MailhubError,
+    MessageNotFound,
+    RateLimited,
+    TransientError,
 )
 from mailhub_mcp.core.models import (
-    Attachment, AttachmentDownload, Draft, DraftSummary, Label, LabelState, Message, MessageSummary, Thread,
+    Attachment,
+    AttachmentDownload,
+    Draft,
+    DraftSummary,
+    Label,
+    LabelState,
+    Message,
+    MessageSummary,
+    Thread,
 )
 from mailhub_mcp.providers.base import GetResult, SearchResult
 from mailhub_mcp.providers.gmail import api

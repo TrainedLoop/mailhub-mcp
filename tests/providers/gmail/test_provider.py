@@ -7,7 +7,12 @@ from unittest.mock import MagicMock
 import pytest
 from google.auth.exceptions import RefreshError, TransportError
 
-from mailhub_mcp.core.errors import AuthExpired, MailhubError, MessageNotFound, TransientError
+from mailhub_mcp.core.errors import (
+    AuthExpired,
+    MailhubError,
+    MessageNotFound,
+    TransientError,
+)
 from mailhub_mcp.providers import PROVIDERS
 from mailhub_mcp.providers.gmail import provider as provider_module
 from mailhub_mcp.providers.gmail.provider import GmailProvider, default_build
