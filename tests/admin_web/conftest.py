@@ -123,13 +123,14 @@ def attachment_download(
     *,
     spam: bool = False,
     body: str = "Here is the report.",
+    hidden_removed: int = 0,
 ) -> AttachmentDownload:
     attachment = Attachment(filename=filename, mime_type="application/pdf", size=len(data), part_id=part_id)
     message = Message(
         id=message_id, thread_id="t1", **{"from": "sender@example.com"}, to="me@example.com",
         subject="Report", date="2026-11-04", snippet="", labels=["INBOX"], internal_date=0,
         unread=False, starred=False, is_important=None, category=None, is_newsletter=False,
-        cc="", body=body, attachments=[attachment], spam=spam,
+        cc="", body=body, attachments=[attachment], spam=spam, hidden_removed=hidden_removed,
     )
     return AttachmentDownload(message=message, attachment=attachment, data=data)
 

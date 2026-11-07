@@ -5,10 +5,23 @@ import pytest
 from mailhub_mcp.core.attachments import (
     GMAIL_BLOCKED_EXTENSIONS,
     ascii_filename,
+    blocks_downloads,
     download_block_reason,
     served_filename,
 )
 from mailhub_mcp.core.models import Attachment, Message
+
+
+@pytest.mark.parametrize("reasons,blocked", [
+    ([], False),
+    (["hidden_text"], False),
+    (["mentions_tools"], True),
+    (["instruction_override", "hidden_text"], True),
+    (["addresses_assistant"], True),
+    (["requests_action"], True),
+])
+def test_blocks_downloads(reasons, blocked):
+    assert blocks_downloads(reasons) is blocked
 
 
 @pytest.mark.parametrize("spam,suspicious,name,expected", [

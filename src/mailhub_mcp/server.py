@@ -21,7 +21,7 @@ from mailhub_mcp.config import Settings
 from mailhub_mcp.core import organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
-from mailhub_mcp.core.attachments import download_block_reason
+from mailhub_mcp.core.attachments import blocks_downloads, download_block_reason
 from mailhub_mcp.core.content import (
     MAX_BODY_CHARS,
     Fence,
@@ -80,7 +80,8 @@ ATTACHMENT_LINKS: AttachmentLinks | None = (
 )
 ATTACHMENT_NOTE = (
     " Each attachment has a download_url (opens only after the owner signs in to the admin page; valid 14 days;"
-    " give it to the user unchanged) or download_blocked (spam, suspicious or blocked_type)."
+    " give it to the user unchanged) or download_blocked (spam, suspicious or blocked_type;"
+    " hidden_text alone does not block attachments)."
 ) if settings.admin else ""
 
 MAX_LOGGED_ARG = 200
@@ -204,7 +205,7 @@ def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = 
         if isinstance(value, Message):
             content["body"] = truncate_body(value.body, body_limit)
             if ATTACHMENT_LINKS is not None:
-                out["attachments"] = [_link_attachment(value, a, bool(reasons)) for a in value.attachments]
+                out["attachments"] = [_link_attachment(value, a, blocks_downloads(reasons)) for a in value.attachments]
         return {**out, "content_ref": fence.ref(content), "unsubscribe": _fence_unsubscribe(value.unsubscribe, fence),
                 "suspicious": bool(reasons), "suspicious_reasons": reasons}
     if isinstance(value, Thread):

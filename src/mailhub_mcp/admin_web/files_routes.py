@@ -34,7 +34,7 @@ from mailhub_mcp.admin_web.routes import (
     admin_io,
     done_page,
 )
-from mailhub_mcp.core.attachments import download_block_reason
+from mailhub_mcp.core.attachments import blocks_downloads, download_block_reason
 from mailhub_mcp.core.content import message_suspicion
 from mailhub_mcp.core.errors import AccountNotFound, MessageNotFound
 
@@ -91,7 +91,7 @@ async def _send(ctx: AdminContext, email: str, target: LinkTarget) -> Response:
 
     filename = dl.attachment.filename
     reason = download_block_reason(
-        dl.message.spam, bool(message_suspicion(dl.message, ctx.tool_names)), filename
+        dl.message.spam, blocks_downloads(message_suspicion(dl.message, ctx.tool_names)), filename
     )
     if reason is not None:
         refused(reason, filename)
