@@ -338,6 +338,13 @@ def get_attachment(svc, message_id: str, part_id: str, limiter: RateLimiter | No
     return parsed, attachment, base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
 
 
+def attachment_bytes(svc, message_id: str, attachment_id: str, limiter: RateLimiter | None = None) -> bytes:
+    """Bytes of one attachment by the attachmentId of a recent message get."""
+    request = svc.users().messages().attachments().get(userId="me", messageId=message_id, id=attachment_id)
+    data = _execute(request, limiter, ATTACHMENT_GET_UNITS).get("data", "")
+    return base64.urlsafe_b64decode(data + "=" * (-len(data) % 4))
+
+
 def get_thread(svc, thread_id: str, limiter: RateLimiter | None = None) -> dict:
     request = svc.users().threads().get(userId="me", id=thread_id, format="full")
     thread = _execute(request, limiter, THREAD_GET_UNITS)

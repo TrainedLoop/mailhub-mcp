@@ -25,6 +25,8 @@ services:
       # Append :ro to keep it read-only: /admin then shows status only and
       # mailboxes are linked with mailhub-authorize instead.
       - ./secrets/accounts:/secrets/accounts
+      # Optional passwords for bill PDFs (files `cpf` and `passwords`).
+      - ./secrets/billing:/secrets/billing:ro
     read_only: true
     tmpfs:
       - /tmp

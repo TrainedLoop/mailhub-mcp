@@ -101,3 +101,13 @@ def test_only_the_download_route_fetches_attachments():
         if (PKG / "providers") not in p.parents and re.search(r"\bget_attachment\b", p.read_text())
     ]
     assert sorted(set(callers) - {"providers/base.py"}) == ["admin_web/files_routes.py"]
+
+
+def test_only_the_billing_reader_fetches_attachment_bytes_for_tools():
+    """MCP tools reach attachment bytes only through core/billing_read.py, which returns validated fields."""
+    callers = [
+        _rel(p)
+        for p in PKG.rglob("*.py")
+        if (PKG / "providers") not in p.parents and re.search(r"\battachment_data\b", p.read_text())
+    ]
+    assert sorted(callers) == ["core/billing_read.py"]

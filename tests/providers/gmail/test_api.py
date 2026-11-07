@@ -224,7 +224,7 @@ def test_date_and_attachment_mime_type_are_cleaned():
     }
     m = full(msg)
     assert m["date"] == "Mon, 1 Jan 2024 10:00 +0000"
-    assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3, "part_id": ""}]
+    assert m["attachments"] == [{"filename": "a.pdf", "mime_type": "application/pdf", "size": 3, "part_id": "", "fetch_id": "x"}]
 
 
 def _rate_limited(status=403, reason="rateLimitExceeded"):

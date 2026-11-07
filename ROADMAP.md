@@ -30,7 +30,7 @@ Known gaps from the review of the admin page (v0.2.0). None of them can attach t
 
 ## Ideas
 
-- **Attachment content for the model.** Letting the model read attachment content, such as invoices and payment slips, with the same refusals as the download links (Gmail-blocked types, spam). Download links for the owner have shipped.
+- **Attachment content for the model.** Letting the model read free text from attachments. Download links and validated billing data from bill PDFs have shipped.
 - **Gmail filters through approval.** The model proposes a filter, the owner approves it out of band, and the server creates it. Filters act outside the journal and undo, so this needs care.
 - **Delete empty labels.** A narrow tool that removes only labels with no messages, created by mailhub, and not protected.
 - **Per-account write locks.** Today one journal lock serializes writes for all accounts, so a rate-limited mailbox can delay writes on the others.

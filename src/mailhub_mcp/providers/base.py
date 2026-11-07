@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import ClassVar, Literal, Protocol
 
 from mailhub_mcp.core.models import (
+    Attachment,
     AttachmentDownload,
     Draft,
     DraftSummary,
@@ -52,6 +53,10 @@ class MailProvider(Protocol):
     def get_attachment(self, message_id: str, part_id: str) -> AttachmentDownload:
         """The attachment's bytes with its message. Raises MessageNotFound when the message or a file
         part with that id does not exist."""
+        ...
+    def attachment_data(self, message_id: str, attachment: Attachment) -> bytes:
+        """Bytes of an attachment from a message just read, using that read's fetch handle (cheaper than
+        get_attachment). Raises MessageNotFound when the message or attachment is gone."""
         ...
     def list_labels(self) -> list[Label]: ...
     def ensure_label(self, name: str) -> Label: ...
