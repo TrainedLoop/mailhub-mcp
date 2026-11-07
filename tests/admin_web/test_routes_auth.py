@@ -53,6 +53,7 @@ SECURITY_HEADERS = {
     "x-frame-options": "DENY",
     "referrer-policy": "same-origin",
     "cache-control": "no-store",
+    "x-content-type-options": "nosniff",
 }
 EXPIRED = "This sign-in link expired, start again"
 
