@@ -43,6 +43,10 @@ class Settings:
     max_body_chars: int = 2000
     # Serve the owner admin page at /admin (ADMIN=on|off).
     admin: bool = True
+    # Add billing data (payment codes, amounts, due dates) to read results, reading bill PDFs (BILLING=on|off).
+    billing: bool = True
+    # Optional PDF passwords: `cpf` and `passwords` (one per line).
+    billing_secrets_dir: Path = Path("/secrets/billing")
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -64,6 +68,8 @@ class Settings:
             gmail_units_per_minute=_positive_int_env("GMAIL_UNITS_PER_MINUTE", 4800),
             max_body_chars=_body_chars_env("MAX_BODY_CHARS", 2000),
             admin=_on_off_env("ADMIN", default=True),
+            billing=_on_off_env("BILLING", default=True),
+            billing_secrets_dir=Path(os.environ.get("BILLING_SECRETS_DIR", "/secrets/billing")),
         )
 
 

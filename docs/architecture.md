@@ -28,6 +28,9 @@ src/mailhub_mcp/
     content.py     Sanitizing, untrusted markers and suspicion heuristics
     drafts.py      Thread participants and draft recipient rules
     attachments.py Download block rules and the served attachment file name
+    billing.py     Payment code validation (slip, collection, PIX) and labelled amounts
+    billing_read.py  Billing data of a read: body, then bill PDFs
+    pdf_text.py    PDF text from a limited child process (pdf_worker.py)
     preferences.py Triage preferences, proposals, approval and undo
     history.py     Journal entry summaries for list_changes
     journal.py     Append-only JSONL change journal
@@ -71,6 +74,7 @@ One instance serves one owner. `ALLOWED_EMAILS` is meant to hold only that perso
 - **Status.** `GET /admin` lists each account with its alias, provider, address and state (`ok`, `credential expired`, `different mailbox`, `error`) from one cheap check per account (Gmail `users.getProfile`, 10 seconds at most), plus removed aliases. `different mailbox` means the credential answers for another address than the one recorded (a file placed by `mailhub-authorize` or by hand); the book is not changed.
 - **Browser hardening.** Server-rendered HTML, a small stylesheet at `/admin/style.css`, no JavaScript, every value HTML-escaped. Every response under `/admin`, including unknown paths (404), unlisted methods (405) and errors (no stack traces), carries `Content-Security-Policy: default-src 'none'; style-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin` and `Cache-Control: no-store`. `same-origin` rather than `no-referrer`, because under `no-referrer` browsers send `Origin: null` on the page's own form POSTs and the same-origin check refuses it.
 - **Attachment downloads.** `read_email`, `read_emails` and `read_thread` add a signed `download_url` (14 days) or a `download_blocked` reason to each attachment when `ADMIN=on`. `GET /admin/files/<token>` requires the owner session (not the 5-minute re-authentication), bounces once with `?b=1` when the `SameSite=Strict` cookie is missing, re-checks the block rules on the freshly fetched message, and sends the bytes from `MailProvider.get_attachment` (held in memory, sent in one response) as a forced download (`application/octet-stream`, `nosniff`). Nothing is written to disk; each download costs about 65 Gmail quota units. A test allows only `admin_web/files_routes.py` to call `get_attachment`.
+- **Billing data.** The read tools call `server.add_billing` in the worker thread: messages in spam or with a download-blocking suspicion reason are skipped; `core.billing_read.collect` scans each body for codes and, for messages that look like bills, fetches up to 3 PDFs per message and 10 per call with `MailProvider.attachment_data` (the read's own attachmentId, 5 Gmail units) and reads them two at a time through `core.pdf_text` (a `python -I` child limited to 256 MB and 10 s CPU, killed after 15 s; passwords on stdin). Only validated codes, amounts and dates are returned; `pix_code` and `payee` go into the fence. A test allows only `core/billing_read.py` to call `attachment_data`. Design: `docs/design/2026-11-07-billing-extraction.md`.
 - **Audit log.** Sign-ins (accepted, refused, failed with a fixed reason code such as `unverified-email`, and cancelled), re-authentications, links, re-links and removals are logged with the owner email, alias, provider and mailbox address. Tokens, codes and cookies are never logged.
 
 ## The MailProvider interface
@@ -92,6 +96,7 @@ Methods:
 | `modify_labels(ids, add, remove)` | Apply label IDs |
 | `list_drafts(limit)` / `create_draft(...)` | Drafts; replies only, to thread participants; creation never sends |
 | `get_attachment(message_id, part_id)` | One attachment's bytes with its message, as an `AttachmentDownload`; used only by the admin download route |
+| `attachment_data(message_id, attachment)` | Bytes of an attachment from a message just read, by that read's handle (Gmail `attachmentId`, 5 units); used only by the billing reader |
 
 `GetResult` has three fields: `found` (the messages), `missing` (IDs that do not exist), and `failed` (ID to readable reason, for transient or unreadable errors). Callers must treat the three differently: organizing refuses to proceed if any ID is missing or failed, while reads report them in `errors`.
 

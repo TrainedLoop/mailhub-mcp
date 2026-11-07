@@ -1,6 +1,6 @@
 """Provider-agnostic typed mail models."""
 
-from typing import TypeVar
+from typing import Any, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,6 +50,8 @@ class Attachment(_Base):
     size: int
     # Gmail part id, internal input to download links; never serialized.
     part_id: str = Field(default="", exclude=True)
+    # Provider handle for fetching the bytes from this same read (Gmail attachmentId); never serialized.
+    fetch_id: str = Field(default="", exclude=True)
 
 
 class Message(MessageSummary):
@@ -61,6 +63,8 @@ class Message(MessageSummary):
     hidden_removed: int = Field(default=0, exclude=True)
     # Whether the message sits in spam; internal input to download rules, never serialized.
     spam: bool = Field(default=False, exclude=True)
+    # core.billing.BillingResult set by the server's read tools; presented by the server, never serialized.
+    billing: Any = Field(default=None, exclude=True)
 
 
 class AttachmentDownload(_Base):

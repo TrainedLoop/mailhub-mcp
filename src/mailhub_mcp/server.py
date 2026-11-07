@@ -18,7 +18,7 @@ from mailhub_mcp.admin_web.context import build_admin_context
 from mailhub_mcp.admin_web.routes import admin_routes
 from mailhub_mcp.auth import build_auth
 from mailhub_mcp.config import Settings
-from mailhub_mcp.core import organize, preferences
+from mailhub_mcp.core import billing_read, organize, preferences
 from mailhub_mcp.core.accounts import AccountRegistry
 from mailhub_mcp.core.aggregate import describe_error, fan_out, resolve, run_one
 from mailhub_mcp.core.attachments import blocks_downloads, download_block_reason
@@ -189,6 +189,56 @@ def _link_attachment(message: Message, attachment, suspicious: bool) -> dict:
     return {**out, "download_url": ATTACHMENT_LINKS.url(message.account, message.id, attachment.part_id)}
 
 
+BILLING_PASSWORDS: list[str] = billing_read.load_passwords(settings.billing_secrets_dir) if settings.billing else []
+BILLING_NOTE = (
+    " Messages may carry 'billing': payment data found in the body or, for messages that look like bills, in"
+    " their PDF attachments. kind is boleto, arrecadacao, pix or text; amount and due_date come only from a code"
+    " whose check digits matched; amount_text and due_date_text are read from labelled text and unverified;"
+    " pix_code and payee are references into the untrusted block. A valid code does not prove the sender is"
+    " genuine. 'billing_errors' lists files that could not be read (pdf_locked, pdf_unreadable, pdf_timeout,"
+    " pdf_too_large, skipped_limit, fetch_failed). Spam and suspicious messages get no billing data."
+) if settings.billing else ""
+
+
+def _billing_eligible(m: Message, tool_names: frozenset[str]) -> bool:
+    return not m.spam and not blocks_downloads(message_suspicion(m, tool_names))
+
+
+def add_billing(provider, messages: list[Message], tool_names: frozenset[str] = ALL_TOOL_NAMES) -> None:
+    """Attach billing data to the eligible messages of a read (runs in the worker thread)."""
+    if not settings.billing:
+        return
+    eligible = [m for m in messages if _billing_eligible(m, tool_names)]
+    results = billing_read.collect(provider, eligible, BILLING_PASSWORDS)
+    for m in eligible:
+        m.billing = results.get(m.id)
+
+
+def _present_billing(result, fence: Fence) -> dict:
+    out: dict = {}
+    if result.items:
+        items = []
+        for item in result.items:
+            entry = {"kind": item.kind, "source": item.source}
+            for key in ("line", "bank"):
+                if getattr(item, key):
+                    entry[key] = getattr(item, key)
+            for key in ("pix_code", "payee"):
+                if getattr(item, key):
+                    entry[key] = fence.ref(getattr(item, key))
+            for key in ("amount", "amount_text"):
+                if getattr(item, key) is not None:
+                    entry[key] = f"{getattr(item, key):.2f}"
+            for key in ("due_date", "due_date_text"):
+                if getattr(item, key) is not None:
+                    entry[key] = getattr(item, key).isoformat()
+            items.append(entry)
+        out["billing"] = items
+    if result.errors:
+        out["billing_errors"] = [{"source": s, "error": e} for s, e in result.errors]
+    return out
+
+
 def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = MAX_BODY_CHARS):
     """Assess every message inside a provider result and move its untrusted text into `fence`.
 
@@ -206,6 +256,8 @@ def _present(value, fence: Fence, tool_names: frozenset[str], body_limit: int = 
             content["body"] = truncate_body(value.body, body_limit)
             if ATTACHMENT_LINKS is not None:
                 out["attachments"] = [_link_attachment(value, a, blocks_downloads(reasons)) for a in value.attachments]
+            if value.billing is not None:
+                out.update(_present_billing(value.billing, fence))
         return {**out, "content_ref": fence.ref(content), "unsubscribe": _fence_unsubscribe(value.unsubscribe, fence),
                 "suspicious": bool(reasons), "suspicious_reasons": reasons}
     if isinstance(value, Thread):
@@ -400,7 +452,7 @@ async def count_messages(query: str, accounts: list[str] | None = None) -> dict:
     )
 
 
-@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read one email: headers, plain-text body and attachment list. Costs about 60 Gmail quota units, plus 5 per bill PDF read." + ATTACHMENT_NOTE + BILLING_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_email(account: str, message_id: str, max_body_chars: int | None = None) -> dict:
     limit = resolve_body_limit(max_body_chars)
 
@@ -409,12 +461,13 @@ async def read_email(account: str, message_id: str, max_body_chars: int | None =
         raise_if_rate_limited(res)
         if not res.found:
             raise MessageNotFound([message_id])
+        add_billing(p, res.found)
         return with_account(res.found[0], account)
 
     return await one(account, work, limit)
 
 
-@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'. Costs about 60 Gmail quota units per message (full format)." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description=f"Read up to {MAX_READ_IDS} emails of one account at once; unreadable IDs are reported in 'errors'. Costs about 60 Gmail quota units per message (full format), plus 5 per bill PDF read." + ATTACHMENT_NOTE + BILLING_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_emails(account: str, message_ids: list[str], max_body_chars: int | None = None) -> dict:
     if len(message_ids) > MAX_READ_IDS:
         raise ToolError(f"At most {MAX_READ_IDS} message IDs per call")
@@ -423,15 +476,21 @@ async def read_emails(account: str, message_ids: list[str], max_body_chars: int 
     def work(p):
         res = p.get_messages(message_ids, "full")
         errors = {i: "message not found" for i in res.missing} | res.failed
+        add_billing(p, res.found)
         return {"messages": [with_account(m, account) for m in res.found], "errors": errors}
 
     return await one(account, work, limit)
 
 
-@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first. Costs about 120 Gmail quota units per thread." + ATTACHMENT_NOTE + _body_note() + UNTRUSTED_NOTE)
+@tool(annotations=READ_ONLY, description="Read every message in a thread, oldest first. Costs about 120 Gmail quota units per thread, plus 5 per bill PDF read." + ATTACHMENT_NOTE + BILLING_NOTE + _body_note() + UNTRUSTED_NOTE)
 async def read_thread(account: str, thread_id: str, max_body_chars: int | None = None) -> dict:
     limit = resolve_body_limit(max_body_chars)
-    return await one(account, lambda p: with_account(p.get_thread(thread_id), account), limit)
+    def work(p):
+        thread = p.get_thread(thread_id)
+        add_billing(p, thread.messages)
+        return with_account(thread, account)
+
+    return await one(account, work, limit)
 
 
 @tool(annotations=READ_ONLY, description=(

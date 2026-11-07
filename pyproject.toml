@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.11",
     "cryptography>=44",
     "requests>=2.32",
+    "pypdf[crypto]>=6",
 ]
 
 [build-system]

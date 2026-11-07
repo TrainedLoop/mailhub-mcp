@@ -194,6 +194,12 @@ class GmailProvider:
             msg, attachment, data = api.get_attachment(self._service(), message_id, part_id, self._limiter)
         return AttachmentDownload(message=Message(**msg), attachment=Attachment(**attachment), data=data)
 
+    def attachment_data(self, message_id: str, attachment: Attachment) -> bytes:
+        if not attachment.fetch_id:  # the bytes were inline in the read: fetch the part afresh
+            return self.get_attachment(message_id, attachment.part_id).data
+        with self._translate(not_found=[message_id]):
+            return api.attachment_bytes(self._service(), message_id, attachment.fetch_id, self._limiter)
+
     def list_labels(self) -> list[Label]:
         with self._translate():
             return [Label(**l) for l in api.list_labels(self._service(), self._limiter)]

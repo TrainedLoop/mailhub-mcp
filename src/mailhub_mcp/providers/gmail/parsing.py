@@ -41,6 +41,7 @@ def _extract_body(payload: dict) -> tuple[str, list[dict], int]:
                 "mime_type": clean_text(mime),
                 "size": body.get("size", 0),
                 "part_id": clean_text(part.get("partId", "")),
+                "fetch_id": body.get("attachmentId", ""),
             })
         elif mime == "text/plain" and body.get("data"):
             plain.append(_decode(body["data"]))
