@@ -39,6 +39,8 @@ def build_auth(settings: Settings) -> AllowlistGoogleProvider:
         required_scopes=["openid", "https://www.googleapis.com/auth/userinfo.email"],
         allowed_client_redirect_uris=list(settings.allowed_redirect_uris),
         jwt_signing_key=settings.jwt_signing_key,
-        extra_authorize_params={"prompt": "select_account"},
+        # "consent" makes Google return a refresh token on every login; without it Google
+        # sends one only on the client's first authorization and sessions end after 1 h.
+        extra_authorize_params={"access_type": "offline", "prompt": "consent select_account"},
         allowed_emails=settings.allowed_emails,
     )

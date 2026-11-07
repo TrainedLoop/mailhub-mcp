@@ -128,3 +128,14 @@ def test_repr_hides_secret_values(monkeypatch):
     text = repr(settings)
     assert "gcs-value-123" not in text and "jwt-value-456" not in text
     assert settings.google_client_secret == "gcs-value-123"  # still readable as attributes
+
+
+def test_google_login_asks_for_a_refresh_token(monkeypatch):
+    # Without prompt=consent Google issues a refresh token only on the first
+    # authorization of the client, so logins would die when the 1 h Google
+    # access token expires.
+    from mailhub_mcp.auth import build_auth
+
+    params = build_auth(_settings(monkeypatch))._extra_authorize_params
+    assert params["access_type"] == "offline"
+    assert set(params["prompt"].split()) == {"consent", "select_account"}
