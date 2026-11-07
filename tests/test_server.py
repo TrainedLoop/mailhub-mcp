@@ -1839,7 +1839,7 @@ def test_locked_pdf_reports_error_and_opens_with_the_cpf(fakes, monkeypatch):
     fakes.a.add_message("l1", labels=["INBOX"], headers=BILL_HEADERS, body="Fatura em anexo", attachments=[att])
     m = call("read_email", {"account": "alice-personal", "message_id": "l1"})
     assert m["billing_errors"] == [{"source": "fatura.pdf", "error": "pdf_locked"}]
-    monkeypatch.setattr(server, "BILLING_PASSWORDS", candidate_passwords(billing_samples.CPF, []))
+    monkeypatch.setattr(server, "BILLING_PASSWORDS", candidate_passwords([], [billing_samples.CPF]))
     m = call("read_email", {"account": "alice-personal", "message_id": "l1"})
     assert m["billing"][0]["line"] == line and "billing_errors" not in m
 

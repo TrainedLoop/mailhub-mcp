@@ -39,7 +39,7 @@ It deliberately changes one rule of the attachment-links design: the server now 
 
 `core/pdf_text.py` runs pypdf in a child process (`python -I -m mailhub_mcp.core.pdf_worker`). The child sets its own limits before parsing (address space 256 MB, CPU 10 s) and the parent kills it after 15 s. Passwords and bytes go through stdin, never the command line. At most 20 pages are read and 200,000 characters returned. Results: the text, or one of `pdf_locked`, `pdf_unreadable`, `pdf_timeout`, `pdf_too_large`.
 
-Passwords tried: none, then each line of `<BILLING_SECRETS_DIR>/passwords`, then parts of the CPF in `<BILLING_SECRETS_DIR>/cpf` (the first 3, 4, 5, 6, 9 and 11 digits, the last 4, 5 and 6, and the formatted CPF). Both files are optional, read at startup, kept out of `repr` and logs.
+Passwords tried: none, then each line of `<BILLING_SECRETS_DIR>/passwords`, then parts of the CPF in `<BILLING_SECRETS_DIR>/cpf` (the first 3, 4, 5, 6, 9 and 11 digits, the last 4, 5 and 6, and the formatted CPF), then parts of each CNPJ in `<BILLING_SECRETS_DIR>/cnpj` (the first 4, 5, 6, 8, 12 and 14 characters and the formatted CNPJ; the alphanumeric CNPJ is accepted). All files are optional, hold one entry per line, read at startup, kept out of `repr` and logs.
 
 ### Which messages and which files
 

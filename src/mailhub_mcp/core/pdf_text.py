@@ -42,12 +42,33 @@ def pdf_text(data: bytes, passwords: list[str]) -> PdfText:
     return PdfText(error=error if error in ("pdf_locked", "pdf_unreadable", "pdf_too_large") else "pdf_unreadable")
 
 
-def candidate_passwords(cpf: str, extra: list[str]) -> list[str]:
-    """Passwords to try: the extra ones first, then the usual bank variations of the CPF."""
-    out = list(extra)
+def _cpf_variations(cpf: str) -> list[str]:
     digits = "".join(c for c in cpf if c.isdigit())
-    if len(digits) == 11:
-        out += [digits[:n] for n in (3, 4, 5, 6, 9, 11)]
-        out += [digits[-n:] for n in (4, 5, 6)]
-        out.append(f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}")
+    if len(digits) != 11:
+        return []
+    return [
+        *(digits[:n] for n in (3, 4, 5, 6, 9, 11)),
+        *(digits[-n:] for n in (4, 5, 6)),
+        f"{digits[:3]}.{digits[3:6]}.{digits[6:9]}-{digits[9:]}",
+    ]
+
+
+def _cnpj_variations(cnpj: str) -> list[str]:
+    # 14 characters; the first 12 may be letters in the alphanumeric CNPJ issued from 2026.
+    chars = "".join(c for c in cnpj.upper() if c.isalnum())
+    if len(chars) != 14 or not chars[12:].isdigit():
+        return []
+    return [
+        *(chars[:n] for n in (4, 5, 6, 8, 12, 14)),
+        f"{chars[:2]}.{chars[2:5]}.{chars[5:8]}/{chars[8:12]}-{chars[12:]}",
+    ]
+
+
+def candidate_passwords(extra: list[str], cpfs: list[str] = (), cnpjs: list[str] = ()) -> list[str]:
+    """Passwords to try: the extra ones first, then the usual bank variations of each CPF and CNPJ."""
+    out = list(extra)
+    for cpf in cpfs:
+        out += _cpf_variations(cpf)
+    for cnpj in cnpjs:
+        out += _cnpj_variations(cnpj)
     return list(dict.fromkeys(p for p in out if p))

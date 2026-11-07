@@ -15,15 +15,17 @@ PDF_WORKERS = 2
 
 
 def load_passwords(secrets_dir: Path) -> list[str]:
-    """PDF passwords from `<dir>/passwords` (one per line) and `<dir>/cpf`; both optional."""
+    """PDF passwords from `<dir>/passwords`, `<dir>/cpf` and `<dir>/cnpj` (one entry per line); all optional."""
     def read(name: str) -> str:
         try:
             return (secrets_dir / name).read_text(encoding="utf-8")
         except OSError:  # missing or unreadable: run without those passwords
             return ""
 
-    extra = [line.strip() for line in read("passwords").splitlines() if line.strip()]
-    return candidate_passwords(read("cpf").strip(), extra)
+    def lines(name: str) -> list[str]:
+        return [line.strip() for line in read(name).splitlines() if line.strip()]
+
+    return candidate_passwords(lines("passwords"), lines("cpf"), lines("cnpj"))
 
 
 def _is_pdf(a: Attachment) -> bool:
