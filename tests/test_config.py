@@ -120,3 +120,12 @@ def test_admin_other_values_raise(monkeypatch, value):
     monkeypatch.setenv("ADMIN", value)
     with pytest.raises(ValueError, match=r"ADMIN must be 'on' or 'off', got"):
         Settings.from_env()
+
+
+def test_repr_hides_secret_values(monkeypatch):
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "gcs-value-123")
+    monkeypatch.setenv("JWT_SIGNING_KEY", "jwt-value-456" * 3)
+    settings = Settings.from_env()
+    text = repr(settings)
+    assert "gcs-value-123" not in text and "jwt-value-456" not in text
+    assert settings.google_client_secret == "gcs-value-123"  # still readable as attributes

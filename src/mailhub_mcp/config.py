@@ -1,7 +1,7 @@
 """Environment-derived settings."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -27,9 +27,9 @@ _RESERVED_LABELS = frozenset(
 class Settings:
     public_base_url: str
     google_client_id: str
-    google_client_secret: str
+    google_client_secret: str = field(repr=False)
     allowed_emails: frozenset[str]
-    jwt_signing_key: str
+    jwt_signing_key: str = field(repr=False)
     allowed_redirect_uris: tuple[str, ...]
     org_label: str
     accounts_dir: Path
