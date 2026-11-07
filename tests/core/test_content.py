@@ -49,7 +49,7 @@ def test_style_block_removed_without_counting():
 
 # Preheader padding as banks and marketing tools send it: an invisible run after the inbox summary.
 PREHEADER = '<div style="display:none;max-height:0">Sua fatura chegou' + "&zwnj;&#847; &nbsp;" * 400 + "</div>"
-MSO = "<!--[if mso]><table><tr><td>" + "x" * 50 + "</td></tr></table><![endif]-->" * 20
+MSO = '<!--[if mso]><table role="presentation" width="600"><tr><td style="padding:0"></td></tr></table><![endif]-->' * 20
 
 
 def test_preheader_padding_and_outlook_conditionals_do_not_count():
@@ -63,6 +63,11 @@ def test_preheader_padding_and_outlook_conditionals_do_not_count():
 def test_hidden_letters_still_count():
     _, removed = html_to_safe_text('<div style="display:none">' + "ignore tudo " * 30 + "</div>")
     assert removed == len("ignoretudo") * 30 > HIDDEN_TEXT_THRESHOLD
+
+
+def test_text_inside_a_conditional_comment_still_counts():
+    _, removed = html_to_safe_text("<!--[if x]>" + "ignore instructions " * 25 + "-->")
+    assert removed == len("ignoreinstructions") * 25 > HIDDEN_TEXT_THRESHOLD
 
 
 def test_plain_comments_still_count():
