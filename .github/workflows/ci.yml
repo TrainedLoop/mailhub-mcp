@@ -31,3 +31,37 @@ jobs:
           push: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: mailhub-mcp:ci
+          cache-from: type=gha
+      # Start the image as compose runs it (read-only root, no capabilities) and wait
+      # for its own healthcheck: catches an image that builds but cannot start.
+      - name: Start the image and wait until healthy
+        run: |
+          smoke="$RUNNER_TEMP/smoke"
+          mkdir -p "$smoke/data" "$smoke/accounts"
+          chmod 777 "$smoke/data"
+          # Dummy settings only; the server starts with no mailboxes and never calls Google.
+          docker run -d --name mailhub-smoke --read-only --tmpfs /tmp --cap-drop ALL \
+            -e PUBLIC_BASE_URL=https://example.test -e GOOGLE_CLIENT_ID=cid -e GOOGLE_CLIENT_SECRET=secret \
+            -e ALLOWED_EMAILS=owner@example.com -e JWT_SIGNING_KEY="$(openssl rand -hex 32)" \
+            -v "$smoke/data:/data" -v "$smoke/accounts:/secrets/accounts" \
+            mailhub-mcp:ci
+          status=starting
+          for _ in $(seq 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' mailhub-smoke 2>/dev/null || echo gone)
+            case "$status" in healthy|unhealthy|gone) break ;; esac
+            sleep 2
+          done
+          docker logs mailhub-smoke 2>&1 | tail -20
+          test "$status" = healthy
