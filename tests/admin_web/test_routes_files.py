@@ -136,6 +136,13 @@ def test_message_turned_spam_or_suspicious_403(env, reason, download):
     assert resp.headers["content-type"].startswith("text/html")
 
 
+def test_hidden_text_alone_does_not_block_download(env):
+    path, _ = _setup(env, hidden_removed=5000)
+    login(env.client)
+    resp = env.client.get(path, follow_redirects=False)
+    assert resp.status_code == 200 and resp.content == DATA
+
+
 def test_blocked_type_403(env):
     path, _ = _setup(env, filename="invoice.pdf.exe")
     login(env.client)

@@ -29,6 +29,9 @@ _INVISIBLE = re.compile(
     "\u0000-\u0008\u000b-\u001f\u007f-\u009f"
     "]"
 )
+# Outlook conditional comments: "[if mso]>...<![endif]", "<![endif]", and the
+# "[endif]--" piece html.parser yields for back-to-back conditional blocks.
+_CONDITIONAL_COMMENT = re.compile(r"\s*(?:<!)?\[(?:if\b|endif\])|.*<!\[endif\]\s*$", re.IGNORECASE | re.DOTALL)
 _BLANK_RUNS = re.compile(r"\n(?:[ \t]*\n){2,}")
 
 
@@ -209,8 +212,10 @@ class _Extractor(HTMLParser):
         self.in_style = 0  # style content is dropped but not counted
 
     def _count(self, data: str) -> None:
+        # Only letters and digits count: whitespace, invisible characters and
+        # combining marks are what preheader padding (&zwnj;, &#847;) is made of.
         if not self.in_style:
-            self.hidden_removed += len("".join(data.split()))
+            self.hidden_removed += sum(ch.isalnum() for ch in data)
 
     def _push(self, tag: str, hides: bool, barrier: bool = False) -> None:
         barrier = barrier or hides or tag in _BLOCK
@@ -313,7 +318,10 @@ class _Extractor(HTMLParser):
             self.out.append(data)
 
     def handle_comment(self, data):
-        self._count(data)
+        # Outlook conditional comments hold layout tables in nearly every
+        # template; other comments still count, as they can hide instructions.
+        if not _CONDITIONAL_COMMENT.match(data):
+            self._count(data)
 
 
 def html_to_safe_text(html: str) -> tuple[str, int]:

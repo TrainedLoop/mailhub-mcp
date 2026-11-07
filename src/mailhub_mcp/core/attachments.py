@@ -67,6 +67,16 @@ def ascii_filename(name: str) -> str:
     return _trim(re.sub(r"[^A-Za-z0-9._ ()-]", "_", ascii_name)) or FALLBACK_NAME
 
 
+# Suspicion reasons that do not withhold attachments: hidden text is already
+# removed before the model reads the message, so alone it is no manipulation.
+WEAK_SUSPICION_REASONS = frozenset({"hidden_text"})
+
+
+def blocks_downloads(reasons: list[str]) -> bool:
+    """Whether a message's suspicion reasons withhold its attachments."""
+    return any(r not in WEAK_SUSPICION_REASONS for r in reasons)
+
+
 def download_block_reason(spam: bool, suspicious: bool, filename: str) -> BlockReason | None:
     """Why this attachment must not get a download link, or None when it may."""
     if spam:
