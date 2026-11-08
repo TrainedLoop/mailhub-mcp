@@ -31,7 +31,10 @@ It deliberately changes one rule of the attachment-links design: the server now 
 - **Bank slip line (47 digits).** The three field check digits (mod 10) and the general check digit (mod 11 over the rebuilt 44-digit barcode) must all match. From the line: `bank` (3-digit code), `amount` (zero means an open amount and is left out) and `due_date` from the due-date factor (base 1997-10-07, and the factor reset of 2025-02-22, picking the date nearest the message date; factor 0 means none).
 - **Collection line (48 digits, first digit 8).** Four blocks of 11 digits plus a check digit (mod 10 or mod 11, chosen by the third digit) and the general check digit. `amount` when the third digit says the value is in reais (6 or 8). No due date.
 - **PIX copy-and-paste code (BR Code).** A TLV string starting `000201`, holding `br.gov.bcb.pix`, ending in `6304` plus a valid CRC16-CCITT. From it: `amount` (field 54) and `payee` (field 59).
-- **Labelled text.** Only when the message looks like a bill: the first amount after a known label (`total da fatura`, `valor do documento`, `valor a pagar`, `total a pagar`, `valor total`, `valor cobrado`) as `amount_text`, and the first date after `vencimento` as `due_date_text`. Only the parsed number or ISO date is kept, never the surrounding text.
+- **Labelled text.** Only when the message looks like a bill: an amount after a known label as `amount_text`, and the first date after `vencimento` as `due_date_text`. Only the parsed number or ISO date is kept, never the surrounding text. Card bills also print what-if boxes (minimum payment, instalments) whose totals use generic labels, often before the bill's own amount, so:
+  - labels are ranked: the bill's own (`valor da fatura`, `total da fatura`, `fatura atual`), then generic ones (`valor do documento`, `valor cobrado`, `valor a pagar`, `total a pagar`), then `valor total`;
+  - the amount must follow its label with only a colon, `R$` or line breaks between, so `Valor total financiado R$ …` or `Total a pagar CET R$ …` don't count;
+  - within the first rank that has any match, the most repeated amount wins, then the first printed.
 
 "Looks like a bill" is a keyword check on the subject, body and attachment names (`boleto`, `fatura`, `vencimento`, `vence`, `cobrança`, `pix`, `pagamento`, `segunda via`, `invoice`, `payment due`).
 

@@ -99,6 +99,60 @@ def test_labelled_values_without_a_code():
     assert (item.kind, item.amount_text, item.due_date_text) == ("text", Decimal("89.90"), date(2026, 12, 5))
 
 
+# Card bills print what-if boxes (minimum payment, instalments) with their own totals, often before
+# the bill's own amount. Structure taken from real bills, values made up.
+CARD_BILL_MINIMUM_BOX = """Encargos em caso de pagamento mínimo desta fatura
+Pagamento mínimo: R$ 150,00
+Em caso de pagamento mínimo o valor financiado será:
+Valor total financiado R$ 850,00
+Total a pagar em encargos e IOF do
+rotativo R$ 25,00
+Total a pagar R$ 1.013,00
+Resumo da fatura
+Fatura atual R$ 1.000,00
+Total CARTÃO 1234****5678 R$ 1.000,00
+Vencimento
+10/12/2026
+"""
+CARD_BILL_INSTALMENT_BOX = """Sua fatura com vencimento em Dezembro chegou no valor de R$ 1.830,00
+Limite total: R$ 10.000,00
+Valor da fatura: R$ 1.830,00
+1. Pagamento total Recomendado R$ 1.830,00
+2. Parcelamento de fatura Em até 12x de R$ 190,00
+Total a pagar CET
+R$ 2.280,00
+3. Pagamento mínimo R$ 270,00
+Valor da fatura: R$ 1.830,00
+Total a pagar R$ 1.830,00
+Vencimento: 10/12/2026
+Valor da fatura: R$ 1.830,00
+"""
+
+
+@pytest.mark.parametrize("text,expected", [
+    (CARD_BILL_MINIMUM_BOX, Decimal("1000.00")),
+    (CARD_BILL_INSTALMENT_BOX, Decimal("1830.00")),
+])
+def test_card_bill_amount_ignores_what_if_boxes(text, expected):
+    [item] = extract(text, "fatura.pdf", NEAR, labelled=True)
+    assert (item.amount_text, item.due_date_text) == (expected, date(2026, 12, 10))
+
+
+def test_label_followed_by_other_words_is_not_an_amount():
+    assert extract("Valor total de juros e encargos R$ 3,00", "body", NEAR, labelled=True) == []
+
+
+def test_amount_on_the_line_after_its_label():
+    [item] = extract("Valor a pagar\nR$ 89,90", "body", NEAR, labelled=True)
+    assert item.amount_text == Decimal("89.90")
+
+
+def test_most_repeated_amount_wins_within_a_label_rank():
+    text = "Total a pagar R$ 5,00\nValor a pagar R$ 7,00\nTotal a pagar R$ 7,00"
+    [item] = extract(text, "body", NEAR, labelled=True)
+    assert item.amount_text == Decimal("7.00")
+
+
 def test_labelled_values_only_when_asked():
     assert extract("Total da fatura R$ 10,00", "body", NEAR, labelled=False) == []
 
