@@ -1,14 +1,20 @@
 # Tailscale sidecar: a tailscale container joins the tailnet as its own machine
-# (https://<TS_HOSTNAME>.<tailnet>.ts.net, Funnel on 443) and mailhub-mcp shares
-# its network namespace. No port is published on the host. Use together with the
-# root compose file:
+# (https://<TS_HOSTNAME>.<tailnet>.ts.net, Funnel on 443) and proxies to
+# mailhub-mcp over the named network. No port is published on the host. Use
+# together with the root compose file:
 #   docker compose -f docker-compose.yml -f examples/tailscale-sidecar/compose.override.yml up -d
 # Paths are relative to the first -f file (the repo root).
 #
 # The sidecar sits on the named network with the fixed subnet that
 # ../tailscale-funnel/firewall/mailhub-mcp-firewall.sh targets, so the firewall
 # still keeps the internet-facing container away from the host, the LAN and the
-# tailnet. Keep that unit enabled.
+# tailnet. Keep that unit enabled; it also lets the sidecar reach mailhub-mcp's
+# port on that network.
+#
+# The two containers keep their own network namespaces on purpose: with
+# network_mode: service:tailscale, a restart of the sidecar (e.g. when it starts
+# before the network is up after a reboot) leaves mailhub-mcp in the old
+# namespace, and Funnel answers 502 until mailhub-mcp is restarted too.
 services:
   tailscale:
     image: tailscale/tailscale:stable
@@ -42,7 +48,8 @@ services:
         max-file: "3"
 
   mailhub-mcp:
-    network_mode: service:tailscale
+    networks:
+      - mcp
     # The root file publishes 127.0.0.1:8742; the sidecar replaces that.
     ports: !reset []
     depends_on:

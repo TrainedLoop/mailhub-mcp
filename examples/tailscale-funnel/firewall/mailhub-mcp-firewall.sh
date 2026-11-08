@@ -9,10 +9,13 @@
 # ../compose.override.yml). With more than one instance, set it in the systemd
 # unit, e.g. Environment="SUBNETS=172.31.0.0/24 172.31.1.0/24". The private
 # ranges below include those subnets, so instances cannot reach each other.
+# Inside one subnet only APP_PORT (PORT in .env, default 8742) is open, for the
+# Tailscale sidecar of ../../tailscale-sidecar/ to reach mailhub-mcp.
 set -eu
 set -f  # no glob expansion of $SUBNETS
 
 SUBNETS=${SUBNETS:-172.31.0.0/24}
+APP_PORT=${APP_PORT:-8742}
 
 add() {
     chain=$1; shift
@@ -31,4 +34,6 @@ for subnet in $SUBNETS; do
     for dst in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16; do
         add DOCKER-USER -s "$subnet" -d "$dst" -m conntrack --ctstate NEW -j DROP
     done
+    # Inserted last, so it is checked before the DROPs: sidecar -> mailhub-mcp.
+    add DOCKER-USER -s "$subnet" -d "$subnet" -p tcp --dport "$APP_PORT" -m conntrack --ctstate NEW -j ACCEPT
 done
