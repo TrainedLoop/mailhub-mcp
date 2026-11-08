@@ -109,7 +109,7 @@
           </li>
           <li>
             <h3>Put HTTPS in front</h3>
-            <p>Any reverse proxy or tunnel with TLS at the root of a host name, such as <code>https://mail.example.com</code>. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/examples/tailscale-funnel/README.md">Tailscale Funnel example</a> is a complete home-server setup, including a firewall that isolates the container.</p>
+            <p>Any reverse proxy or tunnel with TLS at the root of a host name, such as <code>https://mail.example.com</code>. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/examples/tailscale-funnel/README.md">Tailscale Funnel example</a> is a complete home-server setup, including a firewall that isolates the container. The <a href="https://github.com/TrainedLoop/mailhub-mcp/blob/main/examples/tailscale-sidecar/README.md">Tailscale sidecar example</a> gives the server its own host name and publishes no port on the host.</p>
           </li>
           <li id="link">
             <h3>Link your mailboxes: open <code>/admin</code></h3>
@@ -191,7 +191,8 @@
             <p>18 tools: 11 read-only, 7 that change something. Three ready-made prompts: <code>daily_triage</code>, <code>clean_newsletters</code>, <code>organize_inbox</code>.</p>
           </div>
           <dl class="facts">
-            <div><dt>Read</dt><dd><code>search_emails</code>, <code>read_email</code>, <code>read_thread</code>, <code>inbox_overview</code> with unread counts, categories and top senders, <code>count_messages</code> to size a change before making it.</dd></div>
+            <div><dt>Read</dt><dd><code>search_emails</code>, <code>read_email</code>, <code>read_thread</code>, <code>inbox_overview</code> with unread counts, categories and top senders, <code>count_messages</code> to size a change before making it. Attachments come with a download link that opens only after you sign in to <code>/admin</code>.</dd></div>
+            <div><dt>Bills</dt><dd>Read results carry what a bill asks you to pay: the bank slip line or PIX code, checked against its check digits, with the amount and due date. They are read from the body and from the bill's PDFs, including ones protected with part of your CPF or CNPJ.</dd></div>
             <div><dt>Organize</dt><dd>Add or remove labels, archive, mark read, star, by message or by search query. Each batch is journaled and can be reverted.</dd></div>
             <div><dt>Draft</dt><dd>Leave a reply draft in the thread for you to review and send yourself.</dd></div>
             <div><dt>Remember</dt><dd>Triage preferences (important and ignored senders or keywords, time of the last triage) keep a daily routine consistent from one run to the next.</dd></div>
@@ -259,6 +260,11 @@
             <h3>Scheduled triage routines</h3>
             <p>Run triage every morning as a scheduled task in your MCP client. Stored preferences and the time of the last run keep each report consistent.</p>
             <p class="uses">Tools <code>get_preferences</code>, <code>set_preferences</code>; <code>TOOLS=read-only</code> for report-only routines</p>
+          </li>
+          <li>
+            <h3>Bills to pay</h3>
+            <p>"What is due this week?" Bills come back with amount, due date and payment code, also when those are only in a password-protected PDF. With a finance connector in the same session, the assistant can also tell which ones are already paid.</p>
+            <p class="uses">The <code>billing</code> field of <code>read_email</code>, <code>read_emails</code>, <code>read_thread</code></p>
           </li>
           <li>
             <h3>Asking about your mail from your phone</h3>
