@@ -74,7 +74,6 @@ def _settings(monkeypatch, value=None):
 
 
 def test_default_allowlist_accepts_claude_and_refuses_others(monkeypatch):
-
     s = _settings(monkeypatch)
     _register(s, CLAUDE[0])
     _register(s, CLAUDE[1])

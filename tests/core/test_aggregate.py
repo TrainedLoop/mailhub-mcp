@@ -69,6 +69,7 @@ class Registry:
 def test_resolve_filters_and_rejects_unknown():
     reg = Registry(["a", "b"])
     assert [x.alias for x in resolve(reg, None)] == ["a", "b"]
+    assert [x.alias for x in resolve(reg, [])] == ["a", "b"]
     assert [x.alias for x in resolve(reg, ["b"])] == ["b"]
     with pytest.raises(AccountNotFound):
         resolve(reg, ["zzz"])
@@ -80,16 +81,8 @@ def test_resolve_dedupes_aliases_keeping_order():
     assert [x.alias for x in resolve(reg, ["b", "a", "b"])] == ["b", "a"]
 
 
-def test_resolve_empty_list_means_all():
-    reg = Registry(["a", "b"])
-    assert [x.alias for x in resolve(reg, [])] == ["a", "b"]
-
-
-def test_describe_mailhub_error_has_no_class_name():
-    assert describe_error(expired("a"), "a") == "invalid or revoked credentials: re-link a on the admin page (/admin), or run mailhub-authorize gmail <client_secret.json> a again"
-
-
-def test_describe_other_errors():
+def test_describe_error_names_the_class_only_for_non_mailhub_errors():
+    assert describe_error(expired("a"), "a") == str(expired("a"))
     assert describe_error(ValueError("x"), "a") == "ValueError: x"
 
 

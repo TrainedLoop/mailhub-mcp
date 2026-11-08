@@ -12,10 +12,6 @@ from mailhub_mcp.admin_web.credentials import (
 )
 
 
-def test_credential_path_layout(tmp_path):
-    assert credential_path(tmp_path, "gmail", "work") == tmp_path / "gmail" / "work.json"
-
-
 def test_write_credential_content_and_modes(tmp_path):
     path = write_credential(tmp_path, "gmail", "work", '{"a": 1}')
     assert path == tmp_path / "gmail" / "work.json"

@@ -2,6 +2,9 @@
 
 import dataclasses
 import logging
+import os
+
+import pytest
 
 from mailhub_mcp.admin_web.attachment_links import (
     FILES_PATH,
@@ -47,6 +50,7 @@ def test_context_is_built_from_settings(tmp_path):
     assert (tmp_path / "accounts" / "gmail").is_dir()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_read_only_accounts_dir_disables_linking_with_a_warning(tmp_path, caplog):
     settings = _settings(tmp_path)
     settings.accounts_dir.mkdir()

@@ -73,18 +73,6 @@ def test_get_unknown_lists_valid(tmp_path):
         AccountRegistry(tmp_path, providers("gmail")).get("zzz")
 
 
-def test_provider_built_once(tmp_path):
-    touch(tmp_path / "gmail", "a.json")
-    calls = []
-
-    def factory(alias, path):
-        calls.append(alias)
-        return StubProvider(alias, path)
-
-    acc = AccountRegistry(tmp_path, {"gmail": factory}).get("a")
-    assert acc.provider is acc.provider and calls == ["a"]
-
-
 def test_concurrent_provider_access_builds_it_once(tmp_path):
     import threading
     import time
@@ -148,4 +136,4 @@ def test_account_held_before_remove_keeps_working(tmp_path):
     reg = AccountRegistry(tmp_path / "none", providers("gmail"))
     acc = reg.upsert("work", "gmail", tmp_path / "work.json")
     reg.remove("work")
-    assert acc.provider is not None  # an in-flight tool call finishes
+    assert acc.provider.alias == "work"  # an in-flight tool call finishes

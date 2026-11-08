@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 
 from mailhub_mcp.admin_web.session import (
     FLOW_SECONDS,
@@ -62,8 +63,6 @@ def test_signer_malformed():
     # valid signature over non-JSON / non-object payload
     for payload in (b"notjson", b"[1,2]"):
         p = base64.urlsafe_b64encode(payload).rstrip(b"=")
-        import hmac
-
         sig = base64.urlsafe_b64encode(hmac.new(KEY, p, hashlib.sha256).digest()).rstrip(b"=")
         assert SIGNER.loads((p + b"." + sig).decode()) is None
 

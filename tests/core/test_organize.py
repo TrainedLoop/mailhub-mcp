@@ -317,7 +317,7 @@ def test_apply_query_all_already_changed_returns_hint_without_journal(fake, prov
         "change_id": None, "modified": 0, "remaining": False,
         "hint": "query still matches messages already changed; refine the query",
     }
-    assert no_writes(fake)
+    assert no_writes(fake) and _gets(fake) == []  # label state came from listings, not reads
     assert len((tmp_path / "c.jsonl").read_text().splitlines()) == 1
 
 
@@ -411,10 +411,9 @@ def _seed(journal, account, count, age_hours=1.0, undo_of=None):
 
 def test_cap_refuses_before_any_write_and_states_remaining(fake, provider, journal):
     _seed(journal, "a", 9)
-    before = len(fake.calls)
     with pytest.raises(OrganizeError, match=r"only 1 of 10"):
         modify(provider, journal, "a", ["m1", "m2"], ["Shopping"], [], False, None, None, max_per_day=10)
-    assert no_writes(fake) and not any(c[0] == "messages.batchModify" for c in fake.calls[before:])
+    assert no_writes(fake)
     assert len(journal.entries()) == 1
 
 
@@ -497,17 +496,6 @@ def test_apply_query_reads_label_state_by_listing_not_per_message(fake, provider
     assert label_lists == sorted([("INBOX",), (org.id,)])
     assert len(_lists(fake)) == 2 + 2
     assert journal.get(r["change_id"])["prior"] == {"m1": ["INBOX"], "m2": ["INBOX"]}
-
-
-def test_apply_query_all_already_changed_lists_only_and_writes_nothing(fake, provider, journal):
-    fake.query_results["q"] = ["m1", "m2"]
-    apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
-                archive=True, mark_read=None, star=None)
-    fake.calls.clear()
-    r = apply_query(provider, journal, "a", "q", add_labels=[], remove_labels=[],
-                    archive=True, mark_read=None, star=None)
-    assert r["modified"] == 0 and "hint" in r
-    assert _gets(fake) == [] and no_writes(fake)
 
 
 def test_apply_query_lists_under_the_journal_lock(fake, provider, journal):

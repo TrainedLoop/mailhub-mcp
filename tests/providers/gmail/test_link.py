@@ -173,13 +173,9 @@ def test_revoke_ok(tmp_path):
     assert kw["timeout"] == 10
 
 
-def test_revoke_400(tmp_path):
-    linker, path, _ = revoker(tmp_path, json.dumps({"refresh_token": "rt"}), Resp(400))
-    assert linker.revoke(path) is False
-
-
-def test_revoke_network(tmp_path):
-    linker, path, _ = revoker(tmp_path, json.dumps({"refresh_token": "rt"}), requests.ConnectionError())
+@pytest.mark.parametrize("resp", [Resp(400), requests.ConnectionError()])
+def test_revoke_failure_returns_false(tmp_path, resp):
+    linker, path, _ = revoker(tmp_path, json.dumps({"refresh_token": "rt"}), resp)
     assert linker.revoke(path) is False
 
 

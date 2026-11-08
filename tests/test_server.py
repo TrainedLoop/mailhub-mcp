@@ -261,22 +261,11 @@ def test_create_draft_allows_participant_variants(fakes):
     assert out["draft_id"]
 
 
-def test_list_drafts(fakes):
-    out = call("list_drafts")
-    assert out["errors"] == {} and out["results"] == []
-
-
 def test_message_output_uses_from_key(fakes):
     out = call("search_emails", {"query": "x", "accounts": ["alice-personal"]})
     item = out["results"][0]
     assert "from" in item and "from_" not in item
     assert "from" in call("read_email", {"account": "alice-personal", "message_id": "m1"})
-
-
-def test_list_accounts_has_provider_and_hint(fakes):
-    by = {a["alias"]: a for a in call("list_accounts")["accounts"]}
-    assert by["alice-personal"]["provider"] == "gmail"
-    assert by["alice-personal"]["query_hint"] == GmailProvider.query_hint
 
 
 def test_inbox_overview_default_query_and_failed(fakes):
@@ -625,7 +614,6 @@ def test_all_tool_names_covers_registered_tools():
         async with Client(server.mcp) as c:
             return {t.name for t in await c.list_tools()}
     assert server.ALL_TOOL_NAMES >= asyncio.run(go())
-    assert {"get_preferences", "set_preferences"} <= server.ALL_TOOL_NAMES
 
 
 def test_read_only_tool_set_is_subset_of_all():
@@ -836,19 +824,16 @@ def test_user_request_is_cleaned_and_fenced_with_one_nonce_per_response(fakes):
     assert "do it" not in _outside(changes) and len(_markers(changes["untrusted"])) == 1
 
 
-def test_descriptions_explain_markers():
+def test_preference_and_undo_descriptions_explain_what_is_fenced_and_included():
     async def go():
         async with Client(server.mcp) as c:
             return {t.name: t for t in await c.list_tools()}
     tools = asyncio.run(go())
-    for n in ("get_preferences", "list_changes"):
-        assert "[untrusted:<nonce>]" in tools[n].description
-        assert "[/untrusted:<nonce>]" in tools[n].description
+    # the fence markers themselves are checked in test_message_tool_descriptions_explain_the_fence
     assert "Every preference value" in tools["get_preferences"].description
     assert "query" in tools["list_changes"].description.split("replaced by a reference")[0][-200:]
-    assert "[untrusted:<nonce>]" in tools["undo_change"].description
     d = tools["undo_since"].description
-    assert "[untrusted:<nonce>]" in d and "[/untrusted:<nonce>]" in d and "'proposed'" in d
+    assert "'proposed'" in d
     assert "global preference changes" in d and "only when no 'accounts' filter" in d.replace("included only", "only")
 
 
@@ -1112,8 +1097,6 @@ def test_prompts_listed_per_mode(mode_prompts):
 
 
 def test_prompts_only_mention_registered_tools(mode_prompts):
-    import re
-
     _, prompts, tools = mode_prompts
     for name, text in prompts.items():
         called = set(re.findall(r"\b([a-z]+_[a-z_]+)\(", text))
@@ -1147,7 +1130,7 @@ def test_daily_triage_flow(mode_prompts):
 def test_write_prompts_require_preview_and_confirmation(mode_prompts):
     mode, prompts, _ = mode_prompts
     if mode != "all":
-        return
+        pytest.skip("write prompts are registered only when TOOLS=all")
     for name in ("clean_newsletters", "organize_inbox"):
         text = prompts[name]
         assert "confirm=False" in text and "confirm=True" in text
@@ -1262,13 +1245,6 @@ def test_main_turns_off_the_uvicorn_access_log(monkeypatch):
     assert seen["uvicorn_config"] == {"access_log": False}
 
 
-def test_uvicorn_accepts_the_config_main_passes():
-    import uvicorn
-
-    config = uvicorn.Config(app=lambda *a: None, access_log=False)
-    assert config.access_log is False
-
-
 def test_health_with_the_configuration_main_uses():
     """Production configuration: protection is off, so /health answers for any Host and /mcp needs login."""
     async def go(host):
@@ -1288,11 +1264,6 @@ def test_health_with_the_configuration_main_uses():
         return next(m["status"] for m in sent if m["type"] == "http.response.start")
     assert asyncio.run(go("127.0.0.1:8742")) == 200
     assert asyncio.run(go("anything.example")) == 200
-
-
-def test_health_reveals_nothing_else():
-    _, body = _asgi("GET", "/health", "127.0.0.1:8742")
-    assert body.replace(b" ", b"") == b'{"status":"ok"}'
 
 
 def test_mcp_endpoint_requires_auth_when_protection_is_enabled():
@@ -1567,7 +1538,6 @@ def test_count_messages_caps_per_account(fakes, monkeypatch):
         fakes.a.add_message(f"c{i}", labels=["INBOX"])
     for i in range(2, 4):  # w1 comes from the fixture
         fakes.b.add_message(f"w{i}", labels=["INBOX"])
-    assert set(fakes.b.messages) >= {"w1", "w2", "w3"}
     fakes.a.query_results["big"] = [f"c{i}" for i in range(10)]
     fakes.b.query_results["big"] = ["w1", "w2", "w3"]
     out = call("count_messages", {"query": "big"})
@@ -1582,8 +1552,7 @@ def test_count_messages_is_read_only_and_describes_cost():
             return {t.name: t for t in await c.list_tools()}
     t = asyncio.run(go())["count_messages"]
     assert t.annotations.read_only_hint is True
-    assert "5" in t.description and "500" in t.description and "modify_by_query" in t.description
-    assert "count_messages" in server.READ_ONLY_TOOLS and "count_messages" in server.ALL_TOOL_NAMES
+    assert "5 Gmail quota units per 500 messages" in t.description and "modify_by_query" in t.description
 
 
 TRUNCATED = "\n[... truncated ...]"

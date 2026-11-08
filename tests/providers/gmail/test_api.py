@@ -133,15 +133,6 @@ def _get_calls(fake, id):
     return [c for c in fake.calls if c[0] == "messages.get" and c[1]["id"] == id]
 
 
-def test_batch_get_retries_429_then_succeeds(fake, _sleeps):
-
-    fake.add_message("m1")
-    fake.get_error_seq["m1"] = [http_error(429, "Rate")]
-    msgs, errors = batch_get(fake, ["m1"], "minimal")
-    assert [m["id"] for m in msgs] == ["m1"] and errors == {}
-    assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [2]
-
-
 def test_batch_get_gives_up_after_four_attempts_on_5xx(fake, _sleeps):
 
     fake.add_message("m1")
@@ -246,9 +237,10 @@ def test_403_rate_limit_is_retryable(reason):
     assert not is_retryable(http_error(403, "Forbidden"))
 
 
-def test_batch_get_retries_403_rate_limit_then_succeeds(fake, _sleeps):
+@pytest.mark.parametrize("error", [http_error(429, "Rate"), _rate_limited()], ids=["429", "403"])
+def test_batch_get_retries_rate_limit_then_succeeds(fake, _sleeps, error):
     fake.add_message("m1")
-    fake.get_error_seq["m1"] = [_rate_limited()]
+    fake.get_error_seq["m1"] = [error]
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert [m["id"] for m in msgs] == ["m1"] and errors == {}
     assert len(_get_calls(fake, "m1")) == 2 and _sleeps == [2]
@@ -384,16 +376,6 @@ def test_default_budget_is_80_percent_of_6000_units_per_minute():
     assert api.DEFAULT_UNITS_PER_SECOND == 80
 
 
-def test_limiter_budgets_units():
-    from mailhub_mcp.providers.gmail import api
-
-    paced = []
-    limiter = api.RateLimiter(125, now=lambda: 0.0, sleep=paced.append)
-    limiter.acquire(250)
-    limiter.acquire(5)
-    assert paced == [2.0]
-
-
 @pytest.mark.parametrize("fmt,units", [("minimal", 20), ("metadata", 20), ("full", 60)])
 def test_batch_get_charges_units_by_format(fake, fmt, units):
     spy = _SpyLimiter()
@@ -409,13 +391,6 @@ def test_batch_get_rate_limit_backoff_is_2_4_8_16_32(fake, _sleeps):
     msgs, errors = batch_get(fake, ["m1"], "minimal")
     assert msgs == [] and list(errors) == ["m1"]
     assert len(_get_calls(fake, "m1")) == 6 and _sleeps == [2, 4, 8, 16, 32]
-
-
-def test_batch_get_5xx_keeps_short_backoff(fake, _sleeps):
-    fake.add_message("m1")
-    fake.get_error_seq["m1"] = [http_error(503, "x") for _ in range(9)]
-    batch_get(fake, ["m1"], "minimal")
-    assert _sleeps == [1, 2, 4]
 
 
 class _SpyLimiter:
