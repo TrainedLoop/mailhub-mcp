@@ -1,16 +1,16 @@
 # Example: Tailscale sidecar
 
-Another way to publish mailhub-mcp with [Tailscale](https://tailscale.com) Funnel. It is an alternative to [../tailscale-funnel/](../tailscale-funnel/). Here a `tailscale/tailscale` container joins the tailnet as its own machine, and mailhub-mcp shares its network namespace. The two setups compare like this:
+Another way to publish mailhub-mcp with [Tailscale](https://tailscale.com) Funnel. It is an alternative to [../tailscale-funnel/](../tailscale-funnel/). Here a `tailscale/tailscale` container joins the tailnet as its own machine and proxies to mailhub-mcp over their Docker network. The two setups compare like this:
 
 - **Hostname and port:** each instance gets its own hostname (`https://mailhub.<tailnet>.ts.net`) on port 443. Funnel only serves ports 443, 8443 and 10000 per machine, so with one Funnel on the host, every extra service has to take one of the remaining ports.
 - **Host exposure:** no port is published on the host, not even on loopback.
 - **Host requirements:** the host does not need Tailscale installed or Funnel enabled.
 
 ```
-claude.ai --HTTPS--> Funnel on the sidecar (:443) --> 127.0.0.1:8742 inside the shared namespace --> mailhub-mcp
+claude.ai --HTTPS--> Funnel on the sidecar (:443) --> mailhub-mcp:8742 on the named network --> mailhub-mcp
 ```
 
-The container is still internet-facing. Keep the firewall unit from [../tailscale-funnel/firewall/](../tailscale-funnel/firewall/): the sidecar sits on the same named network with a fixed subnet, so the firewall keeps it away from the host, the LAN and the tailnet. The sidecar also runs Tailscale in userspace mode, so mailhub-mcp has no route into the tailnet.
+The container is still internet-facing. Keep the firewall unit from [../tailscale-funnel/firewall/](../tailscale-funnel/firewall/): the sidecar sits on the same named network with a fixed subnet, so the firewall keeps both containers away from the host, the LAN and the tailnet, and lets the sidecar reach mailhub-mcp's port (`APP_PORT`, default 8742) on that subnet. The two containers don't share a network namespace, so a restart of one doesn't cut the other off. The sidecar also runs Tailscale in userspace mode, so mailhub-mcp has no route into the tailnet.
 
 Paths below assume the project lives in `/opt/mailhub-mcp`.
 
@@ -63,6 +63,13 @@ In claude.ai, remove the old custom connector and add one with `https://mailhub.
 5. Remove the old redirect URIs from the Google Web client once nothing uses them.
 
 To roll back before step 3, run the old compose command (`-f examples/tailscale-funnel/compose.override.yml`). The host Funnel still forwards to `127.0.0.1:8742`.
+
+## Moving from the shared-namespace version
+
+Earlier versions of this example ran mailhub-mcp inside the sidecar's network namespace. A sidecar restart then left mailhub-mcp behind and Funnel answered 502. To move:
+
+1. `git pull` and rerun the firewall: `sudo systemctl restart mailhub-mcp-firewall`. The new rule lets the sidecar reach mailhub-mcp on the subnet.
+2. Run the update commands below. Both containers are recreated.
 
 ## More than one person
 
