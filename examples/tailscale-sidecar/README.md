@@ -69,7 +69,7 @@ To roll back before step 3, run the old compose command (`-f examples/tailscale-
 Earlier versions of this example ran mailhub-mcp inside the sidecar's network namespace. A sidecar restart then left mailhub-mcp behind and Funnel answered 502. To move:
 
 1. `git pull` and rerun the firewall: `sudo systemctl restart mailhub-mcp-firewall`. The new rule lets the sidecar reach mailhub-mcp on the subnet.
-2. Run the update commands below. Both containers are recreated.
+2. Run the update commands below with `up -d --force-recreate`. The sidecar must be recreated too: it mounts `serve.json` as a single file, and `git pull` replaces that file, so a running sidecar keeps reading the old one and Funnel still answers 502.
 
 ## More than one person
 
