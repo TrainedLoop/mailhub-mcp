@@ -27,11 +27,19 @@ _MAX_PIX_CHARS = 512
 # Bounds on the work one text can cause: candidate slip windows and PIX starts tried.
 _MAX_SLIP_WINDOWS = 5000
 _MAX_PIX_STARTS = 50
-_AMOUNT_LABEL = re.compile(
-    r"(?:total\s+da\s+fatura|valor\s+do\s+documento|valor\s+a\s+pagar|total\s+a\s+pagar|valor\s+total|valor\s+cobrado)"
-    r"[^\d]{0,40}?(?:R\$\s*)?(\d{1,3}(?:\.\d{3})*,\d{2}|\d+,\d{2})",
-    re.IGNORECASE,
+# Amount labels, most specific first. Card bills also print what-if boxes (minimum payment,
+# instalments) whose totals use the generic labels, so a bill's own label outranks them. The amount
+# must follow its label with only a colon, "R$" or line breaks between: "Valor total financiado R$ 1"
+# or "Total a pagar CET R$ 1" are other figures. Within a rank, the most repeated amount wins.
+_AMOUNT_RANKS = (
+    r"valor\s+da\s+fatura|total\s+da\s+fatura|fatura\s+atual",
+    r"valor\s+do\s+documento|valor\s+cobrado|valor\s+a\s+pagar|total\s+a\s+pagar",
+    r"valor\s+total",
 )
+_AMOUNT_LABELS = [
+    re.compile(rf"\b(?:{labels})[\s:]*(?:\(?R\$\)?[\s:]*)?(\d{{1,3}}(?:\.\d{{3}})*,\d{{2}}|\d+,\d{{2}})\b", re.IGNORECASE)
+    for labels in _AMOUNT_RANKS
+]
 _DUE_LABEL = re.compile(r"vencimento[^\d]{0,40}?(\d{2})/(\d{2})/(\d{4}|\d{2})\b", re.IGNORECASE)
 
 
@@ -246,8 +254,10 @@ def _decimal_br(raw: str) -> Decimal:
 
 def _labelled(text: str) -> BillingItem | None:
     amount = due = None
-    if m := _AMOUNT_LABEL.search(text):
-        amount = _decimal_br(m.group(1))
+    for label in _AMOUNT_LABELS:
+        if found := [m.group(1) for m in label.finditer(text)]:
+            amount = _decimal_br(max(found, key=found.count))  # ties: the first one printed
+            break
     if m := _DUE_LABEL.search(text):
         day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
         try:
