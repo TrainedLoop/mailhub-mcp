@@ -5,7 +5,6 @@ from mailhub_mcp.core.models import (
     Draft,
     DraftSummary,
     Label,
-    LabelState,
     Message,
     MessageSummary,
     Thread,
@@ -46,12 +45,11 @@ def test_with_account_rejects_models_without_account():
         with_account(Label(id="L", name="n", type="user"), "a")
 
 
-def test_with_account_simple_and_other_models():
+def test_with_account_on_draft_models():
     d = Draft(draft_id="d", message_id="m", thread_id=None)
     assert with_account(d, "a").account == "a"
     ds = DraftSummary(**base, from_="x", draft_id="d")
     assert with_account(ds, "a").model_dump(mode="json")["from"] == "x"
-    assert LabelState(id="m", labels=["A"]).labels == ["A"]
 
 
 def test_message_defaults_and_hidden_removed_not_serialized():

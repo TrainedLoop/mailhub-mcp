@@ -58,7 +58,6 @@ def test_authorization_url():
     assert q["code_challenge"] == "chal"
     assert q["code_challenge_method"] == "S256"
     assert q["prompt"] == "select_account"
-    assert q["claims"] == '{"id_token":{"auth_time":{"essential":true}}}'
     assert json.loads(q["claims"]) == {"id_token": {"auth_time": {"essential": True}}}
     assert "max_age" not in q
 
@@ -110,81 +109,26 @@ def test_email_verified_string_true():
     assert complete(ident).email == "me@gmail.com"
 
 
-@pytest.mark.parametrize("claims", [
-    {**GOOD, "nonce": "other"},
-    {k: v for k, v in GOOD.items() if k != "nonce"},
-    {**GOOD, "email_verified": False},
-    {**GOOD, "email_verified": "yes"},
-    {**GOOD, "email_verified": 1},
-    {k: v for k, v in GOOD.items() if k != "email"},
-    {**GOOD, "email": ""},
-])
-def test_bad_claims(claims):
-    ident, _ = make(claims)
-    with pytest.raises(LoginError):
-        complete(ident)
-
-
-def test_token_endpoint_error():
-    ident, _ = make(GOOD, response=FakeResponse(400, {"error": "x"}))
-    with pytest.raises(LoginError, match="Google sign-in failed"):
-        complete(ident)
-
-
-def test_missing_id_token():
-    ident, _ = make(GOOD, response=FakeResponse(200, {}))
-    with pytest.raises(LoginError):
-        complete(ident)
-
-
-def test_non_json_body():
-    class Bad(FakeResponse):
-        def json(self):
-            raise ValueError("secret-code")
-
-    ident, _ = make(GOOD, response=Bad())
-    with pytest.raises(LoginError) as e:
-        complete(ident)
-    assert "secret-code" not in str(e.value)
-
-
-def test_request_exception():
-    ident, _ = make(GOOD, post_exc=requests.ConnectionError("code=code leak"))
-    with pytest.raises(LoginError) as e:
-        complete(ident)
-    assert str(e.value) == "Google sign-in failed"
-
-
-def test_verify_value_error():
-    ident, _ = make(verify_exc=ValueError("tok bad"))
-    with pytest.raises(LoginError) as e:
-        complete(ident)
-    assert "tok" not in str(e.value)
-
-
-def test_verify_transport_error():
-    ident, _ = make(verify_exc=TransportError("certs fetch failed"))
-    with pytest.raises(LoginError, match="Google sign-in failed"):
-        complete(ident)
-
-
-# --- reason codes: logged by the routes; never part of the text shown to the user ----------------
+# --- every refusal: a reason code for the log, and only the generic text for the user ---------
 
 
 class _NotJson(FakeResponse):
     def json(self):
-        raise ValueError("not json")
+        raise ValueError("secret-code")
 
 
 @pytest.mark.parametrize(("kwargs", "reason"), [
-    ({"post_exc": requests.ConnectionError("x")}, "token-exchange"),
+    ({"post_exc": requests.ConnectionError("code=code leak")}, "token-exchange"),
     ({"response": FakeResponse(400, {"error": "x"})}, "token-exchange"),
     ({"response": _NotJson()}, "token-exchange"),
     ({"response": FakeResponse(200, {})}, "token-exchange"),
-    ({"verify_exc": ValueError("bad")}, "verify"),
+    ({"verify_exc": ValueError("tok bad")}, "verify"),
     ({"verify_exc": TransportError("certs")}, "verify"),
     ({"claims": {**GOOD, "nonce": "other"}}, "nonce"),
+    ({"claims": {k: v for k, v in GOOD.items() if k != "nonce"}}, "nonce"),
     ({"claims": {**GOOD, "email_verified": False}}, "unverified-email"),
+    ({"claims": {**GOOD, "email_verified": "yes"}}, "unverified-email"),
+    ({"claims": {**GOOD, "email_verified": 1}}, "unverified-email"),
     ({"claims": {k: v for k, v in GOOD.items() if k != "email"}}, "no-email"),
     ({"claims": {**GOOD, "email": ""}}, "no-email"),
 ])

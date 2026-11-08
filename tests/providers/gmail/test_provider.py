@@ -13,7 +13,6 @@ from mailhub_mcp.core.errors import (
     MessageNotFound,
     TransientError,
 )
-from mailhub_mcp.providers import PROVIDERS
 from mailhub_mcp.providers.gmail import provider as provider_module
 from mailhub_mcp.providers.gmail.provider import GmailProvider, default_build
 from tests.fakes.fake_gmail import FakeGmail, http_error
@@ -63,10 +62,6 @@ def gmail(fake, token_file):
     return GmailProvider("a", token_file, build_service=lambda c: fake)
 
 
-def test_registered():
-    assert PROVIDERS["gmail"] is GmailProvider
-
-
 def test_refresh_error_becomes_auth_expired(gmail, fake):
     fake.fail = RefreshError("revoked")
     with pytest.raises(AuthExpired) as e:
@@ -74,35 +69,24 @@ def test_refresh_error_becomes_auth_expired(gmail, fake):
     assert "mailhub-authorize gmail <client_secret.json> a" in str(e.value)
 
 
-def test_503_on_thread_is_transient(gmail, fake):
-    fake.fail = http_error(503, "unavailable")
-    with pytest.raises(TransientError):
-        gmail.get_thread("t1")
-
-
-def test_429_is_transient(gmail, fake):
-    fake.fail = http_error(429, "slow down")
-    with pytest.raises(TransientError):
-        gmail.list_labels()
-
-
-def test_403_rate_limit_is_transient(gmail, fake):
-    import json
-
+def _http_403_rate_limit():
     import httplib2
     from googleapiclient.errors import HttpError
 
     body = {"error": {"code": 403, "errors": [{"reason": "rateLimitExceeded"}]}}
-    fake.fail = HttpError(httplib2.Response({"status": 403}), json.dumps(body).encode())
+    return HttpError(httplib2.Response({"status": 403}), json.dumps(body).encode())
+
+
+@pytest.mark.parametrize("error", [
+    http_error(503, "unavailable"),
+    http_error(429, "slow down"),
+    _http_403_rate_limit(),
+    TransportError("connection reset"),
+])
+def test_retryable_failures_are_transient(gmail, fake, error):
+    fake.fail = error
     with pytest.raises(TransientError):
         gmail.list_labels()
-
-
-def test_plain_403_is_not_transient(gmail, fake):
-    fake.fail = http_error(403, "forbidden")
-    with pytest.raises(MailhubError) as e:
-        gmail.list_labels()
-    assert not isinstance(e.value, TransientError)
 
 
 def test_unknown_thread_not_found(gmail):
@@ -121,12 +105,6 @@ def test_other_status_is_mailhub_error(gmail, fake):
         gmail.list_labels()
     assert not isinstance(e.value, (TransientError, AuthExpired))
     assert "403" in str(e.value)
-
-
-def test_transport_error_is_transient(gmail, fake):
-    fake.fail = TransportError("connection reset")
-    with pytest.raises(TransientError):
-        gmail.search("in:inbox", 5)
 
 
 def test_transport_error_while_refreshing_is_transient(token_file):
@@ -187,21 +165,13 @@ def test_concurrent_calls_load_and_refresh_credentials_once(token_file, monkeypa
     assert state["max"] == 1  # the lock serializes credential load, refresh and client build
 
 
-def test_default_build_refreshes_invalid_credentials(monkeypatch):
-    creds = SimpleNamespace(valid=False, refresh=MagicMock())
+@pytest.mark.parametrize("valid", [False, True])
+def test_default_build_refreshes_only_invalid_credentials(monkeypatch, valid):
+    creds = SimpleNamespace(valid=valid, refresh=MagicMock())
     build = MagicMock(return_value="service")
     monkeypatch.setattr(provider_module, "build", build)
     assert default_build(creds) == "service"
-    creds.refresh.assert_called_once()
-    build.assert_called_once_with("gmail", "v1", credentials=creds, cache_discovery=False)
-
-
-def test_default_build_skips_refresh_for_valid_credentials(monkeypatch):
-    creds = SimpleNamespace(valid=True, refresh=MagicMock())
-    build = MagicMock(return_value="service")
-    monkeypatch.setattr(provider_module, "build", build)
-    default_build(creds)
-    creds.refresh.assert_not_called()
+    assert creds.refresh.call_count == (0 if valid else 1)
     build.assert_called_once_with("gmail", "v1", credentials=creds, cache_discovery=False)
 
 

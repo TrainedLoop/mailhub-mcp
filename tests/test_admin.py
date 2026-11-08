@@ -56,7 +56,8 @@ def test_reject(env, capsys):
 def test_errors_exit_2(env, capsys):
     code, _, err = run(capsys, "preferences", "approve", "p-nope")
     assert code == 2 and "Unknown proposal" in err
-    assert run(capsys, "preferences", "show", "p-nope")[0] == 2
+    code, _, err = run(capsys, "preferences", "show", "p-nope")
+    assert code == 2 and "unknown or expired proposal" in err.lower()
     assert run(capsys, "preferences", "reject", "p-nope")[0] == 2
 
 
@@ -71,11 +72,6 @@ def test_empty_state_lists_cleanly(tmp_path, monkeypatch, capsys):
     assert code == 0 and "No pending" in out
 
 
-def test_show_unknown_says_unknown_or_expired(env, capsys):
-    code, _, err = run(capsys, "preferences", "show", "p-nope")
-    assert code == 2 and "unknown or expired proposal" in err.lower()
-
-
 def test_show_cannot_forge_lines(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("JOURNAL_PATH", str(tmp_path / "changes.jsonl"))
     store = PreferenceStore(tmp_path / "preferences.json")
@@ -84,7 +80,6 @@ def test_show_cannot_forge_lines(tmp_path, monkeypatch, capsys):
                           user_request="ok\nExpires:      never \u202eevil", valid_scopes=[])
     code, out, _ = run(capsys, "preferences", "show", res["pending"][0]["proposal_id"])
     assert code == 0 and "\u202e" not in out
-    assert [l for l in out.splitlines() if l.startswith("Expires:")] == [l for l in out.splitlines() if l.startswith("Expires:")][:1]
     assert len([l for l in out.splitlines() if l.startswith("Expires:")]) == 1
 
 

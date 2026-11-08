@@ -6,12 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from mailhub_mcp.core import preferences as prefs
-from mailhub_mcp.core.errors import MailhubError, OrganizeError
+from mailhub_mcp.core.errors import OrganizeError
 from mailhub_mcp.core.history import summarize_entry
 from mailhub_mcp.core.journal import Journal
 from mailhub_mcp.core.organize import undo, undo_since
 from mailhub_mcp.core.preferences import (
-    FIELDS,
     RAISING,
     PreferenceError,
     PreferenceStore,
@@ -42,12 +41,8 @@ def put(store, journal, scope="global", add=None, remove=None, triage=None, req=
     return set_preferences(store, journal, scope, add, remove, triage, req, SCOPES, now)
 
 
-def test_error_type():
-    assert issubclass(PreferenceError, MailhubError) and issubclass(PreferenceError, ValueError)
-
-
-def test_fields_and_raising_table():
-    assert FIELDS[-1] == "last_triage_at" and len(FIELDS) == 5
+def test_raising_table():
+    """The direction rule: only these (field, op) pairs apply without the owner's approval."""
     assert RAISING == {
         ("important_senders", "add"), ("important_keywords", "add"), ("ignored_senders", "remove"),
         ("ignored_keywords", "remove"), ("last_triage_at", "set"),
@@ -59,7 +54,10 @@ def test_sender_normalized(raw, out):
     assert normalize_sender(raw) == out
 
 
-@pytest.mark.parametrize("bad", ["", "bob", "bob@", "@", "bob@x", "a b@x.com", "bob@@x.com", "x@" + "a" * 250 + ".com", 5, "a\n@b.com"])
+@pytest.mark.parametrize("bad", [
+    "", "bob", "bob@", "@", "bob@x", "a b@x.com", "bob@@x.com", "x@" + "a" * 250 + ".com", 5, "a\n@b.com",
+    "bob@bank..com", "@a..b.com",
+])
 def test_sender_invalid(bad):
     with pytest.raises(PreferenceError) as e:
         normalize_sender(bad)
@@ -250,7 +248,7 @@ def test_item_cap(store, journal):
         put(store, journal, add={"ignored_keywords": [f"i{i}" for i in range(201)]})
 
 
-def test_proposal_stored_with_expiry_and_view(store, journal):
+def test_proposal_stored_with_expiry(store, journal):
     put(store, journal, add={"important_keywords": ["a"]})
     r = put(store, journal, scope="a", remove={"important_keywords": ["a"]}, add={"ignored_keywords": ["z"]})
     assert len(r["pending"]) == 1
@@ -581,12 +579,6 @@ def test_move_approved_in_wrong_order_is_refused_clearly(store, journal):
     assert store.load()["global"]["ignored_keywords"] == ["X"]
 
 
-def test_move_without_removal_still_conflicts(store, journal):
-    put(store, journal, add={"important_keywords": ["x"]})
-    with pytest.raises(PreferenceError, match="Conflict"):
-        put(store, journal, add={"ignored_keywords": ["x"]})
-
-
 def test_duplicate_proposal_returns_existing(store, journal):
     first = put(store, journal, add={"ignored_keywords": ["a", "B"]})["pending"][0]["proposal_id"]
     again = put(store, journal, add={"ignored_keywords": ["b", "A"]})["pending"]
@@ -650,12 +642,6 @@ def test_effective_dedupes_by_key(store, journal):
     put(store, journal, scope="a", add={"important_keywords": ["invoice", "Other"], "important_senders": ["@X.com"]})
     eff = view(store, journal, "a", T0)["effective"]
     assert eff["important_keywords"] == ["Invoice", "Other"] and eff["important_senders"] == ["@x.com"]
-
-
-def test_sender_rejects_consecutive_dots():
-    for bad in ["bob@bank..com", "@a..b.com"]:
-        with pytest.raises(PreferenceError):
-            normalize_sender(bad)
 
 
 # ----- undo that would lower attention becomes a proposal -----

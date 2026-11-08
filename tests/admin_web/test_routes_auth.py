@@ -51,6 +51,8 @@ SECURITY_HEADERS = {
     "content-security-policy": "default-src 'none'; style-src 'self'; "
     "form-action 'self' https://accounts.google.com; frame-ancestors 'none'",
     "x-frame-options": "DENY",
+    # Not `no-referrer`: with it browsers send `Origin: null` on form POSTs, which same_origin
+    # refuses, so every admin form would answer 403. `same-origin` keeps it off cross-site requests.
     "referrer-policy": "same-origin",
     "cache-control": "no-store",
     "x-content-type-options": "nosniff",
@@ -269,7 +271,6 @@ def test_callback_refuses_owner_not_allowlisted(env, caplog):
 
 
 def test_allowlist_compares_lowercased(env):
-    env.ctx.allowed_emails = frozenset({"me@gmail.com"})
     env.identity.email = "Me@Gmail.com"
     _, flow, query = start_login(env.client)
     resp = callback(env.client, flow, query["state"][0])
@@ -529,13 +530,6 @@ def test_logout_with_origin_null_and_no_referer_is_forbidden(env):
     assert cookie_header(resp, SESSION_COOKIE) is None
 
 
-def test_admin_pages_let_the_browser_send_their_origin_on_form_posts(env):
-    """`no-referrer` makes browsers send `Origin: null` on form POSTs, which same_origin refuses,
-    so every admin form would answer 403. `same-origin` keeps the referrer off cross-site requests."""
-    resp = env.client.get("/admin")
-    assert resp.headers["referrer-policy"] == "same-origin"
-
-
 def test_logout_get_is_not_allowed(env):
     login(env.client)
     assert env.client.get("/admin/logout").status_code == 405
@@ -581,7 +575,7 @@ def test_unexpected_error_returns_page_with_headers(env, monkeypatch):
     assert resp.headers["x-frame-options"] == "DENY"
 
 
-# --- helpers for Task 8 ---------------------------------------------------------------------
+# --- require_action and done_page -----------------------------------------------------------
 
 
 def _action_client(env):
@@ -653,7 +647,7 @@ def test_done_page_escapes_and_meta_refreshes():
     assert done_page("x", to="//evil.test").body.decode().count("url=/admin\"") == 1
 
 
-# --- review fixes ---------------------------------------------------------------------------
+# --- single-use states, failures, form-read ordering, status checks ------------------------
 
 
 def test_used_states_prunes_expired_entries_from_the_front():

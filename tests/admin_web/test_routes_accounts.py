@@ -1,4 +1,4 @@
-"""Link, re-link and remove mailboxes from /admin (Task 8)."""
+"""Link, re-link and remove mailboxes from /admin."""
 
 import json
 import logging
@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 
 from mailhub_mcp.admin_web import accounts_routes as accounts_module
+from mailhub_mcp.admin_web import pages
 from mailhub_mcp.admin_web import routes as routes_module
 from mailhub_mcp.admin_web.session import (
     FLOW_COOKIE,
@@ -21,6 +22,7 @@ from mailhub_mcp.admin_web.session import (
     decode_flow,
     decode_session,
 )
+from mailhub_mcp.core.errors import AuthExpired
 from mailhub_mcp.providers.base import LinkError, LinkResult
 from tests.admin_web.conftest import (
     PUBLIC,
@@ -224,17 +226,7 @@ def _attrs_max_age(header):
     return None
 
 
-def test_link_callback_ignores_session_cookie_and_uses_flow_only(env):
-    """Review Focus 1: no session cookie arrives with Google's return; the flow cookie is enough."""
-    _signed_in(env)
-    flow, state = _flow_and_state(_start_link(env, "pessoal"))
-    resp = _oauth_callback(env, flow, state)
-    assert resp.status_code == 200
-    assert "pessoal" in env.ctx.registry.aliases()
-
-
 def test_replayed_link_callback_writes_nothing_a_second_time(env, monkeypatch):
-    """Review Focus 2."""
     _signed_in(env)
     env.linker.result = LinkResult(credential_json=CRED, address="box@example.test")
     flow, state = _flow_and_state(_start_link(env, "pessoal"))
@@ -294,7 +286,7 @@ def test_consent_refused_writes_nothing(env):
     _signed_in(env)
     flow, state = _flow_and_state(_start_link(env, "pessoal"))
     resp = _oauth_callback(env, flow, state, code="", error="access_denied")
-    assert "consent refused" in resp.text.lower() or "consent was refused" in resp.text
+    assert resp.status_code == 400 and pages.CONSENT_REFUSED_TEXT in resp.text
     assert env.linker.calls == []
     assert not _cred_path(env, "pessoal").exists()
     assert env.ctx.registry.aliases() == []
@@ -366,7 +358,6 @@ def _relink(env, alias, address):
 
 
 def test_relink_same_mailbox_case_insensitive(env, caplog):
-    """Review Focus 4."""
     caplog.set_level(logging.INFO, logger="mailhub-mcp")
     env.add_account("pessoal", "me@gmail.com")
     env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
@@ -684,7 +675,7 @@ def test_headers_on_every_account_response(env):
         assert resp.headers["cache-control"] == "no-store"
 
 
-# --- Task 8b: no-address note, rollback, Google permissions hint -----------------------------
+# --- no-address note, rollback, Google permissions hint -------------------------------------
 
 GRANT_HINT = ("Google still lists mailhub as allowed for that account; you can remove it at "
               "https://myaccount.google.com/permissions.")
@@ -714,7 +705,10 @@ def test_done_page_after_relink_without_address_says_it_is_now_recorded(env):
     resp = _relink(env, "pessoal", "me@gmail.com")
     assert resp.status_code == 200, resp.text
     assert "address is now recorded" in resp.text
+    assert "http-equiv" not in resp.text  # the note stays on screen
+    env.linker._used.clear()  # a fresh authorization code for the second round trip
     resp = _relink(env, "pessoal", "me@gmail.com")  # the second time it was already on record
+    assert resp.status_code == 200, resp.text
     assert "address is now recorded" not in resp.text
 
 
@@ -771,6 +765,7 @@ def test_link_rolls_back_when_the_book_write_fails(env, monkeypatch, caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any(m.startswith("admin link failed alias=pessoal step=book") for m in messages)
     assert "secret-refresh" not in "\n".join(messages)
+    assert _visible(resp.text).count(GRANT_HINT) == 1
 
 
 def test_link_rolls_back_when_the_registry_update_fails(env, monkeypatch, caplog):
@@ -815,23 +810,28 @@ def test_relink_of_removed_alias_rolls_back_to_removed(env, monkeypatch):
     assert env.ctx.book.get("pessoal").removed_at
 
 
-def test_remove_whose_record_fails_says_so(env, monkeypatch, caplog):
+def test_remove_whose_record_fails_says_so_and_keeps_the_address_check(env, monkeypatch, caplog):
     caplog.set_level(logging.INFO, logger="mailhub-mcp")
     env.add_account("pessoal", "me@gmail.com")
     env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
     _signed_in(env)
-    monkeypatch.setattr(env.ctx.book, "record_removed", _raise)
-    resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
+    with monkeypatch.context() as m:
+        m.setattr(env.ctx.book, "record_removed", _raise)
+        resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
     assert resp.status_code == 500
-    assert "removed, but its removal could not be recorded" in resp.text
+    assert "The mailbox was removed, but its removal could not be recorded; see the server log." in resp.text
+    assert "will not be checked" not in resp.text
     assert "http-equiv" not in resp.text
     assert not _cred_path(env, "pessoal").exists()
     assert "pessoal" not in env.ctx.registry.aliases()
     errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
     assert any("alias=pessoal" in r.getMessage() for r in errors)
+    refused = _relink(env, "pessoal", "other@gmail.com")
+    assert refused.status_code == 400
+    assert "That is a different mailbox than pessoal (expected me@gmail.com)" in refused.text
 
 
-# --- Task 8b fix round 1 ----------------------------------------------------------------------
+# --- incomplete rollbacks --------------------------------------------------------------------
 
 
 def test_failed_rollback_is_not_reported_as_nothing_changed(env, monkeypatch, caplog):
@@ -867,14 +867,6 @@ def test_failed_registry_restore_on_relink_is_reported(env, monkeypatch):
     assert "undo was incomplete" in resp.text and "Nothing was changed" not in resp.text
 
 
-def test_link_failure_page_carries_the_grant_hint(env, monkeypatch):
-    _signed_in(env)
-    monkeypatch.setattr(env.ctx.book, "record_linked", _raise)
-    resp = _link(env, "pessoal")
-    assert "Nothing was changed" in resp.text
-    assert _visible(resp.text).count(GRANT_HINT) == 1
-
-
 def test_relink_rollback_restores_the_credential_byte_for_byte(env, monkeypatch):
     env.add_account("pessoal", "me@gmail.com")
     env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
@@ -887,30 +879,7 @@ def test_relink_rollback_restores_the_credential_byte_for_byte(env, monkeypatch)
     assert _cred_path(env, "pessoal").read_bytes() == old
 
 
-def test_done_page_with_address_note_does_not_refresh(env):
-    env.add_account("pessoal")
-    _signed_in(env)
-    resp = _relink(env, "pessoal", "me@gmail.com")
-    assert "address is now recorded" in resp.text
-    assert "http-equiv" not in resp.text
-
-
-def test_remove_whose_record_fails_keeps_the_address_check(env, monkeypatch):
-    env.add_account("pessoal", "me@gmail.com")
-    env.ctx.book.record_linked("pessoal", "gmail", "me@gmail.com", datetime.now(UTC))
-    _signed_in(env)
-    with monkeypatch.context() as m:
-        m.setattr(env.ctx.book, "record_removed", _raise)
-        resp = _post(env, "/admin/accounts/pessoal/remove", {"confirm": "pessoal"})
-    assert "The mailbox was removed, but its removal could not be recorded; see the server log." in resp.text
-    assert "will not be checked" not in resp.text
-    refused = _relink(env, "pessoal", "other@gmail.com")
-    assert refused.status_code == 400
-    assert "That is a different mailbox than pessoal (expected me@gmail.com)" in refused.text
-    assert not _cred_path(env, "pessoal").exists()
-
-
-# --- final review fixes -------------------------------------------------------------------------
+# --- admin limiter, address probe on remove, legacy accounts ----------------------------------
 
 
 def test_admin_network_calls_use_their_own_thread_limiter(env, monkeypatch):
@@ -982,8 +951,6 @@ def test_relink_without_recorded_address_must_match_the_old_credential_when_it_a
 
 
 def test_relink_without_recorded_address_and_a_dead_old_credential_is_accepted_once(env):
-    from mailhub_mcp.core.errors import AuthExpired
-
     env.add_account("legacy", error=AuthExpired("legacy", "hint"))
     _signed_in(env)
     resp = _relink(env, "legacy", "any@gmail.com")

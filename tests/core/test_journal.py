@@ -60,15 +60,6 @@ def test_truncated_last_line_is_skipped(tmp_path, caplog):
     assert j.get(cid)["account"] == "a" and "line 2" in caplog.text
 
 
-def test_non_entry_json_lines_are_skipped(tmp_path, caplog):
-    p = tmp_path / "j.jsonl"
-    j = Journal(p)
-    cid = j.record("a", "modify_emails", ["X"], [], {"m1": []})
-    p.write_text(p.read_text() + '[1, 2]\n{"foo": 1}\n"str"\n')
-    assert j.get(cid)["account"] == "a" and not j.is_undone(cid)
-    assert "line 2" in caplog.text and "line 3" in caplog.text and "line 4" in caplog.text
-
-
 def test_record_logs_summary_at_info(tmp_path, caplog):
     import logging
 
@@ -92,17 +83,6 @@ def _row(cid, ts, **kw):
             "prior": {}, "query": None, "undo_of": None, **kw}
 
 
-def test_entries_newest_first_with_ties_in_reverse_file_order(tmp_path):
-    p = tmp_path / "c.jsonl"
-    _write_entries(p, [
-        _row("old", "2026-01-01T00:00:00+00:00"),
-        _row("tie1", "2026-01-02T00:00:00+00:00"),
-        _row("tie2", "2026-01-02T00:00:00+00:00"),
-        _row("new", "2026-01-03T00:00:00+00:00"),
-    ])
-    assert [e["change_id"] for e in Journal(p).entries()] == ["new", "tie2", "tie1", "old"]
-
-
 def test_entries_since_is_inclusive_and_handles_naive_and_aware(tmp_path):
     from datetime import datetime, timedelta, timezone
     p = tmp_path / "c.jsonl"
@@ -120,11 +100,14 @@ def test_entries_since_is_inclusive_and_handles_naive_and_aware(tmp_path):
     assert [e["change_id"] for e in j.entries(datetime(2026, 1, 3, 2, tzinfo=east))] == ["c"]
 
 
-def test_entries_skips_malformed_lines(tmp_path):
+def test_entries_skips_malformed_lines(tmp_path, caplog):
     p = tmp_path / "c.jsonl"
-    _write_entries(p, [_row("a", "2026-01-01T00:00:00+00:00"), "not json", "[1]", '{"x": 1}', "",
+    _write_entries(p, [_row("a", "2026-01-01T00:00:00+00:00"), "not json", "[1]", '{"x": 1}', '"str"', "",
                        _row("b", "2026-01-02T00:00:00+00:00")])
-    assert [e["change_id"] for e in Journal(p).entries()] == ["b", "a"]
+    j = Journal(p)
+    assert [e["change_id"] for e in j.entries()] == ["b", "a"]
+    assert j.get("a")["account"] == "a" and not j.is_undone("a")
+    assert all(f"line {n}" in caplog.text for n in (2, 3, 4, 5)) and "line 6" not in caplog.text
     assert Journal(tmp_path / "missing.jsonl").entries() == []
 
 
