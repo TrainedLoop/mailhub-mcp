@@ -51,7 +51,7 @@ jobs:
           labels: |
             org.opencontainers.image.title=mailhub-mcp
             org.opencontainers.image.description=MCP server that gives an AI assistant safe, reversible access to one person's mailboxes
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
